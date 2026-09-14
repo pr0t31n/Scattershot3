@@ -1,0 +1,34 @@
+{
+  "_comment": "scattershot3 settings file -- remove or rename this _comment key before use. CLI arguments always override settings-file values. Run with --init-settings to regenerate this template.",
+  "engagement": {
+    "consultant": "Jane Smith",
+    "consultant_email": "jsmith@consultingfirm.example.com",
+    "client_name": "Acme Corporation",
+    "client_short": "acme",
+    "client_POC": "Bob Johnson",
+    "client_email": "bjohnson@acmecorp.example.com",
+    "start_date": "2025-01-13",
+    "end_date": "2025-01-17"
+  },
+  "scan": {
+    "project": "acme_2025",
+    "targets": [
+      "10.10.0.0/24",
+      "10.10.1.0/24",
+      "192.168.50.1-20",
+      "203.0.113.0/28"
+    ],
+    "target_file": "",
+    "fast": false,
+    "no_ssl": false,
+    "no_banner": false,
+    "no_web": false,
+    "no_nuclei": false,
+    "port_scan_workers": 10,
+    "web_timeout": 4,
+    "banner_timeout": 3.0,
+    "sslscan_timeout": 60,
+    "testssl_timeout": 300,
+    "nuclei_timeout": 600
+  }
+}
