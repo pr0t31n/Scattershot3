@@ -171,7 +171,7 @@ except ImportError:
 # Finding title normalisation — applied at write time so output files already
 # carry canonical names (same patterns Vantage uses for cross-tool dedup).
 # ─────────────────────────────────────────────────────────────────────────────
-VERSION = "1.35.7"
+VERSION = "1.35.8"
 
 # ─────────────────────────────────────────────
 # Default credential list — top 100

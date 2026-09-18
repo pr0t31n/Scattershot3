@@ -172,18 +172,61 @@ ZYPPER_PACKAGES = [
 ]
 BREW_PACKAGES = [
     "nmap", "sslscan", "nikto", "hydra", "sqlmap",
-    "snmp", "git", "ipmitool", "nbtscan", "samba",
+    "snmp", "git", "ipmitool", "samba",
     "ssh-audit", "ike-scan", "exploitdb",
     "testssl",
     "rustscan",
     "go",
-    # ZAP and chromedriver are casks — handled separately so brew_install
-    # gets the --cask flag.
 ]
 BREW_CASK_PACKAGES = [
     "owasp-zap",
     "chromedriver",
+    "metasploit",
 ]
+
+def install_nbtscan_from_source():
+    """Build nbtscan from source on macOS (no Homebrew formula)."""
+    if shutil.which("nbtscan"):
+        info("nbtscan already installed.")
+        return
+    import tempfile
+    url = "https://github.com/charlesroelli/nbtscan/archive/refs/heads/master.tar.gz"
+    info("nbtscan not in Homebrew — building from source …")
+    with tempfile.TemporaryDirectory() as td:
+        tarball = os.path.join(td, "nbtscan.tar.gz")
+        try:
+            urllib.request.urlretrieve(url, tarball)
+        except Exception as e:
+            warn(f"nbtscan download failed: {e}")
+            return
+        import tarfile
+        try:
+            with tarfile.open(tarball) as tf:
+                tf.extractall(td)
+        except Exception as e:
+            warn(f"nbtscan extract failed: {e}")
+            return
+        src = None
+        for d in os.listdir(td):
+            p = os.path.join(td, d)
+            if os.path.isdir(p) and "nbtscan" in d.lower():
+                src = p
+                break
+        if not src:
+            warn("nbtscan source directory not found after extraction.")
+            return
+        try:
+            run(["make", "-C", src], check=False)
+            binary = os.path.join(src, "nbtscan")
+            if os.path.isfile(binary):
+                shutil.copy2(binary, "/usr/local/bin/nbtscan")
+                os.chmod("/usr/local/bin/nbtscan", 0o755)
+                info("nbtscan installed to /usr/local/bin/nbtscan")
+            else:
+                warn("nbtscan binary not produced by make.")
+        except Exception as e:
+            warn(f"nbtscan build failed: {e}")
+
 
 def install_system():
     banner("Phase: system packages")
@@ -198,8 +241,8 @@ def install_system():
             brew_install(pkg)
         for pkg in BREW_CASK_PACKAGES:
             brew_install(pkg, cask=True)
-        # wpscan ships via a tap on macOS, not core
         brew_install("wpscanteam/tap/wpscan")
+        install_nbtscan_from_source()
     elif OS == "windows":
         warn("Windows: system package installation not supported. Install tools manually.")
     else:
@@ -239,7 +282,19 @@ PIP_PACKAGES = [
 
 def install_pip():
     banner("Phase: pip packages")
-    run([sys.executable, "-m", "pip", "install", "--break-system-packages"] + PIP_PACKAGES, check=False)
+    base = [p for p in PIP_PACKAGES if not p.startswith("bloodhound")]
+    run([sys.executable, "-m", "pip", "install", "--break-system-packages"] + base, check=False)
+    fragile = [p for p in PIP_PACKAGES if p.startswith("bloodhound")]
+    for pkg in fragile:
+        if pkg.startswith("bloodhound"):
+            try:
+                __import__("bloodhound")
+                info("bloodhound already installed — skipping")
+                continue
+            except ImportError:
+                pass
+        info(f"Installing {pkg} separately …")
+        run([sys.executable, "-m", "pip", "install", "--break-system-packages", pkg], check=False)
 
 # ---------------------------------------------------------------------------
 # Go tools
@@ -249,6 +304,7 @@ GO_TOOLS = [
     ("github.com/projectdiscovery/httpx/cmd/httpx@latest",        "httpx"),
     ("github.com/rverton/webanalyze/cmd/webanalyze@latest",       "webanalyze"),
     ("github.com/OJ/gobuster/v3@latest",                          "gobuster"),
+    ("github.com/ropnop/kerbrute@latest",                          "kerbrute"),
 ]
 
 OFFLINE_BUNDLE_URLS = {
@@ -539,19 +595,17 @@ def install_kerbrute():
     if OS == "apt":
         info("Installing kerbrute via apt …")
         run(["apt-get", "install", "-y", "kerbrute"], check=False)
-    if not shutil.which("kerbrute"):
-        go_bin = find_go()
-        if go_bin:
-            if shutil.which("kerbrute"):
-                info("kerbrute already installed — skipping")
-            else:
-                info("Installing kerbrute via go install …")
-                env = os.environ.copy()
-                env["GOBIN"] = "/usr/local/bin"
-                run([go_bin, "install", "github.com/ropnop/kerbrute@latest"],
-                    check=False, env=env)
-        else:
-            warn("kerbrute not found — install manually: https://github.com/ropnop/kerbrute")
+        if shutil.which("kerbrute"):
+            return
+    go_bin = find_go()
+    if go_bin:
+        info("Installing kerbrute via go install …")
+        env = os.environ.copy()
+        env["GOBIN"] = "/usr/local/bin"
+        run([go_bin, "install", "github.com/ropnop/kerbrute@latest"],
+            check=False, env=env)
+    else:
+        warn("kerbrute not found and go not available — install manually: https://github.com/ropnop/kerbrute")
 
 
 def install_odat():
@@ -602,17 +656,14 @@ def install_enumdb():
         return
     git_clone_or_update("https://github.com/m8r0wn/enumdb.git", "/opt/enumdb")
     info("Installing enumdb from git clone …")
-    # Try pip install . first (if the repo has setup.py / pyproject.toml)
     result = run([sys.executable, "-m", "pip", "install", "--break-system-packages",
-                  "."], check=False, capture=True)
+                  "/opt/enumdb"], check=False, capture=True)
     if not shutil.which("enumdb"):
-        # Fallback: install requirements.txt if present
         req = "/opt/enumdb/requirements.txt"
         if os.path.isfile(req):
-            info("pip install . did not produce enumdb binary; trying requirements.txt …")
+            info("pip install did not produce enumdb binary; trying requirements.txt …")
             run([sys.executable, "-m", "pip", "install", "--break-system-packages",
                  "-r", req], check=False)
-        # Make the main script executable and symlink
         for candidate in ("/opt/enumdb/enumdb/enumdb.py", "/opt/enumdb/enumdb.py"):
             if os.path.isfile(candidate):
                 os.chmod(candidate, 0o755)
@@ -629,39 +680,46 @@ def git_clone_or_update(url, dest):
     else:
         run(["git", "clone", url, dest])
 
+def _safe(fn, label):
+    try:
+        fn()
+    except Exception as e:
+        error(f"{label} failed: {e}")
+        warn(f"Continuing with remaining tools …")
+
+
 def install_git():
     banner("Phase: git tools")
 
-    # shcheck
-    git_clone_or_update("https://github.com/santoru/shcheck.git", "/opt/shcheck")
+    _safe(lambda: git_clone_or_update("https://github.com/santoru/shcheck.git", "/opt/shcheck"), "shcheck")
 
-    # ADenum + pip deps
-    git_clone_or_update("https://github.com/SecuProject/ADenum.git", "/opt/ADenum")
-    info("Installing ADenum Python dependencies …")
-    run([sys.executable, "-m", "pip", "install", "--break-system-packages",
-         "ldap3", "impacket", "gssapi"], check=False)
+    def _adenum():
+        git_clone_or_update("https://github.com/SecuProject/ADenum.git", "/opt/ADenum")
+        info("Installing ADenum Python dependencies …")
+        run([sys.executable, "-m", "pip", "install", "--break-system-packages",
+             "ldap3", "impacket", "gssapi"], check=False)
+    _safe(_adenum, "ADenum")
 
-    # Responder
-    git_clone_or_update("https://github.com/lgandx/Responder.git", "/opt/Responder")
+    _safe(lambda: git_clone_or_update("https://github.com/lgandx/Responder.git", "/opt/Responder"), "Responder")
 
-    # testssl.sh — preferred over apt
-    git_clone_or_update("https://github.com/drwetter/testssl.sh.git", "/opt/testssl.sh")
-    testssl_bin = "/opt/testssl.sh/testssl.sh"
-    if os.path.isfile(testssl_bin):
-        os.chmod(testssl_bin, 0o755)
-        symlink_force(testssl_bin, "/usr/local/bin/testssl.sh")
-        info("testssl.sh symlinked to /usr/local/bin/testssl.sh")
+    def _testssl():
+        git_clone_or_update("https://github.com/drwetter/testssl.sh.git", "/opt/testssl.sh")
+        testssl_bin = "/opt/testssl.sh/testssl.sh"
+        if os.path.isfile(testssl_bin):
+            os.chmod(testssl_bin, 0o755)
+            symlink_force(testssl_bin, "/usr/local/bin/testssl.sh")
+            info("testssl.sh symlinked to /usr/local/bin/testssl.sh")
+    _safe(_testssl, "testssl.sh")
 
-    # nuclei-templates
-    git_clone_or_update("https://github.com/projectdiscovery/nuclei-templates.git", "/opt/nuclei-templates")
+    _safe(lambda: git_clone_or_update("https://github.com/projectdiscovery/nuclei-templates.git", "/opt/nuclei-templates"), "nuclei-templates")
 
-    install_rustscan()
-    install_kerbrute()
-    install_odat()
-    install_msdat()
-    install_xsstrike()
-    install_enumdb()
-    install_vulners_nse()
+    _safe(install_rustscan, "rustscan")
+    _safe(install_kerbrute, "kerbrute")
+    _safe(install_odat, "odat")
+    _safe(install_msdat, "msdat")
+    _safe(install_xsstrike, "XSStrike")
+    _safe(install_enumdb, "enumdb")
+    _safe(install_vulners_nse, "vulners.nse")
 
 # ---------------------------------------------------------------------------
 # Vulners NSE script (CVE scoring for nmap -sV)
@@ -728,7 +786,7 @@ def install_vulners_nse():
 # Metasploit Framework
 # ---------------------------------------------------------------------------
 def install_msfconsole():
-    """Install msfconsole if not already present; skip silently if found."""
+    """Install msfconsole if not already present."""
     banner("Phase: Metasploit Framework")
     found = (shutil.which("msfconsole") or
              os.path.isfile("/usr/bin/msfconsole") or
@@ -741,7 +799,8 @@ def install_msfconsole():
         info("Installing metasploit-framework via apt …")
         run(["apt-get", "install", "-y", "metasploit-framework"], check=False)
     elif OS == "macos":
-        warn("msfconsole not found. Install manually: brew install --cask metasploit")
+        info("Installing metasploit via brew cask …")
+        brew_install("metasploit", cask=True)
     else:
         warn("msfconsole not found. Install manually: https://docs.metasploit.com/docs/using-metasploit/getting-started/nightly-installers.html")
 
@@ -787,6 +846,7 @@ VERIFY_TOOLS = [
 VERIFY_PYTHON = [
     "nmap", "scapy", "requests", "colorama",
     "impacket", "ldap3", "openpyxl", "dns", "selenium",
+    "bloodhound",
 ]
 
 def run_check():
