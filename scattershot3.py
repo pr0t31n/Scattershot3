@@ -171,7 +171,7 @@ except ImportError:
 # Finding title normalisation — applied at write time so output files already
 # carry canonical names (same patterns Vantage uses for cross-tool dedup).
 # ─────────────────────────────────────────────────────────────────────────────
-VERSION = "1.35.8"
+VERSION = "1.35.9"
 
 # ─────────────────────────────────────────────
 # Default credential list — top 100
@@ -10152,7 +10152,7 @@ def print_banner() -> None:
     terminal wide enough AND short enough  →  full ASCII art, sticky
     terminal wide enough BUT  too tall     →  compact one-liner, NOT sticky
     terminal too narrow  for art           →  compact one-liner, NOT sticky
-    output redirected (no real terminal)   →  compact one-liner, NOT sticky
+    output redirected (no real terminal)   →  static ASCII art + info line
     """
     cols, rows = _term_size()
     # colorama on Windows wraps sys.stdout; check the underlying stream too.
@@ -10160,21 +10160,27 @@ def print_banner() -> None:
     _stream = getattr(sys.stdout, "stream", sys.stdout)  # unwrap colorama wrapper
     is_tty  = _stream.isatty() if hasattr(_stream, "isatty") else False
 
+    if not is_tty:
+        for line in _ART_LINES:
+            print(line)
+        _os_label = platform.system()
+        _py_ver = ".".join(str(v) for v in sys.version_info[:3])
+        print(f"Scattershot3 v{VERSION}  |  {_os_label}  |  Python {_py_ver}")
+        return
+
     # Banner height = art lines + 2 (top/bottom padding)
     banner_height = len(_ART_LINES) + 2
     too_tall      = banner_height > (_BANNER_HEIGHT_THRESHOLD * rows)
     too_narrow    = cols < _ART_WIDTH
 
-    use_art    = is_tty and not too_tall and not too_narrow
-    use_sticky = use_art  # sticky only makes sense with art + real TTY
+    use_art    = not too_tall and not too_narrow
 
     if use_art:
         art_lines = _art_banner(cols)
         top_border    = f"{Fore.CYAN}{'─' * min(cols, _ART_WIDTH + 2)}{Style.RESET_ALL}"
         bottom_border = top_border
-        if use_sticky:
-            # ESC[s  — save cursor position (VT100; no-op on unsupporting terminals)
-            print("\033[s", end="", flush=True)
+        # ESC[s  — save cursor position (VT100; no-op on unsupporting terminals)
+        print("\033[s", end="", flush=True)
         print()
         print(top_border)
         for line in art_lines:
