@@ -171,7 +171,7 @@ except ImportError:
 # Finding title normalisation — applied at write time so output files already
 # carry canonical names (same patterns Vantage uses for cross-tool dedup).
 # ─────────────────────────────────────────────────────────────────────────────
-VERSION = "1.35.9"
+VERSION = "1.35.10"
 
 # ─────────────────────────────────────────────
 # Default credential list — top 100
@@ -3342,6 +3342,44 @@ class OutputManager:
                     "extrainfo":    port_info.get("extrainfo", ""),
                     "tool_results": tool_results,
                 }
+
+            # ── Include unconfirmed UDP ports ─────────────────────────
+            unconfirmed_ports = host_data.get("unconfirmed_ports", {})
+            if unconfirmed_ports:
+                nmap_udp_entries = [
+                    e for e in log_index.get(ip, [])
+                    if e.get("scan_type") == "udp_top_ports"
+                ]
+                nmap_udp_entry = nmap_udp_entries[0] if nmap_udp_entries else {}
+                for port_int, port_info in sorted(unconfirmed_ports.items()):
+                    port_str = str(port_int)
+                    if port_str in host_entry["ports"]:
+                        continue
+                    host_entry["ports"][port_str] = {
+                        "port":         port_int,
+                        "protocol":     "udp",
+                        "state":        "open|filtered",
+                        "service":      port_info.get("name", ""),
+                        "product":      port_info.get("product", ""),
+                        "version":      port_info.get("version", ""),
+                        "extrainfo":    port_info.get("extrainfo", ""),
+                        "tool_results": [{
+                            "tool":        "nmap",
+                            "version":     nmap_udp_entry.get("version",
+                                               self.get_tool_version(
+                                                   "nmap", tool_paths.get("nmap", "nmap"))),
+                            "command":     nmap_udp_entry.get("command", ""),
+                            "output_file": nmap_udp_entry.get("output_file", ""),
+                            "data": {
+                                "protocol":  "udp",
+                                "state":     "open|filtered",
+                                "service":   port_info.get("name", ""),
+                                "product":   port_info.get("product", ""),
+                                "version":   port_info.get("version", ""),
+                            },
+                            "vulnerabilities": [],
+                        }],
+                    }
 
             report["hosts"][ip] = host_entry
 
@@ -6575,10 +6613,11 @@ def _port_scan_worker(
 
     # ── UDP supplementary scan ────────────────────────────────────────────
     _udp_unconfirmed: "dict[int, dict]" = {}
+    _udp_xml_path: "str | None" = None
     if not getattr(args, "no_udp", False) and output_mgr:
         _udp_top = getattr(args, "udp_top_ports", 20)
         try:
-            _udp_confirmed, _udp_unconfirmed = run_udp_scan(
+            _udp_confirmed, _udp_unconfirmed, _udp_xml_path = run_udp_scan(
                 ip, output_mgr, nmap_path=nmap_path,
                 hostname=hostname, scope=scope, top_ports=_udp_top,
             )
@@ -6730,7 +6769,10 @@ def _port_scan_worker(
                 sources="nmap",
                 output="\n".join(_uf_affected),
                 affected=ip,
-                output_file=str(_ps_out_path) if _ps_out_path else None,
+                output_file="\n".join(filter(None, [
+                    str(_udp_xml_path) if _udp_xml_path else None,
+                    str(_ps_out_path) if _ps_out_path else None,
+                ])) or None,
             )
 
     host_result: dict = {
@@ -22313,10 +22355,11 @@ def run_udp_scan(
     hostname: str | None = None,
     scope: str = "int",
     top_ports: int = 20,
-) -> "tuple[dict[int, dict], dict[int, dict]]":
+) -> "tuple[dict[int, dict], dict[int, dict], str | None]":
     """Run nmap UDP top-ports scan.
 
-    Returns ``(confirmed, unconfirmed)`` — two dicts keyed by port.
+    Returns ``(confirmed, unconfirmed, xml_path)`` — two dicts keyed by
+    port plus the path to the raw nmap UDP XML output.
     *confirmed* contains ports nmap reported as ``open`` (actual UDP
     response received).  *unconfirmed* contains ports reported as
     ``open|filtered`` (no response — ambiguous; could be open or
@@ -22404,7 +22447,8 @@ def run_udp_scan(
         _tprint(f"  {Fore.RED}[!] UDP scan error for {ip}: {exc}{Style.RESET_ALL}")
         _vc.log(f"UDP scan error for {ip}: {exc}", "ERROR")
 
-    return confirmed, unconfirmed
+    _udp_xml = str(xml_path) if xml_path and xml_path.exists() else None
+    return confirmed, unconfirmed, _udp_xml
 
 
 # scan_scope — full discovery + port + web + SSL pass for one scope
