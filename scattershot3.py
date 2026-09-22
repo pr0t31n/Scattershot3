@@ -171,7 +171,7 @@ except ImportError:
 # Finding title normalisation — applied at write time so output files already
 # carry canonical names (same patterns Vantage uses for cross-tool dedup).
 # ─────────────────────────────────────────────────────────────────────────────
-VERSION = "1.35.10"
+VERSION = "1.36.0"
 
 # ─────────────────────────────────────────────
 # Default credential list — top 100
@@ -8659,12 +8659,15 @@ def run_nuclei(
         "-timeout",    "5",
         "-rate-limit", "200",
         "-c",          "50",
+        "-max-host-error", "15",
+        "-duc",
     ]
 
     _tprint(f"{Fore.CYAN}[*] Running Nuclei against {len(targets)} target(s)...{Style.RESET_ALL}")
     findings: list[dict] = []
 
     try:
+        _nuclei_started = datetime.now().astimezone()
         proc = _popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
@@ -8697,8 +8700,17 @@ def run_nuclei(
                 priority="MEDIUM",
             )
 
-        raw_output = stdout_b.decode("utf-8", errors="replace") + \
-                     stderr_b.decode("utf-8", errors="replace")
+        _stdout = stdout_b.decode("utf-8", errors="replace")
+        _stderr = stderr_b.decode("utf-8", errors="replace")
+        raw_output = _stdout + _stderr
+
+        # Detect nuclei startup failures (zero output + non-zero exit)
+        if proc.returncode != 0 and not _stdout.strip() and not jsonl_out.exists():
+            _tprint(f"{Fore.RED}[!] Nuclei failed (exit {proc.returncode}): "
+                    f"{_stderr[:200]}{Style.RESET_ALL}")
+            _vc.error(f"nuclei failed ({scope})", source="nuclei",
+                      detail=f"Exit code {proc.returncode}. stderr: {_stderr[:500]}",
+                      category="Tool")
 
         # Log the invocation
         output_mgr.log_command(
@@ -8708,6 +8720,9 @@ def run_nuclei(
                 "exit_code":    proc.returncode,
                 "jsonl_output": str(jsonl_out),
             },
+            stdout=_stdout, stderr=_stderr,
+            started=_nuclei_started, ended=datetime.now().astimezone(),
+            exit_code=proc.returncode,
         )
 
         # ── Parse JSONL output ─────────────────────────────────────────────
@@ -9294,6 +9309,8 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
         "--color", "0",
         "--warnings", "off",
         "--quiet",
+        "--connect-timeout", "10",
+        "--openssl-timeout", "10",
     ]
     if json_file_ts:
         cmd += ["--jsonfile", str(json_file_ts)]
@@ -13427,6 +13444,10 @@ _DEFAULT_PAGE_FINGERPRINTS: list[tuple] = [
     (re.compile(r"<title>Apache2 (Ubuntu|Debian) Default Page", re.I),
                                                       "Apache httpd",       None),
     (re.compile(r"Test Page for the Apache",   re.I), "Apache httpd",       None),
+    (re.compile(r"Test Page for the HTTP Server on Oracle Linux", re.I),
+                                                      "nginx",              "Oracle Linux"),
+    (re.compile(r"Test Page for the HTTP Server on.*Linux", re.I),
+                                                      "nginx",              "Linux"),
     (re.compile(r"nginx default page|Welcome to nginx", re.I),
                                                       "nginx",              None),
     (re.compile(r"<title>Welcome to nginx",    re.I), "nginx",              None),
@@ -16775,6 +16796,9 @@ def run_wpscan(
     ]
     if wpscan_token:
         cmd += ["--api-token", wpscan_token]
+    else:
+        _tprint(f"  {Fore.YELLOW}[~] wpscan: no WPVulnDB API token — vulnerability data will be limited{Style.RESET_ALL}")
+        _vc.log("wpscan running without WPVulnDB API token — set via --wpscan-token or Crucible settings", "WARNING")
 
     _tprint(f"  {Fore.CYAN}[>] wpscan {url}{Style.RESET_ALL}")
     try:
@@ -23573,12 +23597,10 @@ def _check_hydra_http_target(ip: str, port: int,
                 return f"401 but not Basic auth ({www_auth[:40]})"
             elif he.code == 403:
                 return "403 Forbidden (no auth prompt)"
-            # Other HTTP errors — let hydra try with basic auth
-            return {"type": "basic"}
+            return f"HTTP {he.code} (no auth prompt)"
     except Exception:
         pass
-    # Connection error — let hydra try
-    return {"type": "basic"}
+    return "connection error (host unreachable or refused)"
 
 
 def _is_redirect_out_of_scope(ip: str, port: int, scheme: str,
@@ -24457,7 +24479,7 @@ def scan_scope(
                 )
                 _vc.status(f"{scope}_p2_nuclei", label="Phase 2: Nuclei IP Scan",
                            status="running", step=f"{len(_nuclei_batch_ips)} hosts")
-                nuclei_timeout = max(_nuclei_base, len(_nuclei_batch_ips) * 45)
+                nuclei_timeout = max(_nuclei_base, len(_nuclei_batch_ips) * 60)
                 try:
                     run_nuclei(
                         _nuclei_batch_ips, scope, output_mgr, nuclei_path,
@@ -24597,7 +24619,7 @@ def scan_scope(
                        status="running", step=f"{len(web_url_targets)} endpoints",
                        active_tools=["nuclei"])
             _nuclei_web_base = getattr(args, "nuclei_timeout", 600)
-            nuclei_timeout = max(_nuclei_web_base, len(web_url_targets) * 30)
+            nuclei_timeout = max(_nuclei_web_base, len(web_url_targets) * 45)
             run_nuclei(
                 web_url_targets, scope, output_mgr, nuclei_path,
                 timeout=nuclei_timeout, all_results=all_results,
