@@ -9528,10 +9528,7 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                 cat_name   = cipher_sev.group(1).strip().rstrip(":")
                 cat_status = cipher_sev.group(2).strip().lower()  # "offered" / "not offered"
                 cat_note   = cipher_sev.group(3).strip()
-                # Only record categories that testssl explicitly marks as problematic.
-                # Bare "offered" (no qualifier) applies to Obsoleted CBC / AES-CBC which
-                # is ubiquitous on TLS 1.2 servers and not a standalone finding.
-                if cat_status == "offered" and "(NOT ok)" in cat_note:
+                if cat_status == "offered":
                     result["ciphers_severity"].append({
                         "severity": "HIGH",
                         "detail":   f"{cat_name} offered",
