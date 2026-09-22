@@ -9069,6 +9069,14 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
                             "bits":     _ss_cipher_el.get("bits", "128"),
                             "cipher":   _ss_cipher_el.get("cipher", ""),
                         })
+                # Certificate public key type and size
+                for _ss_cert_el in _ss_root.findall(".//certificate"):
+                    _pk_type = _ss_cert_el.get("pk-type", "")
+                    _pk_bits = _ss_cert_el.get("pk-bits", "")
+                    if _pk_type and _pk_bits:
+                        result["cert_pk_type"] = _pk_type
+                        result["cert_pk_bits"] = int(_pk_bits)
+                        break
             except Exception:
                 pass  # fall back to text-parser results
 
@@ -9140,6 +9148,27 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
                     affected=f"{ip}:{port}",
                     output_file=_ss_out_file,
                 )
+
+            # Certificate key size — matches testssl's cert_keySize finding
+            _pk_type = result.get("cert_pk_type", "")
+            _pk_bits = result.get("cert_pk_bits", 0)
+            if _pk_type and _pk_bits:
+                _weak_key = (_pk_type.upper() == "RSA" and _pk_bits < 4096) or \
+                            (_pk_type.upper() in ("EC", "ECDSA") and _pk_bits < 256)
+                if _weak_key:
+                    output_mgr.log_finding(
+                        title="SSL/TLS Certificate: Weak Encryption Method",
+                        ip=ip, port=port, command=cmd, hostname=hostname,
+                        risk="LOW",
+                        description=(
+                            f"The server's TLS certificate uses {_pk_type} {_pk_bits} bits. "
+                            "Consider upgrading to RSA 4096+ or ECDSA 384+ for stronger key exchange."
+                        ),
+                        sources="sslscan",
+                        output=f"{_pk_type} {_pk_bits} bits (exponent is 65537)",
+                        affected=f"{ip}:{port}",
+                        output_file=_ss_out_file,
+                    )
 
             # Deprecated protocols
             for proto_entry in _proto_source:
@@ -9509,10 +9538,10 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                     })
                     if output_mgr:
                         output_mgr.log_finding(
-                            title="Weak Cipher Category Offered",
+                            title="Weak Cipher Identified",
                             ip=ip, port=port, command=cmd, hostname=hostname,
-                            risk="MEDIUM" if output_mgr.scope == "ext" else "LOW",
-                            description=f"testssl reports weak cipher categories offered on {ip}:{port}",
+                            risk="HIGH",
+                            description=f"Weak cipher category offered on {ip}:{port}: {cat_name}",
                             sources="testssl",
                             output=f"Cipher category: {cat_name}\nStatus: {cat_status}\nDetail: {cat_note}",
                             affected=f"{ip}:{port}",
