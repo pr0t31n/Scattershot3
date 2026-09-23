@@ -171,7 +171,7 @@ except ImportError:
 # Finding title normalisation — applied at write time so output files already
 # carry canonical names (same patterns Vantage uses for cross-tool dedup).
 # ─────────────────────────────────────────────────────────────────────────────
-VERSION = "1.36.0"
+VERSION = "1.36.1"
 
 # ─────────────────────────────────────────────
 # Default credential list — top 100
@@ -1927,6 +1927,7 @@ class OutputManager:
     # once per project per run, even though OutputManager is instantiated
     # separately for each scope (internal, external).
     _renamed_projects: set = set()
+    _resume_mode: bool = False
 
     def _setup_dirs(self) -> None:
         """
@@ -1967,6 +1968,7 @@ class OutputManager:
         )
         if (project_root.exists()
                 and _has_prev_scan
+                and not OutputManager._resume_mode
                 and project_root not in OutputManager._renamed_projects):
             OutputManager._renamed_projects.add(project_root)
             ts = self._read_previous_scan_timestamp(project_root)
@@ -25169,6 +25171,7 @@ def main():
         pass
     _pm = ProgressManager(_early_proj_root / "checkpoint.json")
     if _pm.get_state().get("completed_phases"):
+        OutputManager._resume_mode = True
         _vc.log(
             f"Checkpoint found — {len(_pm.get_state()['completed_phases'])} "
             f"phase(s) already complete: {_pm.get_state()['completed_phases']}",
