@@ -171,7 +171,7 @@ except ImportError:
 # Finding title normalisation — applied at write time so output files already
 # carry canonical names (same patterns Vantage uses for cross-tool dedup).
 # ─────────────────────────────────────────────────────────────────────────────
-VERSION = "1.36.1"
+VERSION = "1.37.0"
 
 # ─────────────────────────────────────────────
 # Default credential list — top 100
@@ -1892,7 +1892,8 @@ class OutputManager:
         "affected", "exploitdb", "metasploit", "exploit_details",
     ]
 
-    def __init__(self, project_name: str, scope: str):
+    def __init__(self, project_name: str, scope: str,
+                 scope_output_dir: str = ""):
         """
         Parameters
         ----------
@@ -1900,14 +1901,19 @@ class OutputManager:
             Top-level project directory (created if absent).
         scope : str
             "int" or "ext" — becomes a subdirectory under project_name.
+        scope_output_dir : str
+            When set (by Crucible v2 scope_output_dirs), output for this
+            scope is written under this directory instead of project_name.
         """
         if scope not in ("int", "ext"):
             raise ValueError(f"scope must be 'int' or 'ext', got {scope!r}")
 
         self.project_name  = project_name
         self.scope         = scope
-        # All output for this scope lives under <project>/<scope>/
-        self.root          = Path(project_name).resolve() / scope
+        if scope_output_dir:
+            self.root = Path(scope_output_dir).resolve() / scope
+        else:
+            self.root = Path(project_name).resolve() / scope
         _set_s3_evidence_dir(self.root)   # §14h: route per-request HTTP evidence to this scope
         self.log_file      = self.root / "scan.log"
         self.json_log_file = self.root / "scan.log.json"
@@ -1961,7 +1967,8 @@ class OutputManager:
         """
         project_root = self.root.parent  # <project>/  (parent of <project>/<scope>/)
 
-        _has_prev_scan = any(
+        _managed = os.environ.get("VANTAGE_MANAGED") == "1"
+        _has_prev_scan = not _managed and any(
             (project_root / _sc / _lf).is_file()
             for _sc in ("int", "ext")
             for _lf in ("scan.log.json", "scan.log")
@@ -10643,6 +10650,11 @@ def apply_settings(args: argparse.Namespace, settings: dict) -> None:
         token = scan["wpscan_token"]
         if token and getattr(args, "wpscan_token", None) == _ARGPARSE_DEFAULTS["wpscan_token"]:
             args.wpscan_token = str(token)
+
+    # ── scope_output_dirs (Crucible v2 scope-separated output) ────────────
+    sod = scan.get("scope_output_dirs")
+    if isinstance(sod, dict) and sod:
+        args.scope_output_dirs = sod
 
 
 def parse_args():
@@ -24219,7 +24231,9 @@ def scan_scope(
     print(f"{Fore.CYAN}[*] {scope_label} {Fore.CYAN}pass — {len(targets)} target(s){Style.RESET_ALL}")
     print(f"{Fore.CYAN}{'═'*60}{Style.RESET_ALL}")
 
-    output_mgr = OutputManager(args.project, scope)
+    _sod = getattr(args, "scope_output_dirs", {})
+    _scope_dir = _sod.get(scope, "")
+    output_mgr = OutputManager(args.project, scope, scope_output_dir=_scope_dir)
     output_mgr.print_summary()
     eng = getattr(args, "engagement", {}) or {}
     _write_project_meta(
