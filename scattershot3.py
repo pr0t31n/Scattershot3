@@ -171,7 +171,7 @@ except ImportError:
 # Finding title normalisation — applied at write time so output files already
 # carry canonical names (same patterns Vantage uses for cross-tool dedup).
 # ─────────────────────────────────────────────────────────────────────────────
-VERSION = "1.37.0"
+VERSION = "1.37.1"
 
 # ─────────────────────────────────────────────
 # Default credential list — top 100
@@ -8687,8 +8687,6 @@ def run_nuclei(
             stdout_b, stderr_b = proc.communicate()
             _tprint(f"{Fore.YELLOW}[!] Nuclei timed out after {timeout}s{Style.RESET_ALL}")
             _vc.log(f"nuclei timed out after {timeout}s — command: {' '.join(cmd)}", "WARNING")
-            _vc.error(f"nuclei timeout ({scope})", source="nuclei",
-                      detail=f"Timeout after {timeout}s. Command: {' '.join(cmd)}", category="Tool")
             _ensure_output_file(txt_out, " ".join(cmd),
                                 f"(nuclei timed out after {timeout}s — partial results may exist in {jsonl_out.name})")
             # Action item: nuclei timed out — manual re-run recommended
@@ -9292,8 +9290,6 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
         err = f"sslscan timed out after {timeout}s"
         result["errors"].append(err)
         _vc.log(f"sslscan timed out on {ip}:{port} after {timeout}s — command: {' '.join(cmd)}", "WARNING")
-        _vc.error(f"sslscan timeout on {ip}:{port}", source="sslscan",
-                  detail=f"Timeout after {timeout}s. Command: {' '.join(cmd)}", category="Tool")
         if output_mgr:
             output_mgr.log_error("sslscan", sslscan_path, cmd, err,
                                  extra={"target": f"{ip}:{port}"})
@@ -10019,8 +10015,6 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
         err = f"testssl timed out after {timeout}s"
         result["errors"].append(err)
         _vc.log(f"testssl timed out on {ip}:{port} after {timeout}s — command: {' '.join(cmd)}", "WARNING")
-        _vc.error(f"testssl timeout on {ip}:{port}", source="testssl",
-                  detail=f"Timeout after {timeout}s. Command: {' '.join(cmd)}", category="Tool")
         if output_mgr:
             output_mgr.log_error("testssl", testssl_path, cmd, err,
                                  extra={"target": f"{ip}:{port}"})
@@ -16346,8 +16340,6 @@ def run_shcheck(
     except subprocess.TimeoutExpired:
         _tprint(f"  {Fore.YELLOW}[~] shcheck timed out on {ip}:{port}{Style.RESET_ALL}")
         _vc.log(f"shcheck timed out on {ip}:{port} after {timeout}s — command: {' '.join(str(c) for c in cmd)}", "WARNING")
-        _vc.error(f"shcheck timeout on {ip}:{port}", source="shcheck",
-                  detail=f"Timeout after {timeout}s. Command: {' '.join(str(c) for c in cmd)}", category="Tool")
         _ensure_output_file(out_file, " ".join(str(c) for c in cmd),
                             f"(shcheck timed out after {timeout}s — no results collected)")
         return
@@ -16570,8 +16562,6 @@ def run_gobuster(
     except subprocess.TimeoutExpired:
         _tprint(f"  {Fore.YELLOW}[~] gobuster timed out on {ip}:{port}{Style.RESET_ALL}")
         _vc.log(f"gobuster timed out on {ip}:{port} after {timeout}s — command: {' '.join(cmd)}", "WARNING")
-        _vc.error(f"gobuster timeout on {ip}:{port}", source="gobuster",
-                  detail=f"Timeout after {timeout}s. Command: {' '.join(cmd)}", category="Tool")
         _ensure_output_file(out_file, " ".join(cmd),
                             f"(gobuster timed out after {timeout}s — no results collected)")
         return
@@ -16695,8 +16685,6 @@ def run_webanalyze(
     except subprocess.TimeoutExpired:
         _tprint(f"  {Fore.YELLOW}[~] webanalyze timed out on {ip}:{port}{Style.RESET_ALL}")
         _vc.log(f"webanalyze timed out on {ip}:{port} after {timeout}s — command: {' '.join(cmd)}", "WARNING")
-        _vc.error(f"webanalyze timeout on {ip}:{port}", source="webanalyze",
-                  detail=f"Timeout after {timeout}s. Command: {' '.join(cmd)}", category="Tool")
         _ensure_output_file(out_file, " ".join(cmd),
                             f"(webanalyze timed out after {timeout}s — no results collected)")
         return False
@@ -16856,8 +16844,6 @@ def run_wpscan(
     except subprocess.TimeoutExpired:
         _tprint(f"  {Fore.YELLOW}[~] wpscan timed out on {ip}:{port}{Style.RESET_ALL}")
         _vc.log(f"wpscan timed out on {ip}:{port} after {timeout}s — command: {' '.join(cmd)}", "WARNING")
-        _vc.error(f"wpscan timeout on {ip}:{port}", source="wpscan",
-                  detail=f"Timeout after {timeout}s. Command: {' '.join(cmd)}", category="Tool")
         _ensure_output_file(out_file, " ".join(cmd),
                             f"(wpscan timed out after {timeout}s — no results collected)")
         return
@@ -19666,8 +19652,6 @@ def run_nfs_enum(
                         )
     except subprocess.TimeoutExpired:
         _vc.log(f"showmount (NFS) timed out on {ip}:{port} after {timeout}s — command: {' '.join(cmd)}", "WARNING")
-        _vc.error(f"showmount timeout on {ip}:{port}", source="showmount",
-                  detail=f"Timeout after {timeout}s. Command: {' '.join(cmd)}", category="Tool")
         _ensure_output_file(out_file, " ".join(cmd),
                             f"(showmount timed out after {timeout}s — no NFS export data collected)")
     except Exception as exc:
