@@ -8715,9 +8715,7 @@ def run_nuclei(
         if proc.returncode != 0 and not _stdout.strip() and not jsonl_out.exists():
             _tprint(f"{Fore.RED}[!] Nuclei failed (exit {proc.returncode}): "
                     f"{_stderr[:200]}{Style.RESET_ALL}")
-            _vc.error(f"nuclei failed ({scope})", source="nuclei",
-                      detail=f"Exit code {proc.returncode}. stderr: {_stderr[:500]}",
-                      category="Tool")
+            _vc.log(f"nuclei failed ({scope}): exit {proc.returncode}", level="WARN")
 
         # Log the invocation
         output_mgr.log_command(
@@ -9729,15 +9727,9 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                     f"  {Fore.YELLOW}[~] testssl JSON corrupt/truncated on "
                     f"{ip}:{port}: {_jde}{Style.RESET_ALL}"
                 )
-                _vc.error(
-                    f"testssl JSON corrupt on {ip}:{port}",
-                    source="testssl",
-                    detail=(
-                        f"JSON parse error: {_jde}. File: {json_file_ts}. "
-                        "Likely caused by timeout killing testssl mid-write. "
-                        "Text parser fallback used."
-                    ),
-                    category="Tool",
+                _vc.log(
+                    f"testssl JSON corrupt on {ip}:{port} — text parser fallback used",
+                    level="WARN",
                 )
                 # Rename corrupt file so downstream consumers don't treat it
                 # as valid evidence.
