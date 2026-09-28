@@ -1983,7 +1983,7 @@ class OutputManager:
         self.project_name  = project_name
         self.scope         = scope
         if scope_output_dir:
-            self.root = Path(scope_output_dir).resolve() / scope
+            self.root = Path(scope_output_dir).resolve()
         else:
             self.root = Path(project_name).resolve() / scope
         _set_s3_evidence_dir(self.root)   # §14h: route per-request HTTP evidence to this scope
@@ -11041,6 +11041,24 @@ Examples:
         help="Path to msfconsole binary (auto-detected when omitted).",
     )
 
+    # ---- Scope output directory overrides -----------------------------------
+    parser.add_argument(
+        "--internal-dir", metavar="DIR", dest="internal_dir", default=None,
+        help=(
+            "Override output directory for internal-scope results. "
+            "SS3 writes internal findings, hosts, and logs directly "
+            "into this directory instead of <project>/int/."
+        ),
+    )
+    parser.add_argument(
+        "--external-dir", metavar="DIR", dest="external_dir", default=None,
+        help=(
+            "Override output directory for external-scope results. "
+            "SS3 writes external findings, hosts, and logs directly "
+            "into this directory instead of <project>/ext/."
+        ),
+    )
+
     args = parser.parse_args()
 
     # ---- --init-settings: dump template and exit immediately ----------------
@@ -11059,6 +11077,17 @@ Examples:
     if args.settings_file:
         settings = load_settings(args.settings_file)
         apply_settings(args, settings)
+
+    # ---- Populate scope_output_dirs from --internal-dir / --external-dir ----
+    _cli_sod = {}
+    if getattr(args, "internal_dir", None):
+        _cli_sod["int"] = args.internal_dir
+    if getattr(args, "external_dir", None):
+        _cli_sod["ext"] = args.external_dir
+    if _cli_sod:
+        _existing_sod = getattr(args, "scope_output_dirs", {}) or {}
+        _existing_sod.update(_cli_sod)
+        args.scope_output_dirs = _existing_sod
 
     # ---- Resolve legacy --ssl-timeout ---------------------------------------
     if args.ssl_timeout is not None:
