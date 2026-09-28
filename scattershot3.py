@@ -10225,12 +10225,13 @@ def print_ssl_results(ip: str, port: int, sslscan_result: dict | None, testssl_r
 # On terminals that don't support them the sequences are silently ignored and
 # the banner just prints once — graceful degradation.
 
-# ── Art lines (4 rows, max 71 cols) ──────────────────────────────────────────
+# ── Art lines (5 rows, max 66 cols) ──────────────────────────────────────────
 _ART_LINES: list[str] = [
-    r" ____   ___  __   ____  ____  ____  ____   ____  _  _   __  ____",
-    r"/ ___) / __)(  ) / _  \(_  _)(_  _)(  __) (  _ \/ )( \ /  \(_  _)",
-    r"\___ \( (__ / (_/\( (_) ) )(    )(   ) _)   \  \) __ ((  O ) )(  ",
-    r"(____/ \___)\_____)\__/(__)  (__) (____)   (____/\_)(_/ \__/ (__) ",
+    r" ____   ____    _  _____ _____ _____ ____  ____  _   _  ___ _____",
+    r"/ ___| / ___|  / \|_   _|_   _| ____|  _ \/ ___|| | | |/ _ \_   _|",
+    r"\___ \| |     / _ \ | |   | | |  _| | |_) \___ \| |_| | | | || |",
+    r" ___) | |___ / ___ \| |   | | | |___|  _ < ___) |  _  | |_| || |",
+    r"|____/ \____/_/   \_\_|   |_| |_____|_| \_\____/|_| |_|\___/ |_|",
     r"  ─── Host Discovery · Port Scanning · Web & SSL/TLS Analysis ───",
 ]
 
