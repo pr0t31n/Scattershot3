@@ -6914,6 +6914,11 @@ def _port_scan_worker(
                             _http_lines.append(f"Title     : {web_result['title']}")
                         if web_result.get("redirect"):
                             _http_lines.append(f"Redirect  : {web_result['redirect']}")
+                        _sc_list = web_result.get("set_cookies") or []
+                        if _sc_list:
+                            _http_lines.append("")
+                            for _sc_hdr in _sc_list:
+                                _http_lines.append(f"Set-Cookie: {_sc_hdr}")
                         _http_file.write_text("\n".join(_http_lines), encoding="utf-8")
                         output_mgr.log_finding(
                             title="Web Page Identified",
@@ -9248,10 +9253,18 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
                     )
 
             # Deprecated protocols
+            _cipher_protos = {c.get("protocol", "").lower() for c in _cipher_source}
             for proto_entry in _proto_source:
                 if proto_entry.get("status") == "enabled":
                     proto = proto_entry["protocol"]
                     if _RE_WEAK_SSL.search(proto) or _RE_WEAK_TLS.search(proto):
+                        if _ss_xml_protocols and proto.lower() not in _cipher_protos:
+                            _vc.log(
+                                f"Suppressed false-positive {proto} on {ip}:{port}: "
+                                "sslscan reported enabled but no ciphers accepted",
+                                "WARNING",
+                            )
+                            continue
                         output_mgr.log_finding(
                             title=f"Deprecated Protocol Enabled: {proto}",
                             ip=ip, port=port, command=cmd, hostname=hostname,
