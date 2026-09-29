@@ -5651,7 +5651,10 @@ def _curl_probe_web(ip: str, port: int, scheme: str = "http",
     body, time_total, redirect, raw_request_estimate}. Used for Phase E
     evidence capture. Falls back to requests when curl is unavailable.
     """
-    _url = f"{scheme}://{ip}:{port}/"
+    if (scheme == "https" and port == 443) or (scheme == "http" and port == 80):
+        _url = f"{scheme}://{ip}/"
+    else:
+        _url = f"{scheme}://{ip}:{port}/"
     _curl = shutil.which("curl")
     if _curl:
         # Capture status, headers, body, and timing in one shot.
@@ -6387,7 +6390,8 @@ def port_scan(
                 nse_passes.append((mysql_ports, ",".join(mysql_scripts)))
         if ftp_ports:
             ftp_nse = []
-            for _s in ("ftp-vsftpd-backdoor",):
+            for _s in ("ftp-anon", "ftp-bounce", "ftp-syst",
+                        "ftp-vsftpd-backdoor", "ftp-proftpd-backdoor"):
                 if _script_exists(_s):
                     ftp_nse.append(_s)
             if ftp_nse:
@@ -6904,7 +6908,10 @@ def _port_scan_worker(
                         _http_file = _http_dir / f"{port}_http.txt"
                         _http_scheme = (web_result.get("scheme")
                                         or ("https" if port_is_tls(port, web_result) else "http"))
-                        _http_url = f"{_http_scheme}://{ip}:{port}/"
+                        if (_http_scheme == "https" and port == 443) or (_http_scheme == "http" and port == 80):
+                            _http_url = f"{_http_scheme}://{ip}/"
+                        else:
+                            _http_url = f"{_http_scheme}://{ip}:{port}/"
                         _http_lines = [
                             f"URL       : {_http_url}",
                             f"Status    : {web_result.get('status_code', 'unknown')}",
@@ -7259,7 +7266,7 @@ def _port_scan_worker(
             except Exception as exc:
                 _tprint(f"{Fore.RED}  [!] SNMP check error {ip}:{port}: {exc}{Style.RESET_ALL}")
 
-        # ── FTP anonymous login ────────────────────────────────────────
+        # ── FTP checks (anon + rate limiting + default creds) ─────────
         is_ftp = (svc_name in ("ftp", "ftps") or port == 21)
         if is_ftp and not getattr(args, "no_enum", False):
             try:
@@ -7267,6 +7274,20 @@ def _port_scan_worker(
                                    hostname=hostname, scope=scope)
             except Exception as exc:
                 _tprint(f"{Fore.RED}  [!] FTP anon check error {ip}:{port}: {exc}{Style.RESET_ALL}")
+            _ftp_delay = 0.0
+            try:
+                _rl = _detect_ftp_rate_limit(ip, port, output_mgr,
+                                             hostname=hostname, scope=scope)
+                _ftp_delay = _rl.get("delay", 0.0)
+            except Exception as exc:
+                _tprint(f"{Fore.RED}  [!] FTP rate-limit probe error {ip}:{port}: {exc}{Style.RESET_ALL}")
+            try:
+                run_ftp_default_cred_check(
+                    ip, port, output_mgr, hostname=hostname, scope=scope,
+                    cred_store=cred_store, inter_attempt_delay=_ftp_delay,
+                )
+            except Exception as exc:
+                _tprint(f"{Fore.RED}  [!] FTP default cred check error {ip}:{port}: {exc}{Style.RESET_ALL}")
 
         # ── SMB null session ───────────────────────────────────────────
         is_smb = (svc_name in ("microsoft-ds", "netbios-ssn", "smb") or port in (139, 445))
@@ -14847,6 +14868,278 @@ def run_ftp_anon_check(
     except Exception:
         # Login refused or connection error — not a finding
         _tprint(f"  {Fore.GREEN}[+] FTP anon check complete: {ip}:{port} — login denied{Style.RESET_ALL}")
+
+
+# FTP-specific default credentials (beyond anonymous, which run_ftp_anon_check covers)
+_FTP_DEFAULT_CREDS = [
+    ("ftp",       "ftp"),
+    ("admin",     "admin"),
+    ("admin",     "password"),
+    ("admin",     ""),
+    ("admin",     "1234"),
+    ("admin",     "123456"),
+    ("root",      "root"),
+    ("root",      "password"),
+    ("root",      ""),
+    ("user",      "password"),
+    ("user",      "user"),
+    ("test",      "test"),
+    ("guest",     "guest"),
+    ("ftpuser",   "ftpuser"),
+    ("ftpuser",   "password"),
+    ("backup",    "backup"),
+    ("upload",    "upload"),
+    ("download",  "download"),
+    ("webmaster", "webmaster"),
+    ("www",       "www"),
+    ("service",   "service"),
+    ("oracle",    "oracle"),
+    ("postgres",  "postgres"),
+    ("mysql",     "mysql"),
+]
+
+
+def _detect_ftp_rate_limit(
+    ip: str,
+    port: int,
+    output_mgr: "OutputManager",
+    hostname: "str | None" = None,
+    scope: str = "int",
+    attempts: int = 6,
+    timeout: float = 8.0,
+) -> "dict":
+    """
+    Probe FTP for brute-force rate limiting by sending rapid failed logins.
+
+    Returns a dict:
+      {"rate_limited": bool, "delay": float, "detail": str}
+    delay > 0 means the caller should sleep that many seconds between cred
+    attempts.  When rate_limited is True, a MEDIUM finding is NOT emitted
+    (protection is good); when False, a LOW finding notes the absence.
+    """
+    import ftplib, time
+    _tprint(f"  {Fore.CYAN}[*] FTP rate-limit probe: {ip}:{port} "
+            f"({attempts} rapid failed logins){Style.RESET_ALL}")
+    timings: "list[float]" = []
+    refused = False
+    blocked_code = False
+    for i in range(attempts):
+        t0 = time.monotonic()
+        try:
+            ftp = ftplib.FTP()
+            ftp.connect(ip, port, timeout=timeout)
+            try:
+                ftp.login(f"rate_test_{i}", f"bad_pw_{i}")
+            except ftplib.error_perm as ep:
+                code = str(ep)[:3]
+                if code == "421":
+                    blocked_code = True
+                    timings.append(time.monotonic() - t0)
+                    try:
+                        ftp.quit()
+                    except Exception:
+                        pass
+                    break
+            except ftplib.error_temp as et:
+                code = str(et)[:3]
+                if code == "421":
+                    blocked_code = True
+                    timings.append(time.monotonic() - t0)
+                    try:
+                        ftp.quit()
+                    except Exception:
+                        pass
+                    break
+            try:
+                ftp.quit()
+            except Exception:
+                pass
+        except (ConnectionRefusedError, ConnectionResetError, OSError):
+            refused = True
+            timings.append(time.monotonic() - t0)
+            break
+        except Exception:
+            pass
+        timings.append(time.monotonic() - t0)
+
+    if not timings or len(timings) < 2:
+        return {"rate_limited": False, "delay": 0.0,
+                "detail": "unable to measure (connection issues)"}
+
+    rate_limited = False
+    detail_parts: "list[str]" = []
+    suggested_delay = 0.0
+
+    if blocked_code:
+        rate_limited = True
+        detail_parts.append(f"421 response after {len(timings)} attempt(s)")
+        suggested_delay = 2.0
+
+    if refused:
+        rate_limited = True
+        detail_parts.append(f"connection refused/reset after {len(timings)} attempt(s)")
+        suggested_delay = max(suggested_delay, 3.0)
+
+    if len(timings) >= 4:
+        early_avg = sum(timings[:2]) / 2
+        late_avg  = sum(timings[-2:]) / 2
+        if early_avg > 0 and late_avg > (2.0 * early_avg) and late_avg > 1.5:
+            rate_limited = True
+            detail_parts.append(
+                f"progressive delay detected (early avg {early_avg:.2f}s "
+                f"→ late avg {late_avg:.2f}s)"
+            )
+            suggested_delay = max(suggested_delay, late_avg)
+
+    detail = "; ".join(detail_parts) if detail_parts else "no rate limiting indicators detected"
+    result = {"rate_limited": rate_limited, "delay": suggested_delay, "detail": detail}
+
+    cmd_ref = f"ftp-rate-limit-probe {ip}:{port} ({attempts} attempts)"
+    _ftp_dir = output_mgr.service_path(ip, "ftp")
+    _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _rl_file = _ftp_dir / output_mgr._safe_filename(
+        [ip, f"ftp-rate-limit_{port}", _ts], "txt"
+    )
+    _rl_lines = [
+        f"FTP Rate Limit Probe — {ip}:{port}",
+        f"Attempts: {attempts}",
+        f"Rate limited: {rate_limited}",
+        f"Detail: {detail}",
+        f"Suggested delay: {suggested_delay:.1f}s",
+        "",
+        "Per-attempt timings:",
+    ]
+    for idx, t in enumerate(timings):
+        _rl_lines.append(f"  Attempt {idx+1}: {t:.3f}s")
+    _rl_file.write_text("\n".join(_rl_lines), encoding="utf-8")
+    try:
+        _rl_rel = str(_rl_file.relative_to(output_mgr.root))
+    except Exception:
+        _rl_rel = None
+
+    if rate_limited:
+        _tprint(f"  {Fore.GREEN}[+] FTP rate limiting detected on {ip}:{port}: "
+                f"{detail}{Style.RESET_ALL}")
+    else:
+        output_mgr.log_finding(
+            title="FTP Brute Force Protection Not Detected",
+            ip=ip, port=port, hostname=hostname,
+            command=cmd_ref, risk="LOW",
+            description=(
+                "The FTP server did not exhibit rate limiting, account lockout, or "
+                "connection throttling after multiple rapid failed login attempts. "
+                "Without brute-force protection, an attacker could attempt unlimited "
+                "credential guesses."
+            ),
+            output=f"Attempts: {attempts}\nTimings: {timings}\n{detail}",
+            sources="ftp-rate-limit-probe",
+            affected=f"{ip}:{port}",
+            output_file=_rl_rel,
+        )
+        _tprint(f"  {Fore.YELLOW}[~] FTP: no rate limiting on {ip}:{port}{Style.RESET_ALL}")
+
+    return result
+
+
+def run_ftp_default_cred_check(
+    ip: str,
+    port: int,
+    output_mgr: "OutputManager",
+    hostname: "str | None" = None,
+    scope: str = "int",
+    timeout: float = 10.0,
+    cred_store: "CredentialStore | None" = None,
+    inter_attempt_delay: float = 0.0,
+) -> None:
+    """
+    Test FTP-specific default credentials beyond anonymous.
+    Skips anonymous/* pairs (already covered by run_ftp_anon_check).
+    """
+    import ftplib, time
+    _tprint(f"  {Fore.CYAN}[*] FTP default credential check: {ip}:{port} "
+            f"({len(_FTP_DEFAULT_CREDS)} pairs){Style.RESET_ALL}")
+
+    found: "list[tuple[str, str]]" = []
+    evidence_lines: "list[str]" = [f"FTP Default Credential Test — {ip}:{port}", ""]
+
+    for uname, pwd in _FTP_DEFAULT_CREDS:
+        if uname.lower() == "anonymous":
+            continue
+        try:
+            ftp = ftplib.FTP()
+            ftp.connect(ip, port, timeout=timeout)
+            ftp.login(uname, pwd)
+            welcome = ftp.getwelcome()
+            listing: "list[str]" = []
+            try:
+                ftp.retrlines("LIST", listing.append)
+            except Exception:
+                pass
+            try:
+                ftp.quit()
+            except Exception:
+                pass
+            found.append((uname, pwd))
+            evidence_lines.append(f"[SUCCESS] {uname}:{pwd}")
+            evidence_lines.append(f"  Welcome: {welcome or '(none)'}")
+            if listing:
+                evidence_lines.append("  Directory listing (/):")
+                for ll in listing[:20]:
+                    evidence_lines.append(f"    {ll}")
+            evidence_lines.append("")
+            _tprint(
+                f"  {Fore.RED}[!] FTP default creds accepted: "
+                f"{uname}:{pwd} @ {ip}:{port}{Style.RESET_ALL}"
+            )
+        except (ftplib.error_perm, ftplib.error_temp):
+            evidence_lines.append(f"[FAILED]  {uname}:{pwd}")
+        except (ConnectionRefusedError, ConnectionResetError, OSError) as exc:
+            evidence_lines.append(f"[CONNERR] {uname}:{pwd} — {exc}")
+            break
+        except Exception:
+            evidence_lines.append(f"[ERROR]   {uname}:{pwd}")
+
+        if inter_attempt_delay > 0:
+            time.sleep(inter_attempt_delay)
+
+    _ftp_dir = output_mgr.service_path(ip, "ftp")
+    _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _cred_file = _ftp_dir / output_mgr._safe_filename(
+        [ip, f"ftp-default-creds_{port}", _ts], "txt"
+    )
+    _cred_file.write_text("\n".join(evidence_lines), encoding="utf-8")
+    try:
+        _cred_rel = str(_cred_file.relative_to(output_mgr.root))
+    except Exception:
+        _cred_rel = None
+
+    for uname, pwd in found:
+        cmd_ref = f"ftp-default-cred-check {ip}:{port} {uname}:{pwd}"
+        output_mgr.log_finding(
+            title="FTP Default Credentials Accepted",
+            ip=ip, port=port, hostname=hostname,
+            command=cmd_ref,
+            risk="CRITICAL" if scope == "ext" else "HIGH",
+            description=(
+                f"The FTP service accepted default credentials ({uname}/{pwd}), "
+                "granting authenticated access. Default or weak FTP credentials "
+                "allow attackers to read, modify, or upload files on the server."
+            ),
+            output=(
+                f"Username: {uname}\nPassword: {pwd}\n"
+                f"Service: FTP ({ip}:{port})\n\n"
+                f"Full test results saved to: {_cred_rel or '(see evidence file)'}"
+            ),
+            sources="ftp-default-cred-check",
+            affected=f"{ip}:{port}",
+            output_file=_cred_rel,
+        )
+        if cred_store:
+            cred_store.add(uname, pwd, f"ftp default cred @ {ip}:{port}", ip=ip)
+
+    if not found:
+        _tprint(f"  {Fore.GREEN}[+] FTP default cred check complete: "
+                f"{ip}:{port} — no defaults accepted{Style.RESET_ALL}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
