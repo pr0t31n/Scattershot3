@@ -1760,6 +1760,10 @@ _RE_RFC1918_IN_TEXT = re.compile(
     r'|192\.168\.\d{1,3}\.\d{1,3}'
     r')\b'
 )
+_RE_INTERNAL_HOSTNAME = re.compile(
+    r"\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+(?:local|internal|corp|lan|intranet|private|home|localdomain)\b",
+    re.IGNORECASE,
+)
 
 
 def classify_ip(ip: str) -> str:
@@ -5659,6 +5663,29 @@ def _identify_service_via_nc(ip: str, port: int, proto: str = "tcp",
     return (_first, _txt)
 
 
+_SENSITIVE_ROBOTS_PATTERNS = re.compile(
+    r"(?:admin|backup|config|\.env|\.git|\.svn|\.htaccess|\.htpasswd|"
+    r"wp-admin|phpmyadmin|cgi-bin|server-status|server-info|\.sql|"
+    r"\.bak|\.old|\.orig|private|secret|credentials|api[/-]?key|"
+    r"debug|console|staging|test|internal|phpinfo|\.log|\.xml|"
+    r"sitemap|\.json|\.yaml|\.yml|\.conf|\.ini|\.sh|\.bash|"
+    r"\.db|\.sqlite|upload|dump|export)",
+    re.IGNORECASE,
+)
+
+
+def _analyze_robots_txt(body: str) -> "list[str]":
+    """Return sensitive Disallow paths found in a robots.txt body."""
+    hits = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("disallow:"):
+            path = stripped.split(":", 1)[1].strip()
+            if path and _SENSITIVE_ROBOTS_PATTERNS.search(path):
+                hits.append(path)
+    return hits
+
+
 def _curl_probe_web(ip: str, port: int, scheme: str = "http",
                     timeout: int = 8) -> dict:
     """Run a curl GET against a web port and return {url, status, headers,
@@ -5772,6 +5799,205 @@ def probe_uncertain_and_nonstandard_ports(
                     if isinstance(_pinfo["banner"], dict):
                         _pinfo["banner"]["banner"] = _banner_first
                         _pinfo["banner"]["raw_bytes"] = len(_banner_full or "")
+
+        # ── Phase D.2: service-specific unauthenticated probes ────────────
+        # GAP-01: Docker API (2375/2376)
+        if _port in (2375, 2376):
+            try:
+                _dk_scheme = "https" if _port == 2376 else "http"
+                _dk_resp = _HTTP_SESSION.get(
+                    f"{_dk_scheme}://{ip}:{_port}/version",
+                    timeout=5, verify=False)
+                if _dk_resp.status_code == 200:
+                    try:
+                        _dk_data = _dk_resp.json()
+                        if "ApiVersion" in _dk_data or "Version" in _dk_data:
+                            output_mgr.log_finding(
+                                title="Unauthenticated Docker API Accessible",
+                                ip=ip, port=_port, hostname=hostname,
+                                command=f"curl -sk {_dk_scheme}://{ip}:{_port}/version",
+                                risk="CRITICAL",
+                                description=(
+                                    f"The Docker Engine API is accessible without "
+                                    f"authentication at {ip}:{_port}. An attacker "
+                                    f"can create privileged containers, mount the host "
+                                    f"filesystem, execute arbitrary commands on the host, "
+                                    f"and achieve full host compromise."
+                                ),
+                                output=json.dumps(_dk_data)[:500],
+                                sources="scattershot3-docker-probe",
+                                affected=f"{ip}:{_port}",
+                            )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        # GAP-03: CouchDB (5984)
+        if _port == 5984:
+            try:
+                _cdb_resp = _HTTP_SESSION.get(
+                    f"http://{ip}:{_port}/_all_dbs",
+                    timeout=5, verify=False)
+                if _cdb_resp.status_code == 200:
+                    try:
+                        _cdb_data = _cdb_resp.json()
+                        if isinstance(_cdb_data, list) and len(_cdb_data) > 0:
+                            output_mgr.log_finding(
+                                title="CouchDB Unauthenticated Database Listing",
+                                ip=ip, port=_port, hostname=hostname,
+                                command=f"curl -s http://{ip}:{_port}/_all_dbs",
+                                risk="CRITICAL",
+                                description=(
+                                    f"CouchDB at {ip}:{_port} allows unauthenticated "
+                                    f"access to /_all_dbs, listing {len(_cdb_data)} "
+                                    f"databases. An attacker can read/modify/delete "
+                                    f"all database contents."
+                                ),
+                                output=f"Databases: {json.dumps(_cdb_data)[:300]}",
+                                sources="scattershot3-couchdb-probe",
+                                affected=f"{ip}:{_port}",
+                            )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        # GAP-05: Grafana unauthenticated API (3000)
+        if _port == 3000:
+            try:
+                _gf_resp = _HTTP_SESSION.get(
+                    f"http://{ip}:{_port}/api/org",
+                    timeout=5, verify=False)
+                if _gf_resp.status_code == 200:
+                    try:
+                        _gf_data = _gf_resp.json()
+                        if "name" in _gf_data or "id" in _gf_data:
+                            output_mgr.log_finding(
+                                title="Grafana API Accessible Without Authentication",
+                                ip=ip, port=_port, hostname=hostname,
+                                command=f"curl -s http://{ip}:{_port}/api/org",
+                                risk="HIGH",
+                                description=(
+                                    f"The Grafana API at {ip}:{_port} responds to "
+                                    f"unauthenticated requests. An attacker can access "
+                                    f"dashboards, data sources (which may contain database "
+                                    f"credentials), and organization configuration."
+                                ),
+                                output=json.dumps(_gf_data)[:300],
+                                sources="scattershot3-grafana-probe",
+                                affected=f"{ip}:{_port}",
+                            )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        # GAP-06: Kibana unauthenticated API (5601)
+        if _port == 5601:
+            try:
+                _kb_resp = _HTTP_SESSION.get(
+                    f"http://{ip}:{_port}/api/status",
+                    timeout=5, verify=False,
+                    headers={"kbn-xsrf": "true"})
+                if _kb_resp.status_code == 200:
+                    try:
+                        _kb_data = _kb_resp.json()
+                        if "version" in _kb_data or "status" in _kb_data:
+                            output_mgr.log_finding(
+                                title="Kibana API Accessible Without Authentication",
+                                ip=ip, port=_port, hostname=hostname,
+                                command=f"curl -s -H 'kbn-xsrf: true' http://{ip}:{_port}/api/status",
+                                risk="HIGH",
+                                description=(
+                                    f"The Kibana API at {ip}:{_port} responds to "
+                                    f"unauthenticated requests. An attacker can access "
+                                    f"Elasticsearch indices, read log data, and potentially "
+                                    f"execute queries against backend data stores."
+                                ),
+                                output=json.dumps(_kb_data)[:300],
+                                sources="scattershot3-kibana-probe",
+                                affected=f"{ip}:{_port}",
+                            )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        # GAP-07: Cassandra native protocol (9042)
+        if _port == 9042 and _service in ("", "unknown", "tcpwrapped", "cassandra"):
+            try:
+                _cass_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                _cass_sock.settimeout(5)
+                _cass_sock.connect((ip, _port))
+                _cass_options = bytes([
+                    0x04,  # version 4
+                    0x00,  # flags
+                    0x00, 0x00,  # stream id
+                    0x05,  # opcode OPTIONS
+                    0x00, 0x00, 0x00, 0x00,  # length 0
+                ])
+                _cass_sock.sendall(_cass_options)
+                _cass_reply = _cass_sock.recv(1024)
+                _cass_sock.close()
+                if len(_cass_reply) >= 9 and _cass_reply[4] == 0x06:
+                    output_mgr.log_finding(
+                        title="Cassandra Native Protocol Accessible Without Authentication",
+                        ip=ip, port=_port, hostname=hostname,
+                        command=f"cqlsh {ip} {_port}",
+                        risk="HIGH",
+                        description=(
+                            f"Cassandra at {ip}:{_port} responded to a native protocol "
+                            f"OPTIONS request without authentication. An attacker can "
+                            f"connect with cqlsh and read/modify all keyspaces and tables."
+                        ),
+                        output=f"CQL protocol v4 SUPPORTED response received ({len(_cass_reply)} bytes)",
+                        sources="scattershot3-cassandra-probe",
+                        affected=f"{ip}:{_port}",
+                    )
+            except Exception:
+                pass
+
+        # GAP-02: PostgreSQL trust authentication (5432)
+        if _port == 5432 and _service in ("", "unknown", "tcpwrapped", "postgresql"):
+            try:
+                _pg_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                _pg_sock.settimeout(5)
+                _pg_sock.connect((ip, _port))
+                _pg_user = b"postgres"
+                _pg_db = b"postgres"
+                _pg_startup = (
+                    b"\x00\x03\x00\x00"  # protocol 3.0
+                    + b"user\x00" + _pg_user + b"\x00"
+                    + b"database\x00" + _pg_db + b"\x00"
+                    + b"\x00"
+                )
+                _pg_len = len(_pg_startup) + 4
+                _pg_msg = _pg_len.to_bytes(4, "big") + _pg_startup
+                _pg_sock.sendall(_pg_msg)
+                _pg_reply = _pg_sock.recv(1024)
+                _pg_sock.close()
+                if _pg_reply and _pg_reply[0:1] == b"R":
+                    _pg_auth_type = int.from_bytes(_pg_reply[5:9], "big") if len(_pg_reply) >= 9 else -1
+                    if _pg_auth_type == 0:
+                        output_mgr.log_finding(
+                            title="PostgreSQL Trust Authentication — No Password Required",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=f"psql -h {ip} -p {_port} -U postgres -d postgres",
+                            risk="CRITICAL",
+                            description=(
+                                f"PostgreSQL at {ip}:{_port} accepted a connection as "
+                                f"user 'postgres' without requiring a password (trust "
+                                f"authentication). An attacker gains full database "
+                                f"superuser access including data, OS command execution "
+                                f"via COPY/lo_*, and file read/write."
+                            ),
+                            output="AuthenticationOk (auth type 0) received without password",
+                            sources="scattershot3-postgresql-probe",
+                            affected=f"{ip}:{_port}",
+                        )
+            except Exception:
+                pass
 
         # ── Phase E: web ports → curl probe, save evidence ─────────────────
         # Only treat a port as web when curl actually returns a real HTTP
@@ -5979,6 +6205,306 @@ def probe_uncertain_and_nonstandard_ports(
                             affected=f"{ip}:{_port}",
                             output_file=str(_curl_path.relative_to(output_mgr.root)),
                         )
+                    # Phase G.5: .git exposure (SS-078)
+                    try:
+                        _git_r = subprocess.run(
+                            f"curl -sk --max-time 5 {_scheme}://{_curl_host}:{_port}/.git/HEAD",
+                            shell=True, capture_output=True, timeout=10,
+                        )
+                        _git_body = _git_r.stdout.decode("utf-8", errors="replace").strip()
+                        if "ref: refs/" in _git_body:
+                            output_mgr.log_finding(
+                                title="Git Repository Exposed via Web",
+                                ip=ip, port=_port, hostname=hostname,
+                                command=f"curl -sk {_scheme}://{_curl_host}:{_port}/.git/HEAD",
+                                risk="HIGH",
+                                description=(
+                                    f"The web server at {_scheme}://{ip}:{_port} exposes "
+                                    f"a .git directory. The /.git/HEAD file returned a valid "
+                                    f"Git ref. An attacker can reconstruct the full source "
+                                    f"code repository, including commit history, credentials "
+                                    f"in old commits, and internal configuration. Block access "
+                                    f"to .git directories in the web server configuration."
+                                ),
+                                output=f".git/HEAD content: {_git_body[:256]}",
+                                sources="scattershot3-curl-probe",
+                                affected=f"{ip}:{_port}",
+                                output_file=str(_curl_path.relative_to(output_mgr.root)),
+                            )
+                            _tprint(
+                                f"  {Fore.RED}[!!!] .git exposed {_scheme}://{ip}:{_port}{Style.RESET_ALL}"
+                            )
+                    except Exception:
+                        pass
+                    # Phase G.6: HTTP methods enumeration (SS-079/SS-080)
+                    try:
+                        _opt_r = subprocess.run(
+                            f"curl -sk --max-time 5 -X OPTIONS -I {_scheme}://{_curl_host}:{_port}/",
+                            shell=True, capture_output=True, timeout=10,
+                        )
+                        _opt_out = _opt_r.stdout.decode("utf-8", errors="replace")
+                        _allow_match = re.search(r"(?i)^allow:\s*(.+)$", _opt_out, re.MULTILINE)
+                        if _allow_match:
+                            _methods = [m.strip().upper() for m in _allow_match.group(1).split(",")]
+                            _dangerous = [m for m in _methods if m in ("PUT", "DELETE", "MOVE", "COPY", "PROPFIND")]
+                            if _dangerous:
+                                output_mgr.log_finding(
+                                    title="Dangerous HTTP Methods Enabled",
+                                    ip=ip, port=_port, hostname=hostname,
+                                    command=f"curl -sk -X OPTIONS -I {_scheme}://{_curl_host}:{_port}/",
+                                    risk="MEDIUM",
+                                    description=(
+                                        f"The web server at {_scheme}://{ip}:{_port} allows "
+                                        f"dangerous HTTP methods: {', '.join(_dangerous)}. "
+                                        f"PUT/DELETE can allow file upload and deletion, "
+                                        f"MOVE/COPY enable WebDAV manipulation, and PROPFIND "
+                                        f"discloses directory structure. Disable unused HTTP "
+                                        f"methods in the web server configuration."
+                                    ),
+                                    output=f"Allow: {_allow_match.group(1).strip()}",
+                                    sources="scattershot3-curl-probe",
+                                    affected=f"{ip}:{_port}",
+                                    output_file=str(_curl_path.relative_to(output_mgr.root)),
+                                )
+                    except Exception:
+                        pass
+                    try:
+                        _trace_r = subprocess.run(
+                            f"curl -sk --max-time 5 -X TRACE {_scheme}://{_curl_host}:{_port}/",
+                            shell=True, capture_output=True, timeout=10,
+                        )
+                        _trace_body = _trace_r.stdout.decode("utf-8", errors="replace")
+                        if "TRACE / HTTP" in _trace_body:
+                            output_mgr.log_finding(
+                                title="HTTP TRACE Method Enabled",
+                                ip=ip, port=_port, hostname=hostname,
+                                command=f"curl -sk -X TRACE {_scheme}://{_curl_host}:{_port}/",
+                                risk="LOW",
+                                description=(
+                                    f"The web server at {_scheme}://{ip}:{_port} responds "
+                                    f"to HTTP TRACE requests by echoing the request. The "
+                                    f"TRACE method can be exploited for Cross-Site Tracing "
+                                    f"(XST) attacks to steal credentials from HTTP headers. "
+                                    f"Disable the TRACE method in the web server configuration."
+                                ),
+                                output=_trace_body[:512],
+                                sources="scattershot3-curl-probe",
+                                affected=f"{ip}:{_port}",
+                                output_file=str(_curl_path.relative_to(output_mgr.root)),
+                            )
+                    except Exception:
+                        pass
+                    # Phase G.7: Apache server-status / server-info (SS-081)
+                    for _status_ep, _status_label in (
+                        ("/server-status", "Apache Server Status"),
+                        ("/server-info", "Apache Server Info"),
+                    ):
+                        try:
+                            _ss_r = subprocess.run(
+                                f"curl -sk --max-time 5 {_scheme}://{_curl_host}:{_port}{_status_ep}",
+                                shell=True, capture_output=True, timeout=10,
+                            )
+                            _ss_body = _ss_r.stdout.decode("utf-8", errors="replace")
+                            if ("Apache Server" in _ss_body and
+                                    ("Server Version" in _ss_body or "Current Time" in _ss_body
+                                     or "Scoreboard" in _ss_body or "Server Built" in _ss_body)):
+                                output_mgr.log_finding(
+                                    title=f"{_status_label} Page Exposed",
+                                    ip=ip, port=_port, hostname=hostname,
+                                    command=f"curl -sk {_scheme}://{_curl_host}:{_port}{_status_ep}",
+                                    risk="MEDIUM",
+                                    description=(
+                                        f"The {_status_label} page at {_scheme}://{ip}:{_port}"
+                                        f"{_status_ep} is publicly accessible. This exposes "
+                                        f"server version, uptime, active connections, client "
+                                        f"IPs, and request URIs. Restrict access to "
+                                        f"mod_status and mod_info via .htaccess or "
+                                        f"Apache configuration directives."
+                                    ),
+                                    output=_ss_body[:1024],
+                                    sources="scattershot3-curl-probe",
+                                    affected=f"{ip}:{_port}",
+                                    output_file=str(_curl_path.relative_to(output_mgr.root)),
+                                )
+                                _tprint(
+                                    f"  {Fore.YELLOW}[!] {_status_label} exposed "
+                                    f"{_scheme}://{ip}:{_port}{_status_ep}{Style.RESET_ALL}"
+                                )
+                        except Exception:
+                            pass
+                    # Phase G.8: Internal hostname disclosure (SS-082)
+                    _ihn_text = (_r.get("headers") or "") + "\n" + (_r.get("body") or "")[:4096]
+                    _ihn_found = set()
+                    for _ihm in _RE_INTERNAL_HOSTNAME.finditer(_ihn_text):
+                        _ihn_found.add(_ihm.group(0).lower())
+                    if _ihn_found:
+                        _ihn_str = ", ".join(sorted(_ihn_found))
+                        output_mgr.log_finding(
+                            title="Internal Hostname Disclosed in HTTP Response",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=_r["cmd"], risk="LOW",
+                            description=(
+                                f"The HTTP response from {_scheme}://{ip}:{_port}/ "
+                                f"contains internal hostname(s): {_ihn_str}. Internal "
+                                f"naming conventions disclose domain structure, "
+                                f"environment names, and infrastructure layout. "
+                                f"Remove internal hostnames from response headers "
+                                f"and body content."
+                            ),
+                            output=f"Internal hostname(s): {_ihn_str}",
+                            sources="scattershot3-curl-probe",
+                            affected=f"{ip}:{_port}",
+                            output_file=str(_curl_path.relative_to(output_mgr.root)),
+                        )
+                    # Phase G.9: Debug endpoints (SS-083)
+                    for _dbg_ep, _dbg_label in (
+                        ("/actuator", "Spring Boot Actuator"),
+                        ("/actuator/env", "Spring Boot Actuator Env"),
+                        ("/debug", "Debug endpoint"),
+                        ("/__debug__", "Django Debug Toolbar"),
+                        ("/console", "Web Console"),
+                    ):
+                        try:
+                            _dbg_r = subprocess.run(
+                                f"curl -sk --max-time 5 {_scheme}://{_curl_host}:{_port}{_dbg_ep}",
+                                shell=True, capture_output=True, timeout=10,
+                            )
+                            _dbg_body = _dbg_r.stdout.decode("utf-8", errors="replace").strip()
+                            _dbg_ok = False
+                            if _dbg_ep == "/actuator" and _dbg_body.startswith("{") and '"_links"' in _dbg_body:
+                                _dbg_ok = True
+                            elif _dbg_ep == "/actuator/env" and _dbg_body.startswith("{") and ('"propertySources"' in _dbg_body or '"activeProfiles"' in _dbg_body):
+                                _dbg_ok = True
+                            elif _dbg_ep in ("/debug", "/__debug__") and ("Traceback" in _dbg_body or "debug" in _dbg_body.lower()[:200]) and len(_dbg_body) > 100:
+                                _dbg_ok = True
+                            elif _dbg_ep == "/console" and ("console" in _dbg_body.lower()[:500] and ("<form" in _dbg_body.lower() or "h2" in _dbg_body.lower())):
+                                _dbg_ok = True
+                            if _dbg_ok:
+                                output_mgr.log_finding(
+                                    title=f"Debug Endpoint Exposed: {_dbg_label}",
+                                    ip=ip, port=_port, hostname=hostname,
+                                    command=f"curl -sk {_scheme}://{_curl_host}:{_port}{_dbg_ep}",
+                                    risk="MEDIUM",
+                                    description=(
+                                        f"The {_dbg_label} endpoint at "
+                                        f"{_scheme}://{ip}:{_port}{_dbg_ep} is accessible. "
+                                        f"Debug endpoints expose environment variables, "
+                                        f"configuration, database connection strings, and "
+                                        f"internal application state. Disable debug "
+                                        f"endpoints in production or restrict access."
+                                    ),
+                                    output=_dbg_body[:1024],
+                                    sources="scattershot3-curl-probe",
+                                    affected=f"{ip}:{_port}",
+                                    output_file=str(_curl_path.relative_to(output_mgr.root)),
+                                )
+                                _tprint(
+                                    f"  {Fore.YELLOW}[!] Debug endpoint "
+                                    f"{_dbg_ep} exposed on {ip}:{_port}{Style.RESET_ALL}"
+                                )
+                        except Exception:
+                            pass
+                    # Phase G.10: phpinfo exposure (SS-084)
+                    for _php_ep in ("/phpinfo.php", "/info.php"):
+                        try:
+                            _php_r = subprocess.run(
+                                f"curl -sk --max-time 5 {_scheme}://{_curl_host}:{_port}{_php_ep}",
+                                shell=True, capture_output=True, timeout=10,
+                            )
+                            _php_body = _php_r.stdout.decode("utf-8", errors="replace")
+                            if "phpinfo()" in _php_body or "PHP Version" in _php_body:
+                                _php_ver = ""
+                                _php_vm = re.search(r"PHP Version\s*</td><td[^>]*>\s*([0-9.]+)", _php_body)
+                                if _php_vm:
+                                    _php_ver = _php_vm.group(1)
+                                output_mgr.log_finding(
+                                    title="PHP Info Page Exposed",
+                                    ip=ip, port=_port, hostname=hostname,
+                                    command=f"curl -sk {_scheme}://{_curl_host}:{_port}{_php_ep}",
+                                    risk="HIGH",
+                                    description=(
+                                        f"A phpinfo() page is accessible at "
+                                        f"{_scheme}://{ip}:{_port}{_php_ep}"
+                                        f"{f' (PHP {_php_ver})' if _php_ver else ''}. "
+                                        f"phpinfo() exposes the full PHP configuration, "
+                                        f"loaded modules, environment variables (which "
+                                        f"may contain credentials), file paths, and "
+                                        f"server details. Remove phpinfo files from "
+                                        f"production servers."
+                                    ),
+                                    output=f"PHP info page found: {_php_ep}"
+                                           f"{f' (PHP {_php_ver})' if _php_ver else ''}",
+                                    sources="scattershot3-curl-probe",
+                                    affected=f"{ip}:{_port}",
+                                    output_file=str(_curl_path.relative_to(output_mgr.root)),
+                                )
+                                _tprint(
+                                    f"  {Fore.RED}[!!!] phpinfo exposed "
+                                    f"{_scheme}://{ip}:{_port}{_php_ep}{Style.RESET_ALL}"
+                                )
+                                break  # one phpinfo finding per port
+                        except Exception:
+                            pass
+                    # Phase G.11: Directory listing detection
+                    _body_lo = (_r.get("body") or "").lower()[:4096]
+                    if ("index of /" in _body_lo or
+                            "<title>directory listing" in _body_lo or
+                            "parent directory</a>" in _body_lo):
+                        output_mgr.log_finding(
+                            title="Directory Listing Enabled",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=_r["cmd"], risk="MEDIUM",
+                            description=(
+                                f"The web server at {_scheme}://{ip}:{_port}/ has "
+                                f"directory listing enabled. Directory listings "
+                                f"expose file names, sizes, and modification dates, "
+                                f"allowing attackers to discover backup files, "
+                                f"configuration files, and other sensitive content. "
+                                f"Disable directory listing (Options -Indexes for "
+                                f"Apache, autoindex off for Nginx)."
+                            ),
+                            output=(_r.get("body") or "")[:512],
+                            sources="scattershot3-curl-probe",
+                            affected=f"{ip}:{_port}",
+                            output_file=str(_curl_path.relative_to(output_mgr.root)),
+                        )
+                    # Phase G.12: robots.txt sensitive paths (SS-088)
+                    try:
+                        _rob_r = subprocess.run(
+                            f"curl -sk --max-time 5 {_scheme}://{_curl_host}:{_port}/robots.txt",
+                            shell=True, capture_output=True, timeout=10,
+                        )
+                        _rob_body = _rob_r.stdout.decode("utf-8", errors="replace")
+                        if ("disallow:" in _rob_body.lower() or
+                                "user-agent:" in _rob_body.lower()):
+                            _sensitive_paths = _analyze_robots_txt(_rob_body)
+                            if _sensitive_paths:
+                                _sp_str = ", ".join(_sensitive_paths[:15])
+                                output_mgr.log_finding(
+                                    title="Robots.txt Discloses Sensitive Paths",
+                                    ip=ip, port=_port, hostname=hostname,
+                                    command=f"curl -sk {_scheme}://{_curl_host}:{_port}/robots.txt",
+                                    risk="INFO",
+                                    description=(
+                                        f"The robots.txt file at {_scheme}://{ip}:{_port} "
+                                        f"contains Disallow entries for potentially "
+                                        f"sensitive paths: {_sp_str}. While robots.txt "
+                                        f"instructs well-behaved crawlers to skip these "
+                                        f"paths, it also advertises them to attackers. "
+                                        f"Review whether these paths should exist on the "
+                                        f"production server and ensure they require "
+                                        f"authentication."
+                                    ),
+                                    output=(
+                                        f"Sensitive Disallow paths ({len(_sensitive_paths)}):\n"
+                                        + "\n".join(f"  {p}" for p in _sensitive_paths[:20])
+                                    ),
+                                    sources="scattershot3-curl-probe",
+                                    affected=f"{ip}:{_port}",
+                                    output_file=str(_curl_path.relative_to(output_mgr.root)),
+                                )
+                    except Exception:
+                        pass
                 except OSError:
                     pass
                 break   # one successful probe per port
@@ -6059,6 +6585,132 @@ def probe_uncertain_and_nonstandard_ports(
                 except Exception:
                     pass
 
+        # ── Phase G.5: web-port information leakage probes (GAP-04/26/28/14) ──
+        if _got_http:
+            _gp_scheme = "https" if _port in (443, 8443, 4443, 7443, 9443) else "http"
+            _gp_base = f"{_gp_scheme}://{ip}:{_port}"
+
+            # GAP-04: .git/HEAD exposure
+            try:
+                _git_resp = _HTTP_SESSION.get(
+                    f"{_gp_base}/.git/HEAD", timeout=5, verify=False)
+                if (_git_resp.status_code == 200
+                        and _git_resp.text.strip().startswith("ref: refs/")):
+                    output_mgr.log_finding(
+                        title="Exposed .git Repository",
+                        ip=ip, port=_port, hostname=hostname,
+                        command=f"curl -sk {_gp_base}/.git/HEAD",
+                        risk="CRITICAL",
+                        description=(
+                            f"The .git directory is publicly accessible at "
+                            f"{_gp_base}/.git/HEAD. An attacker can reconstruct "
+                            f"the full source code, commit history, and any "
+                            f"secrets ever committed."
+                        ),
+                        output=f".git/HEAD content: {_git_resp.text.strip()[:200]}",
+                        sources="scattershot3-git-probe",
+                        affected=f"{ip}:{_port}",
+                    )
+            except Exception:
+                pass
+
+            # GAP-28: Apache server-status / server-info
+            for _ss_path, _ss_label in [
+                ("/server-status", "Apache server-status"),
+                ("/server-info", "Apache server-info"),
+            ]:
+                try:
+                    _ss_resp = _HTTP_SESSION.get(
+                        f"{_gp_base}{_ss_path}", timeout=5, verify=False)
+                    if (_ss_resp.status_code == 200
+                            and ("Apache Server Status" in _ss_resp.text
+                                 or "Server Version:" in _ss_resp.text
+                                 or "Apache Server Information" in _ss_resp.text)):
+                        output_mgr.log_finding(
+                            title=f"{_ss_label} Page Accessible",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=f"curl -sk {_gp_base}{_ss_path}",
+                            risk="MEDIUM",
+                            description=(
+                                f"The {_ss_label} page at {_gp_base}{_ss_path} "
+                                f"is publicly accessible, disclosing active "
+                                f"connections, client IPs, request URIs, server "
+                                f"uptime, and module configuration."
+                            ),
+                            output=_ss_resp.text[:500],
+                            sources="scattershot3-serverstatus-probe",
+                            affected=f"{ip}:{_port}",
+                        )
+                except Exception:
+                    pass
+
+            # GAP-26: OPTIONS / TRACE methods
+            for _hm in ("OPTIONS", "TRACE"):
+                try:
+                    _hm_resp = _HTTP_SESSION.request(
+                        _hm, _gp_base + "/", timeout=5, verify=False)
+                    if _hm_resp.status_code == 200:
+                        if _hm == "OPTIONS":
+                            _allow = _hm_resp.headers.get("Allow", "")
+                            if _allow and any(m in _allow.upper() for m in ("PUT", "DELETE", "TRACE")):
+                                output_mgr.log_finding(
+                                    title="Dangerous HTTP Methods Allowed",
+                                    ip=ip, port=_port, hostname=hostname,
+                                    command=f"curl -sk -X OPTIONS {_gp_base}/",
+                                    risk="MEDIUM",
+                                    description=(
+                                        f"The web server at {ip}:{_port} allows "
+                                        f"potentially dangerous HTTP methods: {_allow}."
+                                    ),
+                                    output=f"Allow: {_allow}",
+                                    sources="scattershot3-options-probe",
+                                    affected=f"{ip}:{_port}",
+                                )
+                        elif _hm == "TRACE":
+                            if "TRACE" in _hm_resp.text[:200].upper():
+                                output_mgr.log_finding(
+                                    title="HTTP TRACE Method Enabled",
+                                    ip=ip, port=_port, hostname=hostname,
+                                    command=f"curl -sk -X TRACE {_gp_base}/",
+                                    risk="MEDIUM",
+                                    description=(
+                                        f"The web server at {ip}:{_port} responds "
+                                        f"to TRACE requests by echoing the full "
+                                        f"request including headers. This enables "
+                                        f"Cross-Site Tracing (XST) attacks to steal "
+                                        f"cookies and authorization headers."
+                                    ),
+                                    output=_hm_resp.text[:300],
+                                    sources="scattershot3-trace-probe",
+                                    affected=f"{ip}:{_port}",
+                                )
+                except Exception:
+                    pass
+
+            # GAP-14: Internal hostname disclosure in HTTP response
+            _ihn_re = re.compile(
+                r'\b([a-zA-Z][a-zA-Z0-9\-]{1,60}\.(?:internal|local|corp|'
+                r'intra|private|lan|home|localdomain))\b', re.I)
+            _ihn_text = (_r.get("body") or "") + "\n" + (_r.get("headers") or "")
+            _ihn_found = set()
+            for _ihn_m in _ihn_re.finditer(_ihn_text):
+                _ihn_found.add(_ihn_m.group(1).lower())
+            if _ihn_found:
+                output_mgr.log_finding(
+                    title="Internal Hostname Disclosed in HTTP Response",
+                    ip=ip, port=_port, hostname=hostname,
+                    command=_r.get("cmd", f"curl -sk {_gp_base}/"),
+                    risk="LOW",
+                    description=(
+                        f"The HTTP response from {ip}:{_port} contains internal "
+                        f"hostname(s): {', '.join(sorted(_ihn_found))}. This "
+                        f"reveals internal naming conventions and network topology."
+                    ),
+                    output=f"Internal hostnames: {', '.join(sorted(_ihn_found))}",
+                    sources="scattershot3-hostname-probe",
+                    affected=f"{ip}:{_port}",
+                )
+
         # ── Phase F: netcat banner probe ───────────────────────────────────
         # Runs for any port the curl Phase E didn't already confirm as
         # HTTP — that covers genuinely non-web ports AND web-looking
@@ -6090,6 +6742,162 @@ def probe_uncertain_and_nonstandard_ports(
                     )
                 except OSError:
                     pass
+
+        # ── GAP-23: DNS version.bind CHAOS query ─────────────────────────
+        if _port == 53 or _service == "dns" or _service == "domain":
+            try:
+                import struct as _st
+                _txid = os.urandom(2)
+                _dns_q = (
+                    _txid
+                    + b"\x00\x00"       # flags: standard query
+                    + b"\x00\x01"       # 1 question
+                    + b"\x00\x00\x00\x00\x00\x00"  # 0 answer/auth/additional
+                    + b"\x07version\x04bind\x00"    # QNAME: version.bind
+                    + b"\x00\x10"       # QTYPE: TXT
+                    + b"\x00\x03"       # QCLASS: CH (CHAOS)
+                )
+                _dns_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                _dns_sock.settimeout(5)
+                _dns_sock.sendto(_dns_q, (ip, _port))
+                _dns_reply, _ = _dns_sock.recvfrom(4096)
+                _dns_sock.close()
+                if len(_dns_reply) > 12:
+                    _dns_flags = _st.unpack("!H", _dns_reply[2:4])[0]
+                    _dns_ancount = _st.unpack("!H", _dns_reply[6:8])[0]
+                    _dns_rcode = _dns_flags & 0x0F
+                    if _dns_rcode == 0 and _dns_ancount > 0:
+                        _dns_txt = ""
+                        _dns_pos = 12
+                        while _dns_pos < len(_dns_reply) and _dns_reply[_dns_pos] != 0:
+                            _dns_pos += _dns_reply[_dns_pos] + 1
+                        _dns_pos += 5  # skip null + QTYPE + QCLASS
+                        if _dns_pos + 12 < len(_dns_reply):
+                            _dns_pos += 2  # skip name pointer
+                            _dns_pos += 8  # skip type, class, TTL
+                            _dns_rdlen = _st.unpack("!H", _dns_reply[_dns_pos:_dns_pos+2])[0]
+                            _dns_pos += 2
+                            if _dns_rdlen > 1 and _dns_pos + _dns_rdlen <= len(_dns_reply):
+                                _dns_txt_len = _dns_reply[_dns_pos]
+                                _dns_txt = _dns_reply[_dns_pos+1:_dns_pos+1+_dns_txt_len].decode("utf-8", errors="replace")
+                        if _dns_txt:
+                            output_mgr.log_finding(
+                                title="DNS Server Version Disclosed via CHAOS Query",
+                                ip=ip, port=_port, hostname=hostname,
+                                command=f"dig @{ip} version.bind CHAOS TXT",
+                                risk="LOW",
+                                description=(
+                                    f"The DNS server at {ip}:{_port} responds to "
+                                    f"version.bind CHAOS TXT queries, disclosing "
+                                    f"its software version: '{_dns_txt}'. This aids "
+                                    f"an attacker in identifying specific CVEs."
+                                ),
+                                output=f"version.bind: {_dns_txt}",
+                                sources="scattershot3-dns-chaos-probe",
+                                affected=f"{ip}:{_port}",
+                            )
+            except Exception:
+                pass
+
+        # ── GAP-24: SMTP EXPN / VRFY user enumeration ────────────────────
+        if _port in (25, 587, 465, 2525) or _service == "smtp":
+            try:
+                _smtp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                _smtp_sock.settimeout(5)
+                _smtp_sock.connect((ip, _port))
+                _smtp_banner = _smtp_sock.recv(1024).decode("utf-8", errors="replace")
+                if "220" in _smtp_banner[:10]:
+                    _smtp_sock.sendall(b"EHLO test.local\r\n")
+                    _smtp_sock.recv(4096)
+                    for _smtp_cmd, _smtp_label in [
+                        (b"EXPN root\r\n", "EXPN"),
+                        (b"VRFY root\r\n", "VRFY"),
+                    ]:
+                        _smtp_sock.sendall(_smtp_cmd)
+                        _smtp_reply = _smtp_sock.recv(1024).decode("utf-8", errors="replace")
+                        if _smtp_reply.startswith(("250", "252")):
+                            output_mgr.log_finding(
+                                title=f"SMTP {_smtp_label} User Enumeration Enabled",
+                                ip=ip, port=_port, hostname=hostname,
+                                command=f"echo '{_smtp_label} root' | nc {ip} {_port}",
+                                risk="MEDIUM",
+                                description=(
+                                    f"The SMTP server at {ip}:{_port} responds to "
+                                    f"{_smtp_label} commands, allowing user enumeration. "
+                                    f"An attacker can discover valid email accounts "
+                                    f"for targeted phishing or brute-force attacks."
+                                ),
+                                output=f"{_smtp_label} root → {_smtp_reply.strip()[:200]}",
+                                sources="scattershot3-smtp-probe",
+                                affected=f"{ip}:{_port}",
+                            )
+                            break
+                _smtp_sock.sendall(b"QUIT\r\n")
+                _smtp_sock.close()
+            except Exception:
+                pass
+
+        # ── GAP-27: Certificate hostname mismatch ────────────────────────
+        if _service in ("ssl/http", "https", "ssl/https", "https-alt", "ssl"):
+            try:
+                import ssl as _ssl_mod
+                _cert_ctx = _ssl_mod.create_default_context()
+                _cert_ctx.check_hostname = False
+                _cert_ctx.verify_mode = _ssl_mod.CERT_NONE
+                _cert_sock = socket.create_connection((ip, _port), timeout=5)
+                _cert_wrapped = _cert_ctx.wrap_socket(_cert_sock, server_hostname=ip)
+                _cert_der = _cert_wrapped.getpeercert(binary_form=True)
+                _cert_wrapped.close()
+                if _cert_der:
+                    from cryptography import x509 as _x509
+                    _cert_obj = _x509.load_der_x509_certificate(_cert_der)
+                    _cert_cn = ""
+                    for _attr in _cert_obj.subject:
+                        if _attr.oid == _x509.oid.NameOID.COMMON_NAME:
+                            _cert_cn = _attr.value
+                            break
+                    _cert_sans = []
+                    try:
+                        _san_ext = _cert_obj.extensions.get_extension_for_class(
+                            _x509.SubjectAlternativeName)
+                        _cert_sans = _san_ext.value.get_values_for_type(_x509.DNSName)
+                    except Exception:
+                        pass
+                    _cert_all_names = set()
+                    if _cert_cn:
+                        _cert_all_names.add(_cert_cn.lower())
+                    _cert_all_names.update(s.lower() for s in _cert_sans)
+                    if hostname and hostname.lower() not in _cert_all_names:
+                        _wildcard_match = any(
+                            n.startswith("*.") and hostname.lower().endswith(n[1:])
+                            for n in _cert_all_names
+                        )
+                        if not _wildcard_match:
+                            output_mgr.log_finding(
+                                title="TLS Certificate Hostname Mismatch",
+                                ip=ip, port=_port, hostname=hostname,
+                                command=f"openssl s_client -connect {ip}:{_port} -servername {hostname}",
+                                risk="MEDIUM",
+                                description=(
+                                    f"The TLS certificate at {ip}:{_port} does not "
+                                    f"match the expected hostname '{hostname}'. "
+                                    f"Certificate names: {', '.join(sorted(_cert_all_names))}. "
+                                    f"This may indicate a misconfigured service or "
+                                    f"enable MITM attacks when certificate validation "
+                                    f"is improperly handled."
+                                ),
+                                output=(
+                                    f"Expected: {hostname}\n"
+                                    f"Certificate CN: {_cert_cn}\n"
+                                    f"Certificate SANs: {', '.join(_cert_sans[:10])}"
+                                ),
+                                sources="scattershot3-cert-mismatch",
+                                affected=f"{ip}:{_port}",
+                            )
+            except ImportError:
+                pass
+            except Exception:
+                pass
 
         # ── Phase G: non-standard port for a known service ─────────────────
         _std_port = _STANDARD_PORT_FOR_SERVICE.get(_service)
@@ -7675,6 +8483,87 @@ def _port_scan_worker(
                                scope=scope, timeout=getattr(args, "banner_timeout", 10))
             except Exception as exc:
                 _tprint(f"{Fore.RED}  [!] AMQP check error {ip}:{port}: {exc}{Style.RESET_ALL}")
+
+        # ── Docker API check ──────────────────────────────────────────
+        is_docker = (svc_name in ("docker",) or port in (2375, 2376))
+        if is_docker and not getattr(args, "no_enum", False):
+            try:
+                _check_docker_api(ip, port, output_mgr, hostname=hostname,
+                                  scope=scope, timeout=getattr(args, "banner_timeout", 10))
+            except Exception as exc:
+                _tprint(f"{Fore.RED}  [!] Docker API check error {ip}:{port}: {exc}{Style.RESET_ALL}")
+
+        # ── PostgreSQL trust auth check ───────────────────────────────
+        is_postgres = (svc_name in ("postgresql", "postgres") or port in (5432, 5433))
+        if is_postgres and not getattr(args, "no_enum", False):
+            try:
+                _check_postgres_trust(ip, port, output_mgr, hostname=hostname,
+                                      scope=scope, timeout=getattr(args, "banner_timeout", 10))
+            except Exception as exc:
+                _tprint(f"{Fore.RED}  [!] PostgreSQL trust check error {ip}:{port}: {exc}{Style.RESET_ALL}")
+
+        # ── CouchDB unauthenticated access check ─────────────────────
+        is_couchdb = (svc_name in ("couchdb",) or port == 5984)
+        if is_couchdb and not getattr(args, "no_enum", False):
+            try:
+                _check_couchdb_unauth(ip, port, output_mgr, hostname=hostname,
+                                      scope=scope, timeout=getattr(args, "banner_timeout", 10))
+            except Exception as exc:
+                _tprint(f"{Fore.RED}  [!] CouchDB check error {ip}:{port}: {exc}{Style.RESET_ALL}")
+
+        # ── Grafana auth check ────────────────────────────────────────
+        is_grafana = (svc_name in ("grafana",) or port == 3000)
+        if is_grafana and not getattr(args, "no_enum", False):
+            try:
+                _check_grafana_unauth(ip, port, output_mgr, hostname=hostname,
+                                      scope=scope, timeout=getattr(args, "banner_timeout", 10))
+            except Exception as exc:
+                _tprint(f"{Fore.RED}  [!] Grafana check error {ip}:{port}: {exc}{Style.RESET_ALL}")
+
+        # ── Kibana unauthenticated access check ───────────────────────
+        is_kibana = (svc_name in ("kibana",) or port == 5601)
+        if is_kibana and not getattr(args, "no_enum", False):
+            try:
+                _check_kibana_unauth(ip, port, output_mgr, hostname=hostname,
+                                     scope=scope, timeout=getattr(args, "banner_timeout", 10))
+            except Exception as exc:
+                _tprint(f"{Fore.RED}  [!] Kibana check error {ip}:{port}: {exc}{Style.RESET_ALL}")
+
+        # ── Cassandra CQL auth check ──────────────────────────────────
+        is_cassandra = (svc_name in ("cassandra",) or port in (9042, 9160))
+        if is_cassandra and not getattr(args, "no_enum", False):
+            try:
+                _check_cassandra_unauth(ip, port, output_mgr, hostname=hostname,
+                                        scope=scope, timeout=getattr(args, "banner_timeout", 10))
+            except Exception as exc:
+                _tprint(f"{Fore.RED}  [!] Cassandra check error {ip}:{port}: {exc}{Style.RESET_ALL}")
+
+        # ── MongoDB native isMaster check ─────────────────────────────
+        is_mongodb = (svc_name in ("mongodb", "mongod") or port == 27017)
+        if is_mongodb and not getattr(args, "no_enum", False):
+            try:
+                _check_mongodb_native(ip, port, output_mgr, hostname=hostname,
+                                      scope=scope, timeout=getattr(args, "banner_timeout", 10))
+            except Exception as exc:
+                _tprint(f"{Fore.RED}  [!] MongoDB check error {ip}:{port}: {exc}{Style.RESET_ALL}")
+
+        # ── DNS version disclosure check ──────────────────────────────
+        is_dns = (svc_name in ("domain", "dns") or port == 53)
+        if is_dns and not getattr(args, "no_enum", False):
+            try:
+                _check_dns_version(ip, port, output_mgr, hostname=hostname,
+                                   scope=scope, timeout=getattr(args, "banner_timeout", 10))
+            except Exception as exc:
+                _tprint(f"{Fore.RED}  [!] DNS version check error {ip}:{port}: {exc}{Style.RESET_ALL}")
+
+        # ── UPnP/SSDP discovery check ─────────────────────────────────
+        is_upnp = (port == 1900)
+        if is_upnp and not getattr(args, "no_enum", False):
+            try:
+                _check_upnp_ssdp(ip, port, output_mgr, hostname=hostname,
+                                 scope=scope, timeout=getattr(args, "banner_timeout", 10))
+            except Exception as exc:
+                _tprint(f"{Fore.RED}  [!] UPnP check error {ip}:{port}: {exc}{Style.RESET_ALL}")
 
         # ── POP3/IMAP STARTTLS check ─────────────────────────────────
         is_mail = (svc_name in ("pop3", "pop3s", "imap", "imaps")
@@ -9952,7 +10841,7 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
             }
             # IDs that produce no useful pentest finding — skip entirely
             _TS_SKIP_IDS = frozenset({
-                "overall_grade", "cert_revocation", "cert_trust",
+                "overall_grade", "cert_revocation",
                 "security_headers", "FS_TLS12_sig_algs",
                 # TLS 1.2 and TLS 1.3 are current, secure protocol versions.
                 # testssl may emit them as informational entries; suppress so
@@ -10050,6 +10939,16 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                                 continue
                             _tsf_title = "SSL/TLS Certificate: Long Duration"
                             _tsf_risk  = "MEDIUM" if output_mgr.scope == "ext" else "LOW"
+                        elif _tsf_id in ("cert_commonName_wo_SNI", "cert_commonName"):
+                            if _tsf_sev in ("OK", "INFO"):
+                                continue
+                            _tsf_title = "SSL/TLS Certificate: Hostname Mismatch"
+                            _tsf_risk  = "MEDIUM"
+                        elif _tsf_id == "cert_trust":
+                            if _tsf_sev in ("OK", "INFO"):
+                                continue
+                            _tsf_title = "SSL/TLS Certificate: Not Trusted"
+                            _tsf_risk  = "MEDIUM"
                         elif _tsf_id == "cert_subjectAltName":
                             # testssl reports SANs in the finding field; if SANs
                             # are present (severity OK/INFO), report them as info
@@ -10060,6 +10959,29 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                             else:
                                 _tsf_title = "SSL/TLS Certificate: Missing SAN"
                                 _tsf_risk  = "LOW"
+                            # SS-089: Check for internal hostnames in SAN list
+                            _san_internal = [
+                                m.group(0) for m in _RE_INTERNAL_HOSTNAME.finditer(_tsf_finding)
+                            ]
+                            if _san_internal:
+                                _san_int_str = ", ".join(sorted(set(_san_internal)))
+                                output_mgr.log_finding(
+                                    title="SSL/TLS Certificate: Internal Hostnames in SAN",
+                                    ip=ip, port=port, command=cmd, hostname=hostname,
+                                    risk="LOW",
+                                    description=(
+                                        f"The SSL/TLS certificate on {ip}:{port} includes "
+                                        f"internal hostnames in its Subject Alternative "
+                                        f"Names: {_san_int_str}. Internal hostnames in "
+                                        f"public-facing certificates disclose the internal "
+                                        f"naming scheme and domain structure. Remove "
+                                        f"internal hostnames from the SAN list or use "
+                                        f"separate certificates for internal services."
+                                    ),
+                                    output=f"Internal SANs: {_san_int_str}\nFull SAN: {_tsf_finding[:512]}",
+                                    sources="testssl",
+                                    affected=f"{ip}:{port}",
+                                )
                         elif _tsf_id.startswith("hsts"):
                             # HSTS positively present: finding says "offered" without negation
                             if ("offered" in _tsf_finding_lo
@@ -19182,6 +20104,7 @@ def run_smtp_checks(
     ]
     relay_detected = False
     enum_users: list[tuple[str, str]] = []
+    expn_lists: list[tuple[str, str]] = []
 
     try:
         sock = socket.create_connection((ip, port), timeout=timeout)
@@ -19260,6 +20183,17 @@ def run_smtp_checks(
             except Exception:
                 break
 
+        # ── EXPN mailing list enumeration (SS-086) ─────────────────────
+        expn_lists = []
+        for mlist in ("root", "postmaster", "all", "staff", "users", "admin"):
+            try:
+                expn_resp = _cmd(f"EXPN {mlist}")
+                lines.append(f"EXPN {mlist:<15}: {expn_resp[:80]}")
+                if expn_resp[:1] in ("2", "1"):
+                    expn_lists.append((mlist, expn_resp[:80]))
+            except Exception:
+                break
+
         sock.close()
     except Exception as exc:
         lines.append(f"Error: {exc}")
@@ -19294,6 +20228,29 @@ def run_smtp_checks(
             output_file=str(out_file),
         )
 
+    if expn_lists:
+        expn_str = ", ".join(m for m, _ in expn_lists)
+        _tprint(
+            f"  {Fore.YELLOW}[!] SMTP EXPN enum on {ip}:{port}: {expn_str}{Style.RESET_ALL}"
+        )
+        output_mgr.log_finding(
+            title="SMTP Mailing List Enumeration via EXPN",
+            ip=ip, port=port,
+            command="Scattershot-SMTP-EXPN",
+            hostname=hostname, risk="MEDIUM",
+            description=(
+                f"The SMTP EXPN command is enabled and reveals mailing list "
+                f"membership on {ip}:{port}. Confirmed lists: {expn_str}. "
+                f"EXPN reveals valid email addresses and group membership, "
+                f"enabling targeted phishing and social engineering. "
+                f"Disable the EXPN command or restrict it to authenticated sessions."
+            ),
+            output="\n".join(f"  {m}: {r}" for m, r in expn_lists),
+            sources="smtp-relay-check",
+            affected=f"{ip}:{port}",
+            output_file=str(out_file),
+        )
+
     out_file.write_text("\n".join(lines), encoding="utf-8")
     output_mgr.log_command(
         "smtp-relay-check", "Scattershot-SMTP-Checks",
@@ -19303,6 +20260,530 @@ def run_smtp_checks(
                "vrfy_users": len(enum_users)},
     )
     _tprint(f"  {Fore.GREEN}[+] SMTP checks complete: {ip}:{port}{Style.RESET_ALL}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# New information-leakage service checks (v1.41.0)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _check_docker_api(
+    ip: str,
+    port: int,
+    output_mgr: "OutputManager",
+    hostname: "str | None" = None,
+    scope: str = "int",
+    timeout: int = 8,
+) -> None:
+    """SS-071 — Unauthenticated Docker API."""
+    _tprint(f"  {Fore.CYAN}[*] Docker API check: {ip}:{port}{Style.RESET_ALL}")
+    for endpoint in ("/v1.24/containers/json", "/v1.24/images/json"):
+        try:
+            _r = subprocess.run(
+                f"curl -sk --max-time {timeout} http://{ip}:{port}{endpoint}",
+                shell=True, capture_output=True, timeout=timeout + 5,
+            )
+            body = _r.stdout.decode("utf-8", errors="replace").strip()
+            if body.startswith("[") and body.endswith("]"):
+                try:
+                    data = json.loads(body)
+                except Exception:
+                    continue
+                if isinstance(data, list):
+                    label = "containers" if "containers" in endpoint else "images"
+                    output_mgr.log_finding(
+                        title="Unauthenticated Docker API Exposed",
+                        ip=ip, port=port, hostname=hostname,
+                        command=f"curl -sk http://{ip}:{port}{endpoint}",
+                        risk="CRITICAL",
+                        description=(
+                            f"The Docker Engine API on {ip}:{port} is accessible "
+                            f"without authentication. Endpoint {endpoint} returned "
+                            f"{len(data)} {label}. An attacker can create, start, "
+                            f"stop, and delete containers, pull images, read secrets "
+                            f"mounted into containers, and achieve full host-level "
+                            f"code execution via --privileged container creation. "
+                            f"Restrict access to the Docker API via TLS client "
+                            f"certificates or firewall rules."
+                        ),
+                        output=body[:2048],
+                        sources="scattershot3-docker-api",
+                        affected=f"{ip}:{port}",
+                    )
+                    _tprint(
+                        f"  {Fore.RED}[!!!] Docker API EXPOSED {ip}:{port} — "
+                        f"{len(data)} {label}{Style.RESET_ALL}"
+                    )
+                    return
+        except Exception:
+            pass
+
+
+def _check_postgres_trust(
+    ip: str,
+    port: int,
+    output_mgr: "OutputManager",
+    hostname: "str | None" = None,
+    scope: str = "int",
+    timeout: int = 8,
+) -> None:
+    """SS-072 — PostgreSQL trust authentication (no password required)."""
+    _tprint(f"  {Fore.CYAN}[*] PostgreSQL trust auth check: {ip}:{port}{Style.RESET_ALL}")
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect((ip, port))
+        # Build StartupMessage: version 3.0, user=postgres, database=postgres
+        params = b"user\x00postgres\x00database\x00postgres\x00\x00"
+        length = 4 + 4 + len(params)  # length field + version + params
+        startup = struct.pack("!II", length, 0x00030000) + params
+        sock.sendall(startup)
+        resp = sock.recv(256)
+        sock.close()
+        if len(resp) >= 9 and resp[0:1] == b"R":
+            msg_len = struct.unpack("!I", resp[1:5])[0]
+            auth_type = struct.unpack("!I", resp[5:9])[0]
+            if auth_type == 0:  # AuthenticationOk
+                output_mgr.log_finding(
+                    title="PostgreSQL Trust Authentication Enabled",
+                    ip=ip, port=port, hostname=hostname,
+                    command=f"pg-startup-msg user=postgres db=postgres -> {ip}:{port}",
+                    risk="CRITICAL",
+                    description=(
+                        f"PostgreSQL on {ip}:{port} accepts connections as user "
+                        f"'postgres' without requiring a password (trust "
+                        f"authentication). This grants full superuser database "
+                        f"access to anyone who can reach the port, allowing "
+                        f"data exfiltration, modification, and potential OS "
+                        f"command execution via COPY TO PROGRAM. Reconfigure "
+                        f"pg_hba.conf to require password or certificate auth."
+                    ),
+                    output=f"AuthenticationOk (type=0) received for user=postgres",
+                    sources="scattershot3-pg-trust",
+                    affected=f"{ip}:{port}",
+                )
+                _tprint(
+                    f"  {Fore.RED}[!!!] PostgreSQL TRUST auth {ip}:{port} — "
+                    f"no password needed!{Style.RESET_ALL}"
+                )
+    except Exception:
+        pass
+
+
+def _check_couchdb_unauth(
+    ip: str,
+    port: int,
+    output_mgr: "OutputManager",
+    hostname: "str | None" = None,
+    scope: str = "int",
+    timeout: int = 8,
+) -> None:
+    """SS-073 — Unauthenticated CouchDB access."""
+    _tprint(f"  {Fore.CYAN}[*] CouchDB unauth check: {ip}:{port}{Style.RESET_ALL}")
+    try:
+        _r = subprocess.run(
+            f"curl -sk --max-time {timeout} http://{ip}:{port}/_all_dbs",
+            shell=True, capture_output=True, timeout=timeout + 5,
+        )
+        body = _r.stdout.decode("utf-8", errors="replace").strip()
+        if body.startswith("[") and body.endswith("]"):
+            try:
+                dbs = json.loads(body)
+            except Exception:
+                return
+            if isinstance(dbs, list) and len(dbs) > 0:
+                db_list = ", ".join(str(d) for d in dbs[:20])
+                output_mgr.log_finding(
+                    title="Unauthenticated CouchDB Access",
+                    ip=ip, port=port, hostname=hostname,
+                    command=f"curl -sk http://{ip}:{port}/_all_dbs",
+                    risk="HIGH",
+                    description=(
+                        f"CouchDB on {ip}:{port} allows unauthenticated access "
+                        f"to the /_all_dbs endpoint, revealing {len(dbs)} "
+                        f"database(s). An attacker can read, modify, or delete "
+                        f"all databases without credentials. Configure CouchDB "
+                        f"to require authentication for all endpoints."
+                    ),
+                    output=f"Databases ({len(dbs)}): {db_list}",
+                    sources="scattershot3-couchdb",
+                    affected=f"{ip}:{port}",
+                )
+                _tprint(
+                    f"  {Fore.YELLOW}[!] CouchDB unauth {ip}:{port} — "
+                    f"{len(dbs)} databases exposed{Style.RESET_ALL}"
+                )
+    except Exception:
+        pass
+
+
+def _check_grafana_unauth(
+    ip: str,
+    port: int,
+    output_mgr: "OutputManager",
+    hostname: "str | None" = None,
+    scope: str = "int",
+    timeout: int = 8,
+) -> None:
+    """SS-074/075 — Grafana unauthenticated or default-credential access."""
+    _tprint(f"  {Fore.CYAN}[*] Grafana auth check: {ip}:{port}{Style.RESET_ALL}")
+    # Try unauthenticated first
+    try:
+        _r = subprocess.run(
+            f"curl -sk --max-time {timeout} http://{ip}:{port}/api/org",
+            shell=True, capture_output=True, timeout=timeout + 5,
+        )
+        body = _r.stdout.decode("utf-8", errors="replace").strip()
+        if body.startswith("{"):
+            try:
+                data = json.loads(body)
+            except Exception:
+                data = {}
+            if "name" in data and "id" in data:
+                output_mgr.log_finding(
+                    title="Grafana Unauthenticated API Access",
+                    ip=ip, port=port, hostname=hostname,
+                    command=f"curl -sk http://{ip}:{port}/api/org",
+                    risk="HIGH",
+                    description=(
+                        f"Grafana on {ip}:{port} allows unauthenticated access "
+                        f"to the /api/org endpoint, exposing the organization "
+                        f"name '{data.get('name', '?')}'. Anonymous access to "
+                        f"Grafana APIs can leak dashboards, data sources, and "
+                        f"credentials. Disable anonymous access in grafana.ini."
+                    ),
+                    output=body[:1024],
+                    sources="scattershot3-grafana",
+                    affected=f"{ip}:{port}",
+                )
+                _tprint(
+                    f"  {Fore.YELLOW}[!] Grafana unauth API {ip}:{port} — "
+                    f"org: {data.get('name', '?')}{Style.RESET_ALL}"
+                )
+                return
+    except Exception:
+        pass
+    # Try default admin:admin credentials
+    try:
+        import base64
+        _cred = base64.b64encode(b"admin:admin").decode()
+        _r = subprocess.run(
+            f'curl -sk --max-time {timeout} -H "Authorization: Basic {_cred}" '
+            f'http://{ip}:{port}/api/org',
+            shell=True, capture_output=True, timeout=timeout + 5,
+        )
+        body = _r.stdout.decode("utf-8", errors="replace").strip()
+        if body.startswith("{"):
+            try:
+                data = json.loads(body)
+            except Exception:
+                data = {}
+            if "name" in data and "id" in data:
+                output_mgr.log_finding(
+                    title="Grafana Default Credentials (admin:admin)",
+                    ip=ip, port=port, hostname=hostname,
+                    command=f"curl -sk -H 'Authorization: Basic YWRtaW46YWRtaW4=' http://{ip}:{port}/api/org",
+                    risk="CRITICAL",
+                    description=(
+                        f"Grafana on {ip}:{port} accepts the default credentials "
+                        f"admin:admin. This grants full administrative access to "
+                        f"all dashboards, data sources (which may contain database "
+                        f"credentials), alerting rules, and user management. "
+                        f"Change the admin password immediately."
+                    ),
+                    output=body[:1024],
+                    sources="scattershot3-grafana-defcred",
+                    affected=f"{ip}:{port}",
+                )
+                _tprint(
+                    f"  {Fore.RED}[!!!] Grafana default creds {ip}:{port} — "
+                    f"admin:admin works!{Style.RESET_ALL}"
+                )
+    except Exception:
+        pass
+
+
+def _check_kibana_unauth(
+    ip: str,
+    port: int,
+    output_mgr: "OutputManager",
+    hostname: "str | None" = None,
+    scope: str = "int",
+    timeout: int = 8,
+) -> None:
+    """SS-076 — Unauthenticated Kibana access."""
+    _tprint(f"  {Fore.CYAN}[*] Kibana unauth check: {ip}:{port}{Style.RESET_ALL}")
+    try:
+        _r = subprocess.run(
+            f'curl -sk --max-time {timeout} -H "kbn-xsrf: true" '
+            f'http://{ip}:{port}/api/status',
+            shell=True, capture_output=True, timeout=timeout + 5,
+        )
+        body = _r.stdout.decode("utf-8", errors="replace").strip()
+        if body.startswith("{"):
+            try:
+                data = json.loads(body)
+            except Exception:
+                data = {}
+            if "name" in data or "version" in data or "status" in data:
+                ver = ""
+                if isinstance(data.get("version"), dict):
+                    ver = data["version"].get("number", "")
+                elif isinstance(data.get("version"), str):
+                    ver = data["version"]
+                output_mgr.log_finding(
+                    title="Unauthenticated Kibana Access",
+                    ip=ip, port=port, hostname=hostname,
+                    command=f"curl -sk -H 'kbn-xsrf: true' http://{ip}:{port}/api/status",
+                    risk="HIGH",
+                    description=(
+                        f"Kibana on {ip}:{port} exposes its /api/status endpoint "
+                        f"without authentication{f' (version {ver})' if ver else ''}. "
+                        f"Unauthenticated Kibana access allows reading indices, "
+                        f"executing Elasticsearch queries, and potentially "
+                        f"modifying data. Enable X-Pack security or restrict "
+                        f"access via a reverse proxy with authentication."
+                    ),
+                    output=body[:2048],
+                    sources="scattershot3-kibana",
+                    affected=f"{ip}:{port}",
+                )
+                _tprint(
+                    f"  {Fore.YELLOW}[!] Kibana unauth {ip}:{port}"
+                    f"{f' v{ver}' if ver else ''}{Style.RESET_ALL}"
+                )
+    except Exception:
+        pass
+
+
+def _check_cassandra_unauth(
+    ip: str,
+    port: int,
+    output_mgr: "OutputManager",
+    hostname: "str | None" = None,
+    scope: str = "int",
+    timeout: int = 8,
+) -> None:
+    """SS-077 — Cassandra unauthenticated CQL access."""
+    _tprint(f"  {Fore.CYAN}[*] Cassandra auth check: {ip}:{port}{Style.RESET_ALL}")
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect((ip, port))
+        # CQL native protocol v4 STARTUP frame
+        # Header: version=0x04, flags=0x00, stream=0x0001, opcode=0x01 (STARTUP)
+        body_map = b"\x00\x01" + b"\x00\x0bCQL_VERSION" + b"\x00\x053.0.0"
+        body_len = len(body_map)
+        frame = struct.pack("!BBHI", 0x04, 0x00, 0x0001, 0x01) + struct.pack("!I", body_len) + body_map
+        sock.sendall(frame)
+        resp = sock.recv(512)
+        sock.close()
+        if len(resp) >= 9:
+            resp_opcode = resp[4]
+            if resp_opcode == 0x02:  # READY — no auth needed
+                output_mgr.log_finding(
+                    title="Cassandra Unauthenticated CQL Access",
+                    ip=ip, port=port, hostname=hostname,
+                    command=f"cql-native-v4-startup -> {ip}:{port}",
+                    risk="HIGH",
+                    description=(
+                        f"Cassandra CQL on {ip}:{port} accepted a STARTUP frame "
+                        f"and returned READY without requesting authentication. "
+                        f"This allows unauthenticated read/write access to all "
+                        f"keyspaces. Enable PasswordAuthenticator in "
+                        f"cassandra.yaml and set strong credentials."
+                    ),
+                    output="CQL STARTUP -> READY (opcode 0x02, no auth required)",
+                    sources="scattershot3-cassandra",
+                    affected=f"{ip}:{port}",
+                )
+                _tprint(
+                    f"  {Fore.YELLOW}[!] Cassandra no auth {ip}:{port}{Style.RESET_ALL}"
+                )
+    except Exception:
+        pass
+
+
+def _check_mongodb_native(
+    ip: str,
+    port: int,
+    output_mgr: "OutputManager",
+    hostname: "str | None" = None,
+    scope: str = "int",
+    timeout: int = 8,
+) -> None:
+    """SS-091 — MongoDB unauthenticated access (native OP_QUERY isMaster)."""
+    try:
+        import bson  # type: ignore
+    except ImportError:
+        return  # bson not available; Nmap NSE mongodb-info covers this
+    _tprint(f"  {Fore.CYAN}[*] MongoDB native isMaster: {ip}:{port}{Style.RESET_ALL}")
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect((ip, port))
+        # Build OP_QUERY for isMaster
+        query_doc = bson.BSON.encode({"isMaster": 1})
+        full_coll = b"admin.$cmd\x00"
+        # OP_QUERY: flags(4) + fullCollectionName + numberToSkip(4) + numberToReturn(4) + query
+        msg_body = (
+            struct.pack("<I", 0)          # flags
+            + full_coll                   # fullCollectionName
+            + struct.pack("<i", 0)        # numberToSkip
+            + struct.pack("<i", 1)        # numberToReturn
+            + query_doc                   # query document
+        )
+        # MsgHeader: messageLength(4) + requestID(4) + responseTo(4) + opCode(4)
+        header = struct.pack("<IIII", 16 + len(msg_body), 1, 0, 2004)
+        sock.sendall(header + msg_body)
+        resp = sock.recv(4096)
+        sock.close()
+        if len(resp) > 36:
+            # Skip MsgHeader(16) + responseFlags(4) + cursorID(8) + startingFrom(4) + numberReturned(4)
+            doc_bytes = resp[36:]
+            try:
+                doc = bson.BSON(doc_bytes).decode()
+            except Exception:
+                return
+            if doc.get("ismaster") or doc.get("isMaster") or doc.get("isWritablePrimary"):
+                ver = doc.get("version", "unknown")
+                output_mgr.log_finding(
+                    title="MongoDB Unauthenticated Access",
+                    ip=ip, port=port, hostname=hostname,
+                    command=f"mongodb-op-query isMaster -> {ip}:{port}",
+                    risk="HIGH",
+                    description=(
+                        f"MongoDB on {ip}:{port} (version {ver}) accepted an "
+                        f"isMaster query without authentication. Unauthenticated "
+                        f"MongoDB allows full read/write access to all databases. "
+                        f"Enable authorization in mongod.conf and create "
+                        f"administrative users with strong passwords."
+                    ),
+                    output=str(doc)[:2048],
+                    sources="scattershot3-mongodb",
+                    affected=f"{ip}:{port}",
+                )
+                _tprint(
+                    f"  {Fore.YELLOW}[!] MongoDB unauth {ip}:{port} v{ver}{Style.RESET_ALL}"
+                )
+    except Exception:
+        pass
+
+
+def _check_dns_version(
+    ip: str,
+    port: int,
+    output_mgr: "OutputManager",
+    hostname: "str | None" = None,
+    scope: str = "int",
+    timeout: int = 8,
+) -> None:
+    """SS-085 — DNS version disclosure via version.bind CHAOS TXT."""
+    _tprint(f"  {Fore.CYAN}[*] DNS version check: {ip}:{port}{Style.RESET_ALL}")
+    try:
+        _r = subprocess.run(
+            f"dig @{ip} version.bind CHAOS TXT +short +time=5 +tries=1",
+            shell=True, capture_output=True, timeout=timeout + 5,
+        )
+        out = _r.stdout.decode("utf-8", errors="replace").strip().strip('"')
+        if out and "timed out" not in out.lower() and "connection refused" not in out.lower():
+            output_mgr.log_finding(
+                title="DNS Server Version Disclosed",
+                ip=ip, port=port, hostname=hostname,
+                command=f"dig @{ip} version.bind CHAOS TXT +short",
+                risk="LOW",
+                description=(
+                    f"The DNS server on {ip}:{port} discloses its version via "
+                    f"CHAOS TXT query for version.bind: '{out}'. Software "
+                    f"version disclosure assists attackers in identifying known "
+                    f"vulnerabilities. Configure the DNS server to suppress or "
+                    f"fake version responses (BIND: options {{ version \"none\"; }})."
+                ),
+                output=f"version.bind: {out}",
+                sources="scattershot3-dns-version",
+                affected=f"{ip}:{port}",
+            )
+            _tprint(
+                f"  {Fore.YELLOW}[!] DNS version {ip}:{port}: {out}{Style.RESET_ALL}"
+            )
+    except Exception:
+        pass
+
+
+def _check_upnp_ssdp(
+    ip: str,
+    port: int,
+    output_mgr: "OutputManager",
+    hostname: "str | None" = None,
+    scope: str = "int",
+    timeout: int = 8,
+) -> None:
+    """SS-090 — UPnP/SSDP service discovery (internal scope only)."""
+    if scope != "int":
+        return
+    _tprint(f"  {Fore.CYAN}[*] UPnP/SSDP probe: {ip}:{port}{Style.RESET_ALL}")
+    try:
+        ssdp_msg = (
+            "M-SEARCH * HTTP/1.1\r\n"
+            f"HOST: {ip}:{port}\r\n"
+            "MAN: \"ssdp:discover\"\r\n"
+            "MX: 2\r\n"
+            "ST: ssdp:all\r\n"
+            "\r\n"
+        ).encode()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(min(timeout, 5))
+        sock.sendto(ssdp_msg, (ip, port))
+        responses = []
+        try:
+            while True:
+                data, addr = sock.recvfrom(4096)
+                resp_text = data.decode("utf-8", errors="replace")
+                responses.append(resp_text)
+                if len(responses) >= 10:
+                    break
+        except socket.timeout:
+            pass
+        sock.close()
+        if responses:
+            # Extract unique SERVER and LOCATION headers
+            servers = set()
+            locations = set()
+            for resp in responses:
+                for line in resp.split("\r\n"):
+                    ll = line.lower()
+                    if ll.startswith("server:"):
+                        servers.add(line.split(":", 1)[1].strip())
+                    elif ll.startswith("location:"):
+                        locations.add(line.split(":", 1)[1].strip())
+            detail_lines = []
+            if servers:
+                detail_lines.append("Servers: " + "; ".join(sorted(servers)))
+            if locations:
+                detail_lines.append("Locations: " + "; ".join(sorted(locations)[:5]))
+            output_mgr.log_finding(
+                title="UPnP/SSDP Service Responding",
+                ip=ip, port=port, hostname=hostname,
+                command=f"ssdp-m-search ssdp:all -> {ip}:{port}",
+                risk="MEDIUM",
+                description=(
+                    f"The UPnP/SSDP service on {ip}:{port} responded to an "
+                    f"M-SEARCH discovery request with {len(responses)} "
+                    f"response(s). UPnP can expose device details, allow port "
+                    f"forwarding changes, and has been used in amplification "
+                    f"attacks. Disable UPnP if not required or restrict it to "
+                    f"trusted networks."
+                ),
+                output="\n".join(detail_lines) if detail_lines else responses[0][:1024],
+                sources="scattershot3-upnp",
+                affected=f"{ip}:{port}",
+            )
+            _tprint(
+                f"  {Fore.YELLOW}[!] UPnP responds {ip}:{port} — "
+                f"{len(responses)} response(s){Style.RESET_ALL}"
+            )
+    except Exception:
+        pass
 
 
 def run_mysql_auth_check(
