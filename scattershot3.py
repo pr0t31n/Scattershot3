@@ -854,6 +854,28 @@ _TITLE_NORM_SUBS = [
     (re.compile(r'\((\d+)\s*bits?\)',     re.IGNORECASE), r'(\1 bit)'),
 ]
 
+def _log_timeout_action(output_mgr, tool_name, ip, port, hostname, timeout_s, cmd=""):
+    """Emit an action item when a tool times out — lost coverage needs re-scan."""
+    output_mgr.log_action_item(
+        item_type="scan_timeout",
+        recommended_tool=tool_name,
+        target=f"{ip}:{port}" if port else ip,
+        ip=ip,
+        port=int(port) if port else 0,
+        hostname=hostname,
+        title=f"{tool_name} Timed Out — Re-Scan Required",
+        description=(
+            f"{tool_name} timed out after {timeout_s}s on "
+            f"{ip}:{port if port else 'N/A'}"
+            f"{f' ({hostname})' if hostname else ''}. "
+            f"Re-run manually with adjusted timeout or reduced scope."
+            f"{f' Command: {cmd[:200]}' if cmd else ''}"
+        ),
+        source_finding=f"{tool_name} timeout",
+        priority="MEDIUM",
+    )
+
+
 def _normalize_finding_title(title: str) -> str:
     """Canonical title form — consistent regardless of source tool."""
     t = (title or "").strip()
@@ -7524,6 +7546,7 @@ def port_scan(
                     f"{Fore.YELLOW}  [~] SMB UDP scan timed out for "
                     f"{ip}{Style.RESET_ALL}"
                 )
+                _log_timeout_action(output_mgr, "nmap", ip, 137, hostname, 30)
             except Exception as _smb_udp_exc:
                 if output_mgr:
                     output_mgr.log_error(
@@ -9162,6 +9185,7 @@ def probe_dns_axfr(domain: str, ns_host: str, *,
             return {"ok": True, "records": record_count, "out_file": str(out_path)}
     except _sp.TimeoutExpired:
         out_path.write_text(f"$ {' '.join(cmd)}\n[TIMEOUT after 60s]\n", encoding="utf-8")
+        _log_timeout_action(output_mgr, "dig", ns_host, 53, domain, 60)
     except Exception as exc:
         out_path.write_text(f"$ {' '.join(cmd)}\nERROR: {exc}\n", encoding="utf-8")
     return {"ok": False, "reason": "AXFR refused or zone empty"}
@@ -9217,6 +9241,7 @@ def probe_ntp_monlist(ip: str, *, output_dir: "Path", output_mgr) -> dict:
             return {"ok": True, "addresses": len(addr_lines)}
     except _sp.TimeoutExpired:
         out_path.write_text(f"$ {' '.join(monlist_cmd)}\n[TIMEOUT after 30s]\n", encoding="utf-8")
+        _log_timeout_action(output_mgr, "ntpdc", ip, 123, "", 30)
     except Exception as exc:
         out_path.write_text(f"$ {' '.join(monlist_cmd)}\nERROR: {exc}\n", encoding="utf-8")
     return {"ok": False, "reason": "monlist not permitted or empty"}
@@ -9298,6 +9323,7 @@ def nmap_ipv6_scan(ip6: str, output_dir: "Path", output_mgr,
             return {"ok": True, "open_ports": open_ports, "out_file": str(out_path)}
     except _sp.TimeoutExpired:
         out_path.write_text(f"$ {' '.join(cmd)}\n[TIMEOUT after {timeout}s]\n", encoding="utf-8")
+        _log_timeout_action(output_mgr, "nmap", ip6, 0, "", timeout)
     except Exception as exc:
         out_path.write_text(f"$ {' '.join(cmd)}\n[ERROR: {exc}]\n", encoding="utf-8")
     return {"ok": False, "reason": "no IPv6 ports open or scan failed"}
@@ -9521,6 +9547,7 @@ def probe_asrep_roast(dc_ip: str, domain: str, users: list[str], *,
             return {"ok": True, "hashes": len(hashes),
                     "users": users_with_no_preauth}
     except _sp.TimeoutExpired:
+        _log_timeout_action(output_mgr, "GetNPUsers", dc_ip, 88, domain, timeout)
         return {"ok": False, "reason": "GetNPUsers timed out"}
     except Exception as exc:
         return {"ok": False, "reason": str(exc)}
@@ -10437,6 +10464,7 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
             _ssl_placeholder = output_mgr.web_path(ip, port) / f"{ip.replace('.','_')}_{port}_sslscan_placeholder.txt"
             _ensure_output_file(_ssl_placeholder, " ".join(cmd),
                                 f"(sslscan timed out after {timeout}s — no results collected)")
+            _log_timeout_action(output_mgr, "sslscan", ip, port, hostname, timeout)
     except Exception as e:
         err = str(e)
         result["errors"].append(err)
@@ -11013,7 +11041,25 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                                     re.findall(r'\b([A-Z][A-Z0-9_-]{4,})\b', _obs_text)
                                 ))
                             if not _obs_ciphers:
-                                _obs_ciphers = ["(unknown)"]
+                                output_mgr.log_action_item(
+                                    item_type="testssl_incomplete",
+                                    recommended_tool="testssl",
+                                    target=f"{ip}:{port}",
+                                    ip=ip,
+                                    port=port,
+                                    hostname=hostname,
+                                    title="Obsolete Ciphers Detected — Re-Scan Required",
+                                    description=(
+                                        f"testssl detected obsolete CBC ciphers offered on "
+                                        f"{ip}:{port} but could not enumerate specific "
+                                        f"cipher suites (connection dropped). Re-run "
+                                        f"testssl against this target to collect full "
+                                        f"evidence for reporting."
+                                    ),
+                                    source_finding="cipherlist_OBSOLETED",
+                                    priority="HIGH",
+                                )
+                                continue
                             for _obs_cipher in _obs_ciphers:
                                 output_mgr.log_finding(
                                     title=f"SSL/TLS Ciphers: Obsolete Cipher — {_obs_cipher}",
@@ -11186,6 +11232,7 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
         if output_mgr:
             output_mgr.log_error("testssl", testssl_path, cmd, err,
                                  extra={"target": f"{ip}:{port}"})
+            _log_timeout_action(output_mgr, "testssl", ip, port, hostname, timeout)
     except Exception as e:
         err = str(e)
         result["errors"].append(err)
@@ -13327,6 +13374,7 @@ def run_ssh_audit(
             f"ssh-audit timed out after {timeout}s",
             extra={"target": f"{ip}:{port}"},
         )
+        _log_timeout_action(output_mgr, "ssh-audit", ip, port, hostname, timeout)
         return
     except Exception as exc:
         output_mgr.log_error(
@@ -13547,6 +13595,25 @@ def run_ssh_audit(
             affected=affected,
             output_file=rel_out,
             service="ssh",
+        )
+
+    # Bastion cross-tool: SSH config audit
+    _has_ssh_issues = bool(cve_findings) or bool(sev_buckets) or bool(per_algo_findings)
+    if _has_ssh_issues:
+        output_mgr.log_action_item(
+            "config_audit", "Bastion", f"{ip}:{port}",
+            ip, port,
+            title="Bastion: SSH configuration compliance audit",
+            description=(
+                f"ssh-audit identified cryptographic weaknesses on "
+                f"{ip}:{port}. Bastion can perform a comprehensive SSH "
+                f"configuration audit against CIS benchmarks, verifying "
+                f"sshd_config for deprecated algorithms, key exchange "
+                f"methods, and MAC configurations."
+            ),
+            hostname=hostname,
+            source_finding="SSH Vulnerability: Weak/Deprecated Cryptographic Algorithms",
+            priority="MEDIUM",
         )
 
 
@@ -15853,6 +15920,20 @@ def run_snmp_checks(
                 affected=f"{ip}:{port}",
                 output_file=result["output_file"],
             )
+            output_mgr.log_action_item(
+                "config_audit", "Bastion", f"{ip}:{port}",
+                ip, port,
+                title="Bastion: Audit SNMP configuration",
+                description=(
+                    f"SNMP default community string '{community}' accepted on "
+                    f"{ip}:{port}. Bastion can audit the SNMP configuration for "
+                    f"SNMPv3 migration readiness, view restrictions, ACL "
+                    f"enforcement, and write-community exposure."
+                ),
+                hostname=hostname,
+                source_finding="SNMP Default Community String Accepted",
+                priority="MEDIUM",
+            )
             # After first successful community, do a full walk and stop brute-forcing
             run_snmpwalk(ip, port, community, snmpwalk_path, output_mgr,
                          hostname=hostname, timeout=60)
@@ -15934,6 +16015,20 @@ def run_ftp_anon_check(
             sources="ftp-check",
             affected=f"{ip}:{port}",
             output_file=_ftp_rel,
+        )
+        output_mgr.log_action_item(
+            "credential_reuse", "Isotope", f"{ip}:{port}",
+            ip, port,
+            title="Isotope: Analyze FTP anonymous access files",
+            description=(
+                f"FTP anonymous login accepted on {ip}:{port}. "
+                f"Isotope can download and analyze accessible files for "
+                f"credentials, configuration data, and sensitive information "
+                f"that enables lateral movement."
+            ),
+            hostname=hostname,
+            source_finding="FTP Anonymous Login Permitted",
+            priority="HIGH",
         )
     except Exception:
         # Login refused or connection error — not a finding
@@ -16207,6 +16302,23 @@ def run_ftp_default_cred_check(
         if cred_store:
             cred_store.add(uname, pwd, f"ftp default cred @ {ip}:{port}", ip=ip)
 
+    if found:
+        output_mgr.log_action_item(
+            "credential_reuse", "Isotope", f"{ip}:{port}",
+            ip, port,
+            title="Isotope: Test FTP credential reuse across services",
+            description=(
+                f"Default FTP credentials accepted on {ip}:{port} "
+                f"({', '.join(f'{u}/{p}' for u, p in found[:3])}). "
+                f"Isotope can test these credentials against other services "
+                f"(SSH, SMB, web apps, databases) on this host and across "
+                f"the network for credential reuse."
+            ),
+            hostname=hostname,
+            source_finding="FTP Default Credentials Accepted",
+            priority="HIGH",
+        )
+
     if not found:
         _tprint(f"  {Fore.GREEN}[+] FTP default cred check complete: "
                 f"{ip}:{port} — no defaults accepted{Style.RESET_ALL}")
@@ -16254,6 +16366,7 @@ def run_smb_null_session(
             except subprocess.TimeoutExpired:
                 proc.kill(); out_b, err_b = proc.communicate()
                 out_path.write_text("(smbmap timed out)\n", encoding="utf-8")
+                _log_timeout_action(output_mgr, "smbmap", ip, port, hostname, 30)
                 return
             raw  = out_b.decode("utf-8", errors="replace")
             raw += err_b.decode("utf-8", errors="replace")
@@ -16322,6 +16435,7 @@ def run_smb_null_session(
                 out_b, err_b = proc.communicate(timeout=15)
             except subprocess.TimeoutExpired:
                 proc.kill(); out_b, err_b = proc.communicate()
+                _log_timeout_action(output_mgr, "rpcclient", ip, port, hostname, 15)
                 return
             raw  = out_b.decode("utf-8", errors="replace")
             raw += err_b.decode("utf-8", errors="replace")
@@ -16378,6 +16492,7 @@ def run_rpc_null_session(
             out_b, err_b = proc.communicate(timeout=15)
         except subprocess.TimeoutExpired:
             proc.kill(); out_b, err_b = proc.communicate()
+            _log_timeout_action(output_mgr, "rpcclient", ip, port, hostname, 15)
             return
         raw = out_b.decode("utf-8", errors="replace")
         if re.search(r"(Domain|domain_name|num_users|server_name)", raw, re.IGNORECASE):
@@ -16702,6 +16817,7 @@ def _smb_smbclient_enum_share(
             out_b, err_b = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             proc.kill(); out_b, err_b = proc.communicate()
+            _log_timeout_action(output_mgr, "smbclient", ip, port, hostname, timeout)
         ls_raw = (out_b + err_b).decode("utf-8", errors="replace")
         ls_file.write_text(ls_raw, encoding="utf-8")
         output_mgr.log_command("smbclient-ls", smbclient, ls_cmd, ls_file,
@@ -16892,6 +17008,22 @@ def run_smb_share_deep_enum(
             output_file=_enum_file_str,
         )
 
+    if _sens:
+        output_mgr.log_action_item(
+            "credential_reuse", "Isotope", f"{ip}:{port}",
+            ip, port,
+            title="Isotope: Analyze sensitive files from SMB share",
+            description=(
+                f"{len(_sens)} sensitive file(s) found on \\\\{ip}\\{share}. "
+                f"Isotope can download and analyze these files for credentials, "
+                f"private keys, API tokens, and configuration data that enable "
+                f"lateral movement."
+            ),
+            hostname=hostname,
+            source_finding=f"Sensitive File on SMB Share",
+            priority="HIGH",
+        )
+
 
 def run_smbmap_with_creds(
     ip: str,
@@ -16930,6 +17062,7 @@ def run_smbmap_with_creds(
             out_b, err_b = proc.communicate(timeout=60)
         except subprocess.TimeoutExpired:
             proc.kill(); out_b, err_b = proc.communicate()
+            _log_timeout_action(output_mgr, "smbmap", ip, port, hostname, 60)
             return
         raw = out_b.decode("utf-8", errors="replace")
 
@@ -16998,6 +17131,7 @@ def run_enum4linux(
             out_b, err_b = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             proc.kill(); out_b, err_b = proc.communicate()
+            _log_timeout_action(output_mgr, "enum4linux", ip, 445, hostname, timeout)
 
         # enum4linux writes most of its useful output to stdout, but some
         # versions mix content between stdout and stderr — capture both.
@@ -17266,6 +17400,7 @@ def run_adenum(
             out_b, err_b = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             proc.kill(); out_b, err_b = proc.communicate()
+            _log_timeout_action(output_mgr, "ADenum", ip, port, hostname, timeout)
             return
         raw = out_b.decode("utf-8", errors="replace")
 
@@ -17812,6 +17947,7 @@ def run_shcheck(
         _vc.log(f"shcheck timed out on {ip}:{port} after {timeout}s — command: {' '.join(str(c) for c in cmd)}", "WARNING")
         _ensure_output_file(out_file, " ".join(str(c) for c in cmd),
                             f"(shcheck timed out after {timeout}s — no results collected)")
+        _log_timeout_action(output_mgr, "shcheck", ip, port, hostname, timeout)
         return
     except OSError as exc:
         _tprint(f"  {Fore.RED}[!] shcheck launch error {ip}:{port}: {exc}{Style.RESET_ALL}")
@@ -18034,6 +18170,7 @@ def run_gobuster(
         _vc.log(f"gobuster timed out on {ip}:{port} after {timeout}s — command: {' '.join(cmd)}", "WARNING")
         _ensure_output_file(out_file, " ".join(cmd),
                             f"(gobuster timed out after {timeout}s — no results collected)")
+        _log_timeout_action(output_mgr, "gobuster", ip, port, hostname, timeout)
         return
     except OSError as exc:
         _tprint(f"  {Fore.RED}[!] gobuster error {ip}:{port}: {exc}{Style.RESET_ALL}")
@@ -18157,6 +18294,7 @@ def run_webanalyze(
         _vc.log(f"webanalyze timed out on {ip}:{port} after {timeout}s — command: {' '.join(cmd)}", "WARNING")
         _ensure_output_file(out_file, " ".join(cmd),
                             f"(webanalyze timed out after {timeout}s — no results collected)")
+        _log_timeout_action(output_mgr, "webanalyze", ip, port, hostname, timeout)
         return False
     except OSError as exc:
         import errno as _errno
@@ -18316,6 +18454,7 @@ def run_wpscan(
         _vc.log(f"wpscan timed out on {ip}:{port} after {timeout}s — command: {' '.join(cmd)}", "WARNING")
         _ensure_output_file(out_file, " ".join(cmd),
                             f"(wpscan timed out after {timeout}s — no results collected)")
+        _log_timeout_action(output_mgr, "wpscan", ip, port, hostname, timeout)
         return
     except OSError as exc:
         _tprint(f"  {Fore.RED}[!] wpscan error {ip}:{port}: {exc}{Style.RESET_ALL}")
@@ -18599,6 +18738,7 @@ def run_searchsploit(
                 f"  {Fore.YELLOW}[~] searchsploit timed out on "
                 f"{xml_file.name}{Style.RESET_ALL}"
             )
+            _log_timeout_action(output_mgr, "searchsploit", xml_file.stem, 0, "", timeout, cmd=" ".join(cmd))
             continue
         except OSError as exc:
             _tprint(
@@ -19290,6 +19430,8 @@ def _trigger_smbmap_for_hash(
             except subprocess.TimeoutExpired:
                 proc.kill()
                 out_b, _ = proc.communicate()
+                if output_mgr:
+                    _log_timeout_action(output_mgr, "smbmap", ip, port, "", 60)
                 continue
             raw = out_b.decode("utf-8", errors="replace")
 
@@ -20314,6 +20456,20 @@ def _check_docker_api(
                         f"  {Fore.RED}[!!!] Docker API EXPOSED {ip}:{port} — "
                         f"{len(data)} {label}{Style.RESET_ALL}"
                     )
+                    output_mgr.log_action_item(
+                        "credential_reuse", "Isotope", f"{ip}:{port}",
+                        ip, port,
+                        title="Isotope: Analyze Docker container images and secrets",
+                        description=(
+                            f"Unauthenticated Docker API on {ip}:{port}. "
+                            f"Isotope can pull and analyze container images for "
+                            f"hard-coded credentials, API keys, and mounted secrets "
+                            f"that enable lateral movement."
+                        ),
+                        hostname=hostname,
+                        source_finding="Unauthenticated Docker API Exposed",
+                        priority="CRITICAL",
+                    )
                     return
         except Exception:
             pass
@@ -20366,6 +20522,21 @@ def _check_postgres_trust(
                     f"  {Fore.RED}[!!!] PostgreSQL TRUST auth {ip}:{port} — "
                     f"no password needed!{Style.RESET_ALL}"
                 )
+                output_mgr.log_action_item(
+                    "credential_reuse", "Isotope", f"{ip}:{port}",
+                    ip, port,
+                    title="Isotope: Extract PostgreSQL credentials and data",
+                    description=(
+                        f"PostgreSQL trust auth on {ip}:{port} grants superuser "
+                        f"access without a password. Isotope can extract "
+                        f"password hashes from pg_shadow, test credential reuse "
+                        f"across services, and analyze database contents for "
+                        f"sensitive data and lateral movement opportunities."
+                    ),
+                    hostname=hostname,
+                    source_finding="PostgreSQL Trust Authentication Enabled",
+                    priority="CRITICAL",
+                )
     except Exception:
         pass
 
@@ -20412,6 +20583,20 @@ def _check_couchdb_unauth(
                 _tprint(
                     f"  {Fore.YELLOW}[!] CouchDB unauth {ip}:{port} — "
                     f"{len(dbs)} databases exposed{Style.RESET_ALL}"
+                )
+                output_mgr.log_action_item(
+                    "credential_reuse", "Isotope", f"{ip}:{port}",
+                    ip, port,
+                    title="Isotope: Extract CouchDB credentials and data",
+                    description=(
+                        f"CouchDB on {ip}:{port} allows unauthenticated access "
+                        f"to {len(dbs)} database(s). Isotope can extract stored "
+                        f"credentials, API keys, and sensitive documents for "
+                        f"credential reuse testing across the environment."
+                    ),
+                    hostname=hostname,
+                    source_finding="Unauthenticated CouchDB Access",
+                    priority="HIGH",
                 )
     except Exception:
         pass
@@ -20498,6 +20683,20 @@ def _check_grafana_unauth(
                 _tprint(
                     f"  {Fore.RED}[!!!] Grafana default creds {ip}:{port} — "
                     f"admin:admin works!{Style.RESET_ALL}"
+                )
+                output_mgr.log_action_item(
+                    "credential_reuse", "Isotope", f"{ip}:{port}",
+                    ip, port,
+                    title="Isotope: Extract Grafana data source credentials",
+                    description=(
+                        f"Grafana default credentials (admin:admin) accepted on "
+                        f"{ip}:{port}. Isotope can extract database credentials "
+                        f"from configured data sources and test for credential "
+                        f"reuse across the environment."
+                    ),
+                    hostname=hostname,
+                    source_finding="Grafana Default Credentials (admin:admin)",
+                    priority="CRITICAL",
                 )
     except Exception:
         pass
@@ -20600,6 +20799,20 @@ def _check_cassandra_unauth(
                 _tprint(
                     f"  {Fore.YELLOW}[!] Cassandra no auth {ip}:{port}{Style.RESET_ALL}"
                 )
+                output_mgr.log_action_item(
+                    "credential_reuse", "Isotope", f"{ip}:{port}",
+                    ip, port,
+                    title="Isotope: Extract Cassandra keyspace data",
+                    description=(
+                        f"Cassandra CQL on {ip}:{port} requires no authentication. "
+                        f"Isotope can enumerate keyspaces, extract stored credentials "
+                        f"and sensitive data, and test for lateral movement "
+                        f"opportunities using discovered credentials."
+                    ),
+                    hostname=hostname,
+                    source_finding="Cassandra Unauthenticated CQL Access",
+                    priority="HIGH",
+                )
     except Exception:
         pass
 
@@ -20665,6 +20878,20 @@ def _check_mongodb_native(
                 )
                 _tprint(
                     f"  {Fore.YELLOW}[!] MongoDB unauth {ip}:{port} v{ver}{Style.RESET_ALL}"
+                )
+                output_mgr.log_action_item(
+                    "credential_reuse", "Isotope", f"{ip}:{port}",
+                    ip, port,
+                    title="Isotope: Extract MongoDB databases and credentials",
+                    description=(
+                        f"MongoDB on {ip}:{port} (v{ver}) allows unauthenticated "
+                        f"access. Isotope can dump all databases, extract stored "
+                        f"credentials and API keys, and test for credential reuse "
+                        f"across services."
+                    ),
+                    hostname=hostname,
+                    source_finding="MongoDB Unauthenticated Access",
+                    priority="HIGH",
                 )
     except Exception:
         pass
@@ -20961,6 +21188,20 @@ def run_mysql_auth_check(
                     sources="mysql-auth-check",
                     affected=f"{ip}:{port}",
                     output_file=str(out_file),
+                )
+                output_mgr.log_action_item(
+                    "credential_reuse", "Isotope", f"{ip}:{port}",
+                    ip, port,
+                    title="Isotope: Extract MySQL credentials and data",
+                    description=(
+                        f"MySQL root null-auth on {ip}:{port} (v{server_ver}). "
+                        f"Isotope can dump mysql.user password hashes, extract "
+                        f"database contents for sensitive data, and test "
+                        f"credential reuse across the environment."
+                    ),
+                    hostname=hostname,
+                    source_finding="MySQL Unauthenticated Access — Root with No Password",
+                    priority="CRITICAL",
                 )
             else:
                 lines.append(f"NULL AUTH: rejected (status byte {status:#04x})")
@@ -21679,10 +21920,26 @@ def run_nfs_enum(
                             affected=f"{ip}:{port}",
                             output_file=_enum_file_str,
                         )
+                    if _sens:
+                        output_mgr.log_action_item(
+                            "credential_reuse", "Isotope", f"{ip}:{_nfs_port}",
+                            ip, _nfs_port,
+                            title="Isotope: Analyze sensitive files from NFS export",
+                            description=(
+                                f"{len(_sens)} sensitive file(s) on NFS export "
+                                f"{_export_path} at {ip}. Isotope can analyze "
+                                f"these files for credentials, private keys, and "
+                                f"configuration data enabling lateral movement."
+                            ),
+                            hostname=hostname,
+                            source_finding="Sensitive File on NFS",
+                            priority="HIGH",
+                        )
     except subprocess.TimeoutExpired:
         _vc.log(f"showmount (NFS) timed out on {ip}:{port} after {timeout}s — command: {' '.join(cmd)}", "WARNING")
         _ensure_output_file(out_file, " ".join(cmd),
                             f"(showmount timed out after {timeout}s — no NFS export data collected)")
+        _log_timeout_action(output_mgr, "showmount", ip, port, hostname, timeout)
     except Exception as exc:
         _vc.log(f"showmount (NFS) failed on {ip}:{port}: {exc}", "ERROR")
         _vc.error(f"showmount error on {ip}:{port}", source="showmount",
@@ -22660,6 +22917,7 @@ def run_ipmi_check(
         except subprocess.TimeoutExpired:
             lines.append(f"Timeout for user={user}")
             _vc.log(f"ipmitool timed out on {ip}:{port} user={user} after {timeout}s", "WARNING")
+            _log_timeout_action(output_mgr, "ipmitool", ip, port, hostname, timeout)
         except Exception as exc:
             lines.append(f"Error user={user}: {exc}")
             _vc.log(f"ipmitool failed on {ip}:{port} user={user}: {exc}", "ERROR")
@@ -24064,6 +24322,7 @@ def run_ike_scan(
         main_out.write_text(
             f"$ {' '.join(main_cmd)}\n[TIMEOUT after 30s]\n", encoding="utf-8",
         )
+        _log_timeout_action(output_mgr, "ike-scan", ip, port, hostname, 30)
     except Exception:
         return
 
@@ -24092,6 +24351,7 @@ def run_ike_scan(
         aggr_out.write_text(
             f"$ {' '.join(aggr_cmd)}\n[TIMEOUT after 30s]\n", encoding="utf-8",
         )
+        _log_timeout_action(output_mgr, "ike-scan", ip, port, hostname, 30)
     except Exception:
         pass
 
@@ -24418,6 +24678,7 @@ def probe_kerberoast(dc_ip: str, domain: str, *, output_dir: "Path",
                 pass
             return {"ok": True, "hashes": len(hashes), "users": spn_users}
     except _sp.TimeoutExpired:
+        _log_timeout_action(output_mgr, "GetUserSPNs", dc_ip, 88, domain, timeout)
         return {"ok": False, "reason": "GetUserSPNs timed out"}
     except Exception as exc:
         return {"ok": False, "reason": str(exc)}
@@ -24520,6 +24781,7 @@ def run_udp_scan(
     except subprocess.TimeoutExpired:
         _tprint(f"  {Fore.RED}[!] UDP scan timed out for {ip}{Style.RESET_ALL}")
         _vc.log(f"UDP scan timed out for {ip}", "ERROR")
+        _log_timeout_action(output_mgr, "nmap", ip, 0, hostname, 600)
     except Exception as exc:
         _tprint(f"  {Fore.RED}[!] UDP scan error for {ip}: {exc}{Style.RESET_ALL}")
         _vc.log(f"UDP scan error for {ip}: {exc}", "ERROR")
@@ -24626,6 +24888,7 @@ def run_hostname_resolution(
         except subprocess.TimeoutExpired:
             _tprint(f"  {Fore.YELLOW}[~] nbtscan timed out{Style.RESET_ALL}")
             _ensure_output_file(nbtscan_out, " ".join(cmd), "(nbtscan timed out)")
+            _log_timeout_action(output_mgr, "nbtscan", ",".join(alive_ips[:5]), 137, "", timeout)
         except OSError as exc:
             _tprint(f"  {Fore.RED}[!] nbtscan error: {exc}{Style.RESET_ALL}")
             _ensure_output_file(nbtscan_out, " ".join(cmd), f"(nbtscan failed: {exc})")
@@ -24658,7 +24921,11 @@ def run_hostname_resolution(
                                 name = candidate
                                 break
                 return ip, name, combined
-            except (subprocess.TimeoutExpired, OSError):
+            except subprocess.TimeoutExpired:
+                _ensure_output_file(out_file, " ".join(cmd), "(nmblookup timed out)")
+                _log_timeout_action(output_mgr, "nmblookup", ip, 137, "", timeout)
+                return ip, None, ""
+            except OSError:
                 _ensure_output_file(out_file, " ".join(cmd), "(nmblookup failed)")
                 return ip, None, ""
 
@@ -24972,6 +25239,7 @@ def run_metasploit_search(
             output_mgr.log_command("metasploit", msfconsole_path, cmd, out_file)
         except subprocess.TimeoutExpired:
             _tprint(f"  {Fore.YELLOW}[~] MSF: timeout on {cve}{Style.RESET_ALL}")
+            _log_timeout_action(output_mgr, "msfconsole", cve, 0, "", timeout, cmd=" ".join(cmd))
             continue
         except OSError as exc:
             _tprint(f"  {Fore.RED}[!] MSF: {exc}{Style.RESET_ALL}")
@@ -25197,6 +25465,7 @@ def run_ldapdomaindump(
             )
     except subprocess.TimeoutExpired:
         proc.kill()
+        _log_timeout_action(output_mgr, "ldapdomaindump", dc_ip, 389, hostname, timeout)
     except Exception as exc:
         _tprint(f"  {Fore.RED}[!] ldapdomaindump error: {exc}{Style.RESET_ALL}")
 
@@ -25252,6 +25521,7 @@ def run_kerbrute(
             _tprint(f"  {Fore.YELLOW}[~] kerbrute: no valid users found{Style.RESET_ALL}")
     except subprocess.TimeoutExpired:
         proc.kill()
+        _log_timeout_action(output_mgr, "kerbrute", dc_ip, 88, hostname, timeout)
     except Exception as exc:
         _tprint(f"  {Fore.RED}[!] kerbrute error: {exc}{Style.RESET_ALL}")
     return valid_users
@@ -25301,6 +25571,7 @@ def run_bloodhound_python(
             )
     except subprocess.TimeoutExpired:
         proc.kill()
+        _log_timeout_action(output_mgr, "bloodhound-python", dc_ip, 389, hostname, timeout)
     except Exception as exc:
         _tprint(f"  {Fore.RED}[!] bloodhound-python error: {exc}{Style.RESET_ALL}")
 
@@ -25357,6 +25628,7 @@ def _run_odat(ip, port, output_mgr, odat_path, hostname=None, username=None, pas
             )
     except subprocess.TimeoutExpired:
         proc.kill()
+        _log_timeout_action(output_mgr, "odat", ip, port, hostname, timeout)
     except Exception as exc:
         _tprint(f"  {Fore.RED}[!] odat: {exc}{Style.RESET_ALL}")
 
@@ -25391,6 +25663,7 @@ def _run_msdat(ip, port, output_mgr, msdat_path, hostname=None, username=None, p
             )
     except subprocess.TimeoutExpired:
         proc.kill()
+        _log_timeout_action(output_mgr, "msdat", ip, port, hostname, timeout)
     except Exception as exc:
         _tprint(f"  {Fore.RED}[!] msdat: {exc}{Style.RESET_ALL}")
 
@@ -25426,6 +25699,7 @@ def _run_enumdb(ip, port, db_type, output_mgr, enumdb_path, hostname=None, usern
             )
     except subprocess.TimeoutExpired:
         proc.kill()
+        _log_timeout_action(output_mgr, "enumdb", ip, port, hostname, timeout)
     except Exception as exc:
         _tprint(f"  {Fore.RED}[!] enumdb: {exc}{Style.RESET_ALL}")
 
@@ -25877,6 +26151,7 @@ def run_hydra_brute(
                         cred_store.add(user, pwd, f"hydra {_effective_svc} @ {ip}:{port}", ip=ip)
         except subprocess.TimeoutExpired:
             proc.kill()
+            _log_timeout_action(output_mgr, "hydra", ip, port, hostname, timeout)
         except Exception as exc:
             _tprint(f"  {Fore.RED}[!] Hydra {ip}:{port}: {exc}{Style.RESET_ALL}")
 
@@ -25968,6 +26243,7 @@ def run_sqlmap(
                 _tprint(f"  {Fore.RED}[!] sqlmap: SQLi FOUND in {url}{Style.RESET_ALL}")
         except subprocess.TimeoutExpired:
             proc.kill()
+            _log_timeout_action(output_mgr, "sqlmap", url, 0, "", timeout, cmd=" ".join(cmd))
         except Exception as exc:
             _tprint(f"  {Fore.RED}[!] sqlmap: {exc}{Style.RESET_ALL}")
 
@@ -26048,6 +26324,7 @@ def run_xsstrike(
                 _tprint(f"  {Fore.RED}[!] XSStrike: XSS FOUND in {url}{Style.RESET_ALL}")
         except subprocess.TimeoutExpired:
             proc.kill()
+            _log_timeout_action(output_mgr, "XSStrike", url, 0, "", timeout, cmd=" ".join(str(c) for c in cmd))
         except Exception as exc:
             _tprint(f"  {Fore.RED}[!] XSStrike: {exc}{Style.RESET_ALL}")
 
@@ -27980,6 +28257,44 @@ def main():
                 scanned = [s for s in ("int", "ext")
                            if (project_root_early / s).exists()]
                 log_responder_findings(project_root_early, cred_store, scanned, target_ips=internal_ips)
+                _resp_ai = {
+                    "id":              str(_uuid.uuid4()),
+                    "type":            "credential_reuse",
+                    "recommended_tool": "Isotope",
+                    "target":          "Responder credentials",
+                    "ip":              "",
+                    "port":            0,
+                    "hostname":        "",
+                    "title":           "Isotope: Crack and test Responder-captured credentials",
+                    "description":     (
+                        f"Responder captured {n_creds} plaintext credential(s) and "
+                        f"{n_hashes} hash(es). Isotope can crack NTLMv1/v2 hashes "
+                        f"via hashcat/John, test plaintext credentials for reuse "
+                        f"across services, and perform NTLM relay attacks against "
+                        f"hosts with SMB signing disabled."
+                    ),
+                    "source_finding":  "Responder Captured Credentials",
+                    "priority":        "CRITICAL",
+                    "scope":           "int",
+                    "status":          "pending",
+                    "datetime":        datetime.now().isoformat(),
+                    "metadata":        {"n_creds": n_creds, "n_hashes": n_hashes},
+                }
+                _vc.action_item(_resp_ai)
+                _resp_ai_path = project_root_early / "action_items.json"
+                try:
+                    _resp_existing = json.loads(_resp_ai_path.read_text(encoding="utf-8")) if _resp_ai_path.exists() else []
+                    if not isinstance(_resp_existing, list):
+                        _resp_existing = []
+                except Exception:
+                    _resp_existing = []
+                _resp_existing.append(_resp_ai)
+                try:
+                    _resp_tmp = _resp_ai_path.with_suffix(".json.tmp")
+                    _resp_tmp.write_text(json.dumps(_resp_existing, indent=2, default=str) + "\n", encoding="utf-8")
+                    _resp_tmp.replace(_resp_ai_path)
+                except Exception:
+                    pass
             else:
                 print(f"{Fore.CYAN}[*] Responder: no credentials captured.{Style.RESET_ALL}")
 
@@ -28466,10 +28781,137 @@ def _sweep_findings_for_action_items(output_mgr) -> None:
                         pass
                 break  # first matching rule wins per finding
 
+        # ── 3. Trawler: cleartext protocols → traffic capture ────────
+        _TRAWLER_KW = (
+            "snmpv1/v2c", "snmp public community", "snmp default community",
+            "cleartext ftp", "cleartext telnet", "unencrypted http",
+            "llmnr", "nbt-ns", "nbns", "ssdp", "ldap without tls",
+        )
+        for kw in _TRAWLER_KW:
+            if kw in combined:
+                _tk_tr = ("trawler", ip)
+                if _tk_tr not in seen_tool_target:
+                    try:
+                        output_mgr.log_action_item(
+                            item_type="traffic_capture",
+                            recommended_tool="Trawler",
+                            target=ip, ip=ip, port=port,
+                            title=f"Traffic capture: {kw.split('/')[0].strip()} detected",
+                            description=(
+                                f"SS3 found {kw} on {target_str}. "
+                                f"Trawler pcap analysis can capture live traffic "
+                                f"for credential exposure and protocol analysis."),
+                            hostname=hostname,
+                            source_finding=title,
+                            priority="MEDIUM",
+                            metadata={"source_category": "ss3_cleartext_protocol"},
+                        )
+                        count += 1
+                        seen_tool_target.add(_tk_tr)
+                    except Exception:
+                        pass
+                break
+
+        # ── 4. Bastion: network appliance → config audit ─────────────
+        _BASTION_KW = (
+            ("snmp.*sysdescr",), ("firewall",), ("fortinet", "fortigate"),
+            ("palo alto",), ("cisco ios", "cisco asa"), ("sonicwall",),
+            ("juniper",), ("checkpoint",), ("mikrotik",),
+        )
+        for kw_group in _BASTION_KW:
+            if any(kw in combined for kw in kw_group):
+                _tk_ba = ("bastion", ip)
+                if _tk_ba not in seen_tool_target:
+                    appliance = kw_group[0].replace(".*", " ")
+                    try:
+                        output_mgr.log_action_item(
+                            item_type="config_audit",
+                            recommended_tool="Bastion",
+                            target=ip, ip=ip, port=port,
+                            title=f"Config audit: {appliance} appliance detected",
+                            description=(
+                                f"SS3 identified a network appliance ({appliance}) "
+                                f"at {target_str}. Bastion can audit the firewall "
+                                f"ruleset for misconfigurations."),
+                            hostname=hostname,
+                            source_finding=title,
+                            priority="HIGH",
+                            metadata={"source_category": "ss3_appliance_detection"},
+                        )
+                        count += 1
+                        seen_tool_target.add(_tk_ba)
+                    except Exception:
+                        pass
+                break
+
+        # ── 5. Forge: cloud / virtualisation → cloud audit ───────────
+        _FORGE_KW = (
+            "cloud metadata", "esxi", "kubernetes", "k8s api",
+            "docker daemon", "docker api", "aws metadata",
+            "azure metadata", "gcp metadata", "openstack",
+            "vcenter", "vmware", "consul",
+        )
+        for kw in _FORGE_KW:
+            if kw in combined:
+                _tk_fg = ("forge", ip)
+                if _tk_fg not in seen_tool_target:
+                    try:
+                        output_mgr.log_action_item(
+                            item_type="cloud_audit",
+                            recommended_tool="Forge",
+                            target=ip, ip=ip, port=port,
+                            title=f"Cloud audit: {kw} infrastructure detected",
+                            description=(
+                                f"SS3 identified {kw} at {target_str}. "
+                                f"Forge can perform comprehensive cloud "
+                                f"infrastructure security auditing."),
+                            hostname=hostname,
+                            source_finding=title,
+                            priority="HIGH",
+                            metadata={"source_category": "ss3_cloud_detection"},
+                        )
+                        count += 1
+                        seen_tool_target.add(_tk_fg)
+                    except Exception:
+                        pass
+                break
+
+        # ── 6. Isotope: accessible file shares → deep file analysis ──
+        _ISOTOPE_KW = (
+            "smb null session", "smb anonymous", "nfs export",
+            "ftp anonymous", "writable share", "world-readable",
+        )
+        for kw in _ISOTOPE_KW:
+            if kw in combined:
+                _tk_iso = ("isotope", f"{ip}:{kw}")
+                if _tk_iso not in seen_tool_target:
+                    try:
+                        output_mgr.log_action_item(
+                            item_type="file_analysis",
+                            recommended_tool="Isotope",
+                            target=target_str, ip=ip, port=port,
+                            title=f"File analysis: {kw} — download and analyse",
+                            description=(
+                                f"SS3 found {kw} on {target_str}. "
+                                f"Isotope can download accessible files and "
+                                f"perform deep analysis for secrets, IOCs, "
+                                f"and embedded credentials."),
+                            hostname=hostname,
+                            source_finding=title,
+                            priority="HIGH",
+                            metadata={"source_category": "ss3_file_access"},
+                        )
+                        count += 1
+                        seen_tool_target.add(_tk_iso)
+                    except Exception:
+                        pass
+                break
+
     if count:
-        _vc.log(f"Action item sweep: generated {count} manual testing action item(s)")
-        print(f"{Fore.CYAN}[*] Generated {count} manual testing action item(s) "
-              f"from findings{Style.RESET_ALL}")
+        _vc.log(f"Action item sweep: generated {count} action item(s) "
+                f"(manual testing + cross-tool recommendations)")
+        print(f"{Fore.CYAN}[*] Generated {count} action item(s) "
+              f"from findings (manual + cross-tool){Style.RESET_ALL}")
 
 
 if __name__ == "__main__":
