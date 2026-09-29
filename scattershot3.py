@@ -1747,6 +1747,20 @@ _INTERNAL_NETWORKS = [
     ipaddress.ip_network("100.64.0.0/10"),
 ]
 
+_RFC1918_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+]
+
+_RE_RFC1918_IN_TEXT = re.compile(
+    r'\b('
+    r'10\.\d{1,3}\.\d{1,3}\.\d{1,3}'
+    r'|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}'
+    r'|192\.168\.\d{1,3}\.\d{1,3}'
+    r')\b'
+)
+
 
 def classify_ip(ip: str) -> str:
     """
@@ -5828,6 +5842,43 @@ def probe_uncertain_and_nonstandard_ports(
                                 f"Curl command: {_r['cmd']}"
                             ),
                             sources="fracture-recon-port",
+                            affected=f"{ip}:{_port}",
+                            output_file=str(_curl_path.relative_to(output_mgr.root)),
+                        )
+                    # Phase G.3: internal IP disclosure in response body/headers
+                    _rfc1918_text = (_r.get("body") or "") + "\n" + (_r.get("headers") or "")
+                    _rfc1918_found = set()
+                    for _m in _RE_RFC1918_IN_TEXT.finditer(_rfc1918_text):
+                        _candidate = _m.group(1)
+                        if _candidate == ip:
+                            continue
+                        try:
+                            _caddr = ipaddress.ip_address(_candidate)
+                            if any(_caddr in _net for _net in _RFC1918_NETWORKS):
+                                _rfc1918_found.add(_candidate)
+                        except ValueError:
+                            pass
+                    if _rfc1918_found:
+                        _rfc_risk = "MEDIUM" if getattr(output_mgr, "scope", "ext") == "ext" else "LOW"
+                        _rfc_ips_str = ", ".join(sorted(_rfc1918_found))
+                        output_mgr.log_finding(
+                            title="Internal IP Address Disclosed in HTTP Response",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=_r["cmd"], risk=_rfc_risk,
+                            description=(
+                                f"The HTTP response from {_scheme}://{ip}:{_port}/ "
+                                f"contains RFC 1918 private IP address(es): "
+                                f"{_rfc_ips_str}. This discloses internal network "
+                                f"topology to external observers, aiding "
+                                f"reconnaissance and potentially enabling "
+                                f"targeted attacks against internal hosts."
+                            ),
+                            output=(
+                                f"Disclosed internal IP(s): {_rfc_ips_str}\n"
+                                f"Source URL: {_r['url']}\n"
+                                f"HTTP status: {_r['status']}"
+                            ),
+                            sources="scattershot3-curl-probe",
                             affected=f"{ip}:{_port}",
                             output_file=str(_curl_path.relative_to(output_mgr.root)),
                         )

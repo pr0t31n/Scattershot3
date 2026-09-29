@@ -10947,6 +10947,69 @@
       ],
       "description": "The FTP server did not exhibit rate limiting, account lockout, or connection throttling after multiple rapid failed login attempts.",
       "impact": "Without brute-force protection, an attacker can make unlimited credential guessing attempts against the FTP service at high speed. This significantly reduces the time required to compromise accounts through dictionary attacks or credential stuffing."
+    },
+    {
+      "id": "SS-069",
+      "title": "Internal IP Address Disclosed in HTTP Response",
+      "aliases": [
+        "Private IP Address Disclosure",
+        "RFC 1918 Address Leakage in HTTP Response",
+        "Internal IP Leakage"
+      ],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "MEDIUM",
+      "description": "The HTTP response body or headers from a web service contain one or more RFC 1918 private IP addresses (10/8, 172.16/12, 192.168/16). This reveals internal network topology to external observers.",
+      "impact": "An attacker can map internal network topology, identify backend hosts behind load balancers or proxies, and use disclosed addresses to craft targeted attacks such as SSRF against internal hosts or lateral movement after initial compromise.",
+      "cwe": [
+        "CWE-200"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 5.3,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+      "nessus_plugin_ids": [
+        10759
+      ],
+      "qualys_qids": [],
+      "owasp_web": "A01:2025 Broken Access Control",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.DS-1"
+      ],
+      "nist_800_53": [
+        "SC-8",
+        "SI-11"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [
+        "6.5.6"
+      ],
+      "iso_27001": [
+        "A.13.1.1"
+      ],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1018",
+          "tactic": "Discovery",
+          "name": "Remote System Discovery"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Configure web servers and application frameworks to suppress internal IP addresses from HTTP responses. Review error pages, debug output, reverse proxy headers, and application-generated content for private address leakage.",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "curl",
+        "testssl"
+      ]
     }
   ]
 }
