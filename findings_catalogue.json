@@ -2,7 +2,7 @@
   "version": "1.7.1",
   "tool": "scattershot3",
   "generated": "(complete: upgraded existing + scaffolded missing)",
-  "total": 208,
+  "total": 210,
   "from_existing": 110,
   "newly_scaffolded": 68,
   "findings": [
@@ -2647,7 +2647,7 @@
     },
     {
       "id": "SS3-047",
-      "title": "EternalBlue (MS17-010) — Host Confirmed Vulnerable",
+      "title": "EternalBlue (MS17-010) \u2014 Host Confirmed Vulnerable",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -2720,7 +2720,7 @@
     },
     {
       "id": "SS3-048",
-      "title": "EternalBlue (MS17-010) — Likely Vulnerable (SMBv1 + Unpatched)",
+      "title": "EternalBlue (MS17-010) \u2014 Likely Vulnerable (SMBv1 + Unpatched)",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -2845,7 +2845,7 @@
     },
     {
       "id": "SS3-050",
-      "title": "IPMI 2.0 Cipher Suite 0 — Authentication Bypass and Hash Capture",
+      "title": "IPMI 2.0 Cipher Suite 0 \u2014 Authentication Bypass and Hash Capture",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -2995,7 +2995,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Upgrade libSSH to version 0.7.6 or 0.8.4 or later. For systems using OpenSSH this vulnerability does not apply — verify the SSH daemon in use. Apply vendor-supplied security patches immediately.",
+      "remediation_brief": "Upgrade libSSH to version 0.7.6 or 0.8.4 or later. For systems using OpenSSH this vulnerability does not apply \u2014 verify the SSH daemon in use. Apply vendor-supplied security patches immediately.",
       "remediation_component": "",
       "remediation_category": "",
       "remediation_effort": "",
@@ -3008,7 +3008,7 @@
       "impact": "",
       "_x_severity": "CRITICAL",
       "_x_category": "SSH",
-      "_x_remediation": "Upgrade libSSH to version 0.7.6 or 0.8.4 or later. For systems using OpenSSH this vulnerability does not apply — verify the SSH daemon in use. Apply vendor-supplied security patches immediately.",
+      "_x_remediation": "Upgrade libSSH to version 0.7.6 or 0.8.4 or later. For systems using OpenSSH this vulnerability does not apply \u2014 verify the SSH daemon in use. Apply vendor-supplied security patches immediately.",
       "_x_references": [
         "CVE-2018-10933",
         "CWE-287",
@@ -3212,7 +3212,7 @@
     },
     {
       "id": "SS3-056",
-      "title": "RDP Without NLA (Network Level Authentication) — BlueKeep Exposure",
+      "title": "RDP Without NLA (Network Level Authentication) \u2014 BlueKeep Exposure",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -3274,7 +3274,7 @@
     },
     {
       "id": "SS3-057",
-      "title": "NFS Export Points Enumerated — Potentially Unauthenticated Access",
+      "title": "NFS Export Points Enumerated \u2014 Potentially Unauthenticated Access",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -3744,7 +3744,7 @@
     },
     {
       "id": "SS3-065",
-      "title": "MySQL Unauthenticated Access — Root with No Password",
+      "title": "MySQL Unauthenticated Access \u2014 Root with No Password",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -4022,7 +4022,7 @@
         "CWE-284",
         "CWE-200"
       ],
-      "description": "The SMB server permits null session connections — unauthenticated connections using an empty username and password. Via a null session, an attacker can enumerate share names, user accounts, group memberships, local policies, and domain SID information using tools such as enum4linux, rpcclient, or CrackMapExec. This information provides the reconnaissance foundation for subsequent targeted attacks including password spraying, credential brute-force, and Kerberoasting.",
+      "description": "The SMB server permits null session connections \u2014 unauthenticated connections using an empty username and password. Via a null session, an attacker can enumerate share names, user accounts, group memberships, local policies, and domain SID information using tools such as enum4linux, rpcclient, or CrackMapExec. This information provides the reconnaissance foundation for subsequent targeted attacks including password spraying, credential brute-force, and Kerberoasting.",
       "impact": "",
       "_x_severity": "HIGH",
       "_x_category": "SMB",
@@ -5974,7 +5974,7 @@
       "searchsploit_terms": [],
       "metasploit_modules": [],
       "kev": false,
-      "remediation_brief": "Upgrade OpenSSL to version 1.0.1g or later (or 1.0.2 branch). Revoke and replace the server's TLS certificate and private key immediately — the private key must be assumed compromised. Invalidate all active user sessions. Reissue any client certificates if a client PKI is in use.",
+      "remediation_brief": "Upgrade OpenSSL to version 1.0.1g or later (or 1.0.2 branch). Revoke and replace the server's TLS certificate and private key immediately \u2014 the private key must be assumed compromised. Invalidate all active user sessions. Reissue any client certificates if a client PKI is in use.",
       "remediation_component": "",
       "remediation_category": "",
       "remediation_effort": "",
@@ -5983,11 +5983,11 @@
         "CWE-125",
         "CWE-126"
       ],
-      "description": "The target server is confirmed vulnerable to Heartbleed (CVE-2014-0160). The OpenSSL heartbeat extension does not properly validate the length field in TLS heartbeat requests, allowing an unauthenticated attacker to read up to 64 KB of server process memory per request. Repeated exploitation can expose TLS private keys, session tokens, plaintext credentials, and other sensitive in-memory data without leaving log entries. This vulnerability is distinct from SS3-010 (which covers testssl detection) — this entry is raised when the Scattershot3 Heartbleed probe module independently confirms the vulnerability.",
+      "description": "The target server is confirmed vulnerable to Heartbleed (CVE-2014-0160). The OpenSSL heartbeat extension does not properly validate the length field in TLS heartbeat requests, allowing an unauthenticated attacker to read up to 64 KB of server process memory per request. Repeated exploitation can expose TLS private keys, session tokens, plaintext credentials, and other sensitive in-memory data without leaving log entries. This vulnerability is distinct from SS3-010 (which covers testssl detection) \u2014 this entry is raised when the Scattershot3 Heartbleed probe module independently confirms the vulnerability.",
       "impact": "",
       "_x_severity": "CRITICAL",
       "_x_category": "SSL/TLS",
-      "_x_remediation": "Upgrade OpenSSL to version 1.0.1g or later (or 1.0.2 branch). Revoke and replace the server's TLS certificate and private key immediately — the private key must be assumed compromised. Invalidate all active user sessions. Reissue any client certificates if a client PKI is in use.",
+      "_x_remediation": "Upgrade OpenSSL to version 1.0.1g or later (or 1.0.2 branch). Revoke and replace the server's TLS certificate and private key immediately \u2014 the private key must be assumed compromised. Invalidate all active user sessions. Reissue any client certificates if a client PKI is in use.",
       "_x_references": [
         "CVE-2014-0160",
         "CWE-125",
@@ -6155,7 +6155,7 @@
         "CWE-1329",
         "OWASP-A06:2021"
       ],
-      "description": "The operating system is within its Extended Support (or Extended Security Updates) period, meaning the vendor continues to provide security patches but only under a paid extended support programme or with limited scope. Standard feature updates and non-security bug fixes may no longer be available. Extended support is a transitional state — the OS will reach full EOL at the extended support end date, and migrations to supported platforms should be planned urgently.",
+      "description": "The operating system is within its Extended Support (or Extended Security Updates) period, meaning the vendor continues to provide security patches but only under a paid extended support programme or with limited scope. Standard feature updates and non-security bug fixes may no longer be available. Extended support is a transitional state \u2014 the OS will reach full EOL at the extended support end date, and migrations to supported platforms should be planned urgently.",
       "impact": "",
       "_x_severity": "HIGH",
       "_x_category": "Patch Management",
@@ -6693,7 +6693,7 @@
     },
     {
       "id": "SS-010",
-      "title": "IPMI Cipher Suite 0 Auth Bypass Confirmed — user={user}",
+      "title": "IPMI Cipher Suite 0 Auth Bypass Confirmed \u2014 user={user}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -6732,7 +6732,7 @@
     },
     {
       "id": "SS-011",
-      "title": "Known Vulnerability: {software_name} {version} — {cve_desc}",
+      "title": "Known Vulnerability: {software_name} {version} \u2014 {cve_desc}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -6771,7 +6771,7 @@
     },
     {
       "id": "SS-012",
-      "title": "libSSH Authentication Bypass (CVE-2018-10933) — v{ver}",
+      "title": "libSSH Authentication Bypass (CVE-2018-10933) \u2014 v{ver}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -7356,7 +7356,7 @@
     },
     {
       "id": "SS-027",
-      "title": "SSL/TLS Ciphers: Obsolete Cipher — {_obs_cipher}",
+      "title": "SSL/TLS Ciphers: Obsolete Cipher \u2014 {_obs_cipher}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -9001,7 +9001,7 @@
       ],
       "risk": "HIGH",
       "description": "ssh-audit matched the SSH server's banner against its built-in CVE database and identified one or more known vulnerabilities affecting the running version of OpenSSH, Dropbear, or Tectia SSH. The CVE ID, CVSS score, and a short description are recorded in the finding Output field; full details are available in the saved ssh-audit JSON report.",
-      "impact": "Depending on the specific CVE, an attacker may achieve remote code execution, authentication bypass, user enumeration, host-key spoofing, denial of service, or memory disclosure. Banner-matched CVEs are pre-exploit indicators — the host running an affected version is the necessary precondition for exploitation, even when no public PoC has been tested against this specific deployment.",
+      "impact": "Depending on the specific CVE, an attacker may achieve remote code execution, authentication bypass, user enumeration, host-key spoofing, denial of service, or memory disclosure. Banner-matched CVEs are pre-exploit indicators \u2014 the host running an affected version is the necessary precondition for exploitation, even when no public PoC has been tested against this specific deployment.",
       "cwe": [
         "CWE-1395",
         "CWE-1104"
@@ -9398,7 +9398,7 @@
     },
     {
       "id": "SS3-186",
-      "title": "Telnet Service Exposed — Cleartext Protocol",
+      "title": "Telnet Service Exposed \u2014 Cleartext Protocol",
       "aliases": [
         "Telnet Exposed",
         "Telnet Cleartext"
@@ -9550,7 +9550,7 @@
         "curl"
       ],
       "description": "The Kubernetes API server is accessible without authentication. Unauthenticated requests can list, create, and modify cluster resources including pods, secrets, and deployments.",
-      "impact": "An attacker can fully compromise the Kubernetes cluster — deploying malicious containers, exfiltrating secrets (including cloud credentials and TLS keys), pivoting to other infrastructure, and achieving persistent backdoor access."
+      "impact": "An attacker can fully compromise the Kubernetes cluster \u2014 deploying malicious containers, exfiltrating secrets (including cloud credentials and TLS keys), pivoting to other infrastructure, and achieving persistent backdoor access."
     },
     {
       "id": "SS3-188",
@@ -10131,7 +10131,7 @@
         "rabbitmqadmin"
       ],
       "description": "The RabbitMQ management UI is accessible with default credentials (guest/guest). The management API returned cluster overview data confirming full administrative access.",
-      "impact": "An attacker gains full administrative control of the message broker — able to read, modify, and delete message queues, create new users, access published messages containing potentially sensitive data, and disrupt message-dependent applications."
+      "impact": "An attacker gains full administrative control of the message broker \u2014 able to read, modify, and delete message queues, create new users, access published messages containing potentially sensitive data, and disrupt message-dependent applications."
     },
     {
       "id": "SS3-197",
@@ -10420,7 +10420,7 @@
         "curl"
       ],
       "description": "The cloud instance metadata endpoint (169.254.169.254) is accessible from an internal web service, indicating potential SSRF vulnerability or misconfigured network controls.",
-      "impact": "An attacker can extract cloud IAM temporary credentials, enabling full compromise of the cloud environment — lateral movement to other cloud services, data exfiltration from S3/Blob/GCS, and privilege escalation."
+      "impact": "An attacker can extract cloud IAM temporary credentials, enabling full compromise of the cloud environment \u2014 lateral movement to other cloud services, data exfiltration from S3/Blob/GCS, and privilege escalation."
     },
     {
       "id": "SS3-202",
@@ -10643,7 +10643,7 @@
     },
     {
       "id": "SS3-205",
-      "title": "LDAP: Anonymous Enumeration — Users and Groups Discovered",
+      "title": "LDAP: Anonymous Enumeration \u2014 Users and Groups Discovered",
       "aliases": [
         "LDAP Anonymous Bind Enumeration",
         "LDAP User Enumeration"
@@ -10792,7 +10792,7 @@
         "metasploit"
       ],
       "description": "The host is vulnerable to CVE-2020-0796 (SMBGhost), a buffer overflow in SMBv3 compression handling in Windows 10 (1903/1909) and Server 2019. Detected via nmap smb-vuln-cve-2020-0796 NSE script.",
-      "impact": "An unauthenticated attacker can achieve remote code execution with SYSTEM privileges via a specially crafted SMBv3 compressed packet. This is a wormable vulnerability — no user interaction required."
+      "impact": "An unauthenticated attacker can achieve remote code execution with SYSTEM privileges via a specially crafted SMBv3 compressed packet. This is a wormable vulnerability \u2014 no user interaction required."
     },
     {
       "id": "SS3-207",
@@ -10816,7 +10816,7 @@
         87932
       ],
       "qualys_qids": [],
-      "owasp_web": "A07:2021 – Identification and Authentication Failures",
+      "owasp_web": "A07:2021 \u2013 Identification and Authentication Failures",
       "owasp_api": "",
       "nist_csf2": [
         "PR.AC-1",
@@ -10898,7 +10898,7 @@
       "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
       "nessus_plugin_ids": [],
       "qualys_qids": [],
-      "owasp_web": "A07:2021 – Identification and Authentication Failures",
+      "owasp_web": "A07:2021 \u2013 Identification and Authentication Failures",
       "owasp_api": "",
       "nist_csf2": [
         "PR.AC-7",
@@ -11009,6 +11009,68 @@
       "validation_tools": [
         "curl",
         "testssl"
+      ]
+    },
+    {
+      "id": "SS-070",
+      "title": "Unnecessary/Outdated Website Available",
+      "aliases": [
+        "Outdated Website Detected",
+        "Default Web Page Detected",
+        "Abandoned Website"
+      ],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "description": "The website shows indicators of being outdated, abandoned, or unnecessary, such as old copyright dates, under-construction messages, or default server landing pages.",
+      "impact": "Outdated websites may contain unpatched vulnerabilities, deprecated frameworks, or unnecessary attack surface that increases the organization's risk profile.",
+      "cwe": [
+        "CWE-1104"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [
+        11422
+      ],
+      "qualys_qids": [],
+      "owasp_web": "A05:2025 Security Misconfiguration",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-2"
+      ],
+      "nist_800_53": [
+        "CM-7"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [
+        "6.3.2"
+      ],
+      "iso_27001": [
+        "A.12.6.1"
+      ],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1595",
+          "tactic": "Reconnaissance",
+          "name": "Active Scanning"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Remove or decommission unnecessary websites. Update outdated content and frameworks. Replace default server pages with proper content or restrict access.",
+      "remediation_component": "Configuration",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "curl",
+        "browser"
       ]
     }
   ]

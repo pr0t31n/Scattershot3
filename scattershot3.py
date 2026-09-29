@@ -5882,6 +5882,103 @@ def probe_uncertain_and_nonstandard_ports(
                             affected=f"{ip}:{_port}",
                             output_file=str(_curl_path.relative_to(output_mgr.root)),
                         )
+                    # Phase G.4: outdated / unnecessary website detection
+                    _od_body = (_r.get("body") or "")
+                    _od_hdrs = (_r.get("headers") or "")
+                    _od_indicators = []
+                    _od_body_len = len(_od_body)
+                    # Skip SPA shells — minimal HTML with a JS app mount point
+                    _is_spa_shell = (
+                        _od_body_len < 4000
+                        and re.search(r'<div\s+id=["\'](?:app|root|__next|__nuxt)["\']', _od_body, re.IGNORECASE)
+                        and re.search(r'<script\b', _od_body, re.IGNORECASE)
+                    )
+                    if not _is_spa_shell:
+                        # 1. Copyright year > 2 years old (skip JS library footers)
+                        _od_copy_re = re.compile(
+                            r'(?:©|\b[Cc]opyright)\s*(?:©\s*)?(\d{4})'
+                        )
+                        # Strip <script>…</script> blocks to avoid JS library dates
+                        _od_body_noscript = re.sub(
+                            r'<script\b[^>]*>.*?</script>', '', _od_body,
+                            flags=re.DOTALL | re.IGNORECASE,
+                        )
+                        for _yr_m in _od_copy_re.finditer(_od_body_noscript):
+                            _yr_val = int(_yr_m.group(1))
+                            if 1990 <= _yr_val <= datetime.now().year - 2:
+                                _od_indicators.append(
+                                    f"Copyright year {_yr_val} (>{datetime.now().year - _yr_val} years old)"
+                                )
+                                break  # one copyright hit is enough
+                        # 2. Under-construction / placeholder phrases
+                        _od_construction = [
+                            r'\bunder\s+construction\b',
+                            r'\bcoming\s+soon\b',
+                            r'\bsite\s+maintenance\b',
+                            r'\bcheck\s+back\s+later\b',
+                            r'\blaunching\s+soon\b',
+                            r'\bbeing\s+updated\b',
+                            r'\bunder\s+development\b',
+                            r'\bparked\s+domain\b',
+                        ]
+                        for _cpat in _od_construction:
+                            if re.search(_cpat, _od_body, re.IGNORECASE):
+                                _od_indicators.append(
+                                    f"Page contains placeholder text matching '{_cpat.replace(chr(92)+'b','').strip()}'"
+                                )
+                        # 3. Default server / CMS pages
+                        #    "It works!" only counts on short pages (likely entire body)
+                        _od_defaults = [
+                            (r'Apache2?\s+.{0,30}Default\s+Page', 'Apache default page'),
+                            (r'Welcome\s+to\s+nginx', 'Nginx default page'),
+                            (r'IIS\s+Windows\s+Server', 'IIS default page'),
+                            (r'Plesk\s+Default\s+Page', 'Plesk default page'),
+                            (r'\byour\s+cPanel\b', 'cPanel default page'),
+                            (r'Hello\s+world!.*?WordPress', 'WordPress default page'),
+                            (r'Just\s+another\s+WordPress\s+site', 'WordPress default tagline'),
+                            (r'Congratulations.*?\byour\s+new\s+site\b', 'Default CMS page'),
+                            (r'Apache\s+HTTP\s+Server\s+Test\s+Page', 'Apache test page'),
+                        ]
+                        for _dpat, _dlabel in _od_defaults:
+                            if re.search(_dpat, _od_body, re.IGNORECASE):
+                                _od_indicators.append(_dlabel)
+                        # "It works!" — only on small pages where it's likely the whole body
+                        if _od_body_len < 2000 and re.search(r'\bIt\s+works!\s*', _od_body):
+                            _od_indicators.append('Apache "It works!" test page')
+                        # 4. Last-Modified header older than 2 years
+                        _od_lm = re.search(r'Last-Modified:\s*(.+)', _od_hdrs, re.IGNORECASE)
+                        if _od_lm:
+                            try:
+                                from email.utils import parsedate_to_datetime as _parsedate
+                                _od_lm_dt = _parsedate(_od_lm.group(1).strip())
+                                _od_age = (datetime.now(_od_lm_dt.tzinfo) - _od_lm_dt).days
+                                if _od_age > 730:
+                                    _od_indicators.append(
+                                        f"Last-Modified header is {_od_age} days old ({_od_lm.group(1).strip()})"
+                                    )
+                            except Exception:
+                                pass
+                    if _od_indicators:
+                        _od_ind_str = "; ".join(_od_indicators)
+                        output_mgr.log_finding(
+                            title="Unnecessary/Outdated Website Available",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=_r["cmd"], risk="INFO",
+                            description=(
+                                f"The website at {ip}:{_port} shows signs of being "
+                                f"outdated or unnecessary: {_od_ind_str}. Outdated "
+                                f"websites may contain unpatched vulnerabilities, use "
+                                f"deprecated frameworks, or expose unnecessary attack "
+                                f"surface."
+                            ),
+                            output=(
+                                "Indicators found:\n"
+                                + "\n".join(f"  - {_i}" for _i in _od_indicators)
+                            ),
+                            sources="scattershot3-curl-probe",
+                            affected=f"{ip}:{_port}",
+                            output_file=str(_curl_path.relative_to(output_mgr.root)),
+                        )
                 except OSError:
                     pass
                 break   # one successful probe per port
