@@ -9873,11 +9873,35 @@ def run_nuclei(
         _stderr = stderr_b.decode("utf-8", errors="replace")
         raw_output = _stdout + _stderr
 
-        # Detect nuclei startup failures (zero output + non-zero exit)
-        if proc.returncode != 0 and not _stdout.strip() and not jsonl_out.exists():
+        # Detect OOM crashes (Go runtime panic — affects nuclei, tlsx, etc.)
+        _OOM_SIGS = ("cannot allocate memory", "out of memory", "runtime: out of memory")
+        _nuclei_oom = proc.returncode != 0 and any(s in _stderr for s in _OOM_SIGS)
+
+        if _nuclei_oom:
+            _tprint(f"{Fore.RED}[!] Nuclei crashed (OOM, exit {proc.returncode}): "
+                    f"{_stderr[:200]}{Style.RESET_ALL}")
+            _vc.log(f"nuclei OOM crash ({scope}): exit {proc.returncode}", level="ERROR")
+            output_mgr.log_action_item(
+                item_type="nuclei_oom",
+                recommended_tool="nuclei",
+                target=", ".join(str(t) for t in targets[:10]),
+                ip=targets[0] if targets else "",
+                port=0,
+                title="Nuclei Out-of-Memory Crash — Re-Run Required",
+                description=(
+                    f"Nuclei ran out of memory scanning "
+                    f"{len(targets)} target(s) in {scope} scope. "
+                    "Re-run nuclei manually with reduced concurrency "
+                    "(-c 10), fewer templates (-severity high,critical), "
+                    "or on a host with more available RAM."
+                ),
+                source_finding="nuclei OOM",
+                priority="HIGH",
+            )
+        elif proc.returncode != 0 and not _stdout.strip() and not jsonl_out.exists():
             _tprint(f"{Fore.RED}[!] Nuclei failed (exit {proc.returncode}): "
                     f"{_stderr[:200]}{Style.RESET_ALL}")
-            _vc.log(f"nuclei failed ({scope}): exit {proc.returncode}", level="WARN")
+            _vc.log(f"nuclei failed ({scope}): exit {proc.returncode}", level="ERROR")
 
         # Log the invocation
         output_mgr.log_command(
