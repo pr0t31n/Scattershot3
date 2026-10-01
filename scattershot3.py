@@ -163,15 +163,27 @@ _SCAN_SEM           = _AdaptiveSemaphore(_SCAN_CONCURRENCY)
 _SUBPROCESS_MEM_LIMIT_BYTES = int(2 * 1024 ** 3)  # 2 GB per child process
 
 def _mem_limit_preexec():
-    """preexec_fn: cap each child's virtual address space to prevent OOM."""
+    """preexec_fn: set process group + cap virtual address space."""
     if sys.platform == "win32":
         return
+    os.setsid()
     try:
         import resource as _rlim
         _rlim.setrlimit(_rlim.RLIMIT_AS,
                         (_SUBPROCESS_MEM_LIMIT_BYTES, _SUBPROCESS_MEM_LIMIT_BYTES))
     except (AttributeError, ValueError, OSError):
         pass
+
+
+def _kill_proc_tree(proc):
+    """Kill the entire process group spawned by proc, not just the leader."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            _kill_proc_tree(proc)
+        except OSError:
+            pass
 
 # ── OOM watchdog ─────────────────────────────────────────────────────────────
 _tracked_procs: list = []
@@ -218,7 +230,7 @@ def _start_oom_watchdog(threshold_pct=90, interval=15):
                         pass
                 if biggest and biggest_rss > 100 * 1024 * 1024:
                     try:
-                        biggest.kill()
+                        _kill_proc_tree(biggest)
                     except OSError:
                         pass
             except Exception:
@@ -9845,7 +9857,7 @@ def run_nuclei(
         try:
             stdout_b, stderr_b = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            _kill_proc_tree(proc)
             stdout_b, stderr_b = proc.communicate()
             _tprint(f"{Fore.YELLOW}[!] Nuclei timed out after {timeout}s{Style.RESET_ALL}")
             _vc.log(f"nuclei timed out after {timeout}s — command: {' '.join(cmd)}", "WARNING")
@@ -10132,7 +10144,7 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
     _tprint(f"  {Fore.CYAN}[*] sslscan {ip}:{port}{Style.RESET_ALL}")
     try:
         # Use Popen + communicate() instead of _run() so that we can
-        # call proc.kill() on timeout.  _run(timeout=N) raises
+        # call _kill_proc_tree(proc) on timeout.  _run(timeout=N) raises
         # TimeoutExpired but does NOT kill the child — the process keeps running,
         # the future never resolves, and the ThreadPoolExecutor blocks forever.
         _started = datetime.now().astimezone()
@@ -10140,7 +10152,7 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
         try:
             stdout_b, stderr_b = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            _kill_proc_tree(proc)
             stdout_b, stderr_b = proc.communicate()   # drain pipes after kill
             raise                                      # re-raise for outer handler
         _ended = datetime.now().astimezone()
@@ -10545,7 +10557,7 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
     _tprint(f"  {Fore.CYAN}[*] testssl {ip}:{port}{Style.RESET_ALL}")
     try:
         # Use Popen + communicate() instead of _run() so that we can
-        # call proc.kill() on timeout.  _run(timeout=N) raises
+        # call _kill_proc_tree(proc) on timeout.  _run(timeout=N) raises
         # TimeoutExpired but does NOT kill the child — testssl keeps running,
         # the future never resolves, and the ThreadPoolExecutor blocks forever.
         _started = datetime.now().astimezone()
@@ -10553,7 +10565,7 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
         try:
             stdout_b, stderr_b = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            _kill_proc_tree(proc)
             stdout_b, stderr_b = proc.communicate()   # drain pipes after kill
             raise                                      # re-raise for outer handler
         _ended = datetime.now().astimezone()
@@ -13390,7 +13402,7 @@ def run_ssh_audit(
         out_b, err_b = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         try:
-            proc.kill()
+            _kill_proc_tree(proc)
         except Exception:
             pass
         output_mgr.log_error(
@@ -15860,7 +15872,7 @@ def run_snmpwalk(
         try:
             stdout_b, stderr_b = proc.communicate(timeout=timeout + 5)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            _kill_proc_tree(proc)
             stdout_b, stderr_b = proc.communicate()
             # Timeout is the expected negative result when brute-forcing
             # community strings — wrong string = no response = timeout.
@@ -16388,7 +16400,7 @@ def run_smb_null_session(
             try:
                 out_b, err_b = proc.communicate(timeout=30)
             except subprocess.TimeoutExpired:
-                proc.kill(); out_b, err_b = proc.communicate()
+                _kill_proc_tree(proc); out_b, err_b = proc.communicate()
                 out_path.write_text("(smbmap timed out)\n", encoding="utf-8")
                 _log_timeout_action(output_mgr, "smbmap", ip, port, hostname, 30)
                 return
@@ -16458,7 +16470,7 @@ def run_smb_null_session(
             try:
                 out_b, err_b = proc.communicate(timeout=15)
             except subprocess.TimeoutExpired:
-                proc.kill(); out_b, err_b = proc.communicate()
+                _kill_proc_tree(proc); out_b, err_b = proc.communicate()
                 _log_timeout_action(output_mgr, "rpcclient", ip, port, hostname, 15)
                 return
             raw  = out_b.decode("utf-8", errors="replace")
@@ -16515,7 +16527,7 @@ def run_rpc_null_session(
         try:
             out_b, err_b = proc.communicate(timeout=15)
         except subprocess.TimeoutExpired:
-            proc.kill(); out_b, err_b = proc.communicate()
+            _kill_proc_tree(proc); out_b, err_b = proc.communicate()
             _log_timeout_action(output_mgr, "rpcclient", ip, port, hostname, 15)
             return
         raw = out_b.decode("utf-8", errors="replace")
@@ -16840,7 +16852,7 @@ def _smb_smbclient_enum_share(
         try:
             out_b, err_b = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            proc.kill(); out_b, err_b = proc.communicate()
+            _kill_proc_tree(proc); out_b, err_b = proc.communicate()
             _log_timeout_action(output_mgr, "smbclient", ip, port, hostname, timeout)
         ls_raw = (out_b + err_b).decode("utf-8", errors="replace")
         ls_file.write_text(ls_raw, encoding="utf-8")
@@ -16890,7 +16902,7 @@ def _smb_smbclient_enum_share(
             try:
                 proc2.communicate(timeout=15)
             except subprocess.TimeoutExpired:
-                proc2.kill(); proc2.communicate()
+                _kill_proc_tree(proc2); proc2.communicate()
             content = Path(tmp_path).read_bytes() if Path(tmp_path).exists() else b""
             hits = _sens_scan(content[:_SENS_CONTENT_MAX]) if content else []
         except Exception:
@@ -17085,7 +17097,7 @@ def run_smbmap_with_creds(
         try:
             out_b, err_b = proc.communicate(timeout=60)
         except subprocess.TimeoutExpired:
-            proc.kill(); out_b, err_b = proc.communicate()
+            _kill_proc_tree(proc); out_b, err_b = proc.communicate()
             _log_timeout_action(output_mgr, "smbmap", ip, port, hostname, 60)
             return
         raw = out_b.decode("utf-8", errors="replace")
@@ -17154,7 +17166,7 @@ def run_enum4linux(
         try:
             out_b, err_b = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            proc.kill(); out_b, err_b = proc.communicate()
+            _kill_proc_tree(proc); out_b, err_b = proc.communicate()
             _log_timeout_action(output_mgr, "enum4linux", ip, 445, hostname, timeout)
 
         # enum4linux writes most of its useful output to stdout, but some
@@ -17423,7 +17435,7 @@ def run_adenum(
         try:
             out_b, err_b = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            proc.kill(); out_b, err_b = proc.communicate()
+            _kill_proc_tree(proc); out_b, err_b = proc.communicate()
             _log_timeout_action(output_mgr, "ADenum", ip, port, hostname, timeout)
             return
         raw = out_b.decode("utf-8", errors="replace")
@@ -19452,7 +19464,7 @@ def _trigger_smbmap_for_hash(
             try:
                 out_b, _ = proc.communicate(timeout=60)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                _kill_proc_tree(proc)
                 out_b, _ = proc.communicate()
                 if output_mgr:
                     _log_timeout_action(output_mgr, "smbmap", ip, port, "", 60)
@@ -19705,7 +19717,7 @@ def stop_responder(proc: "subprocess.Popen") -> None:
         try:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            _kill_proc_tree(proc)
             proc.wait()
         _tprint(
             f"{Fore.CYAN}[*] Responder stopped (PID {proc.pid}){Style.RESET_ALL}"
@@ -25488,7 +25500,7 @@ def run_ldapdomaindump(
                 output_file=_lddd_raw_rel,
             )
     except subprocess.TimeoutExpired:
-        proc.kill()
+        _kill_proc_tree(proc)
         _log_timeout_action(output_mgr, "ldapdomaindump", dc_ip, 389, hostname, timeout)
     except Exception as exc:
         _tprint(f"  {Fore.RED}[!] ldapdomaindump error: {exc}{Style.RESET_ALL}")
@@ -25544,7 +25556,7 @@ def run_kerbrute(
         else:
             _tprint(f"  {Fore.YELLOW}[~] kerbrute: no valid users found{Style.RESET_ALL}")
     except subprocess.TimeoutExpired:
-        proc.kill()
+        _kill_proc_tree(proc)
         _log_timeout_action(output_mgr, "kerbrute", dc_ip, 88, hostname, timeout)
     except Exception as exc:
         _tprint(f"  {Fore.RED}[!] kerbrute error: {exc}{Style.RESET_ALL}")
@@ -25594,7 +25606,7 @@ def run_bloodhound_python(
                 output_file=str(zip_files[0]) if zip_files else str(json_files[0]) if json_files else "",
             )
     except subprocess.TimeoutExpired:
-        proc.kill()
+        _kill_proc_tree(proc)
         _log_timeout_action(output_mgr, "bloodhound-python", dc_ip, 389, hostname, timeout)
     except Exception as exc:
         _tprint(f"  {Fore.RED}[!] bloodhound-python error: {exc}{Style.RESET_ALL}")
@@ -25651,7 +25663,7 @@ def _run_odat(ip, port, output_mgr, odat_path, hostname=None, username=None, pas
                 output_file=str(out_file),
             )
     except subprocess.TimeoutExpired:
-        proc.kill()
+        _kill_proc_tree(proc)
         _log_timeout_action(output_mgr, "odat", ip, port, hostname, timeout)
     except Exception as exc:
         _tprint(f"  {Fore.RED}[!] odat: {exc}{Style.RESET_ALL}")
@@ -25686,7 +25698,7 @@ def _run_msdat(ip, port, output_mgr, msdat_path, hostname=None, username=None, p
                 output_file=str(out_file),
             )
     except subprocess.TimeoutExpired:
-        proc.kill()
+        _kill_proc_tree(proc)
         _log_timeout_action(output_mgr, "msdat", ip, port, hostname, timeout)
     except Exception as exc:
         _tprint(f"  {Fore.RED}[!] msdat: {exc}{Style.RESET_ALL}")
@@ -25722,7 +25734,7 @@ def _run_enumdb(ip, port, db_type, output_mgr, enumdb_path, hostname=None, usern
                 output_file=str(out_file),
             )
     except subprocess.TimeoutExpired:
-        proc.kill()
+        _kill_proc_tree(proc)
         _log_timeout_action(output_mgr, "enumdb", ip, port, hostname, timeout)
     except Exception as exc:
         _tprint(f"  {Fore.RED}[!] enumdb: {exc}{Style.RESET_ALL}")
@@ -26174,7 +26186,7 @@ def run_hydra_brute(
                     if cred_store:
                         cred_store.add(user, pwd, f"hydra {_effective_svc} @ {ip}:{port}", ip=ip)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            _kill_proc_tree(proc)
             _log_timeout_action(output_mgr, "hydra", ip, port, hostname, timeout)
         except Exception as exc:
             _tprint(f"  {Fore.RED}[!] Hydra {ip}:{port}: {exc}{Style.RESET_ALL}")
@@ -26266,7 +26278,7 @@ def run_sqlmap(
                 )
                 _tprint(f"  {Fore.RED}[!] sqlmap: SQLi FOUND in {url}{Style.RESET_ALL}")
         except subprocess.TimeoutExpired:
-            proc.kill()
+            _kill_proc_tree(proc)
             _log_timeout_action(output_mgr, "sqlmap", url, 0, "", timeout, cmd=" ".join(cmd))
         except Exception as exc:
             _tprint(f"  {Fore.RED}[!] sqlmap: {exc}{Style.RESET_ALL}")
@@ -26347,7 +26359,7 @@ def run_xsstrike(
                 )
                 _tprint(f"  {Fore.RED}[!] XSStrike: XSS FOUND in {url}{Style.RESET_ALL}")
         except subprocess.TimeoutExpired:
-            proc.kill()
+            _kill_proc_tree(proc)
             _log_timeout_action(output_mgr, "XSStrike", url, 0, "", timeout, cmd=" ".join(str(c) for c in cmd))
         except Exception as exc:
             _tprint(f"  {Fore.RED}[!] XSStrike: {exc}{Style.RESET_ALL}")
@@ -26481,7 +26493,7 @@ def run_zap_dast(
             try:
                 zap_proc.wait(timeout=15)
             except Exception:
-                zap_proc.kill()
+                zap__kill_proc_tree(proc)
 
 
 def scan_scope(
