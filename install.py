@@ -608,8 +608,13 @@ def install_kerbrute():
 
 def install_odat():
     """Clone ODAT (Oracle Database Attack Tool) and install Python deps."""
-    if shutil.which("odat") or os.path.isfile("/opt/odat/odat.py"):
-        info("odat already installed.")
+    already = shutil.which("odat") or os.path.isfile("/opt/odat/odat.py")
+    if already and os.path.isdir("/opt/odat"):
+        info("odat already installed — pulling latest…")
+        git_clone_or_update("https://github.com/quentinhardy/odat.git", "/opt/odat")
+        return
+    elif already:
+        info("odat already installed (not a git clone).")
         return
     git_clone_or_update("https://github.com/quentinhardy/odat.git", "/opt/odat")
     info("Installing odat Python dependencies …")
@@ -623,8 +628,13 @@ def install_odat():
 
 def install_msdat():
     """Clone MSDAT (Microsoft SQL Database Attack Tool) and install Python deps."""
-    if shutil.which("msdat") or os.path.isfile("/opt/msdat/msdat.py"):
-        info("msdat already installed.")
+    already = shutil.which("msdat") or os.path.isfile("/opt/msdat/msdat.py")
+    if already and os.path.isdir("/opt/msdat"):
+        info("msdat already installed — pulling latest…")
+        git_clone_or_update("https://github.com/quentinhardy/msdat.git", "/opt/msdat")
+        return
+    elif already:
+        info("msdat already installed (not a git clone).")
         return
     git_clone_or_update("https://github.com/quentinhardy/msdat.git", "/opt/msdat")
     info("Installing msdat Python dependencies …")
@@ -639,7 +649,8 @@ def install_msdat():
 def install_xsstrike():
     """Clone XSStrike and install Python deps."""
     if os.path.isdir("/opt/XSStrike"):
-        info("XSStrike already installed.")
+        info("XSStrike already installed — pulling latest…")
+        git_clone_or_update("https://github.com/s0md3v/XSStrike.git", "/opt/XSStrike")
         return
     git_clone_or_update("https://github.com/s0md3v/XSStrike.git", "/opt/XSStrike")
     info("Installing XSStrike Python dependencies …")
@@ -649,8 +660,12 @@ def install_xsstrike():
 
 def install_enumdb():
     """Clone enumdb and install via pip from the clone (PyPI package removed)."""
-    if shutil.which("enumdb"):
-        info("enumdb already installed.")
+    if shutil.which("enumdb") and os.path.isdir("/opt/enumdb"):
+        info("enumdb already installed — pulling latest…")
+        git_clone_or_update("https://github.com/m8r0wn/enumdb.git", "/opt/enumdb")
+        return
+    elif shutil.which("enumdb"):
+        info("enumdb already installed (not a git clone).")
         return
     git_clone_or_update("https://github.com/m8r0wn/enumdb.git", "/opt/enumdb")
     info("Installing enumdb from git clone …")
