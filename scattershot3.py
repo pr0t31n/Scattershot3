@@ -895,6 +895,14 @@ def _normalize_finding_title(title: str) -> str:
         t = pat.sub(repl, t)
     return t
 
+
+def _clean_url(scheme: str, host: str, port: "int | str", path: str = "/") -> str:
+    """Build a URL, omitting the port when it is the scheme default (80/443)."""
+    port = int(port)
+    if (scheme == "https" and port == 443) or (scheme == "http" and port == 80):
+        return f"{scheme}://{host}{path}"
+    return f"{scheme}://{host}:{port}{path}"
+
 # ─────────────────────────────────────────────
 # Third-party dependency bootstrap
 # ─────────────────────────────────────────────
@@ -4702,7 +4710,7 @@ def _probe_http_curl(ip: str, port: int, scheme: str,
 
     Returns a populated result dict on success, or None on failure.
     """
-    url = f"{scheme}://{ip}:{port}/"
+    url = _clean_url(scheme, ip, port)
     curl = shutil.which("curl")
     if not curl:
         return None
@@ -4802,7 +4810,7 @@ def probe_http(ip: str, port: int, timeout: int = 4) -> dict:
     }
 
     for scheme in ("https", "http"):
-        url = f"{scheme}://{ip}:{port}/"
+        url = _clean_url(scheme, ip, port)
         try:
             r = _HTTP_SESSION.get(
                 url, timeout=timeout, verify=False, allow_redirects=True,
@@ -5729,7 +5737,7 @@ def _curl_probe_web(ip: str, port: int, scheme: str = "http",
     if (scheme == "https" and port == 443) or (scheme == "http" and port == 80):
         _url = f"{scheme}://{ip}/"
     else:
-        _url = f"{scheme}://{ip}:{port}/"
+        _url = _clean_url(scheme, ip, port)
     _curl = shutil.which("curl")
     if _curl:
         # Capture status, headers, body, and timing in one shot.
@@ -7899,10 +7907,7 @@ def _port_scan_worker(
                         _http_file = _http_dir / f"{port}_http.txt"
                         _http_scheme = (web_result.get("scheme")
                                         or ("https" if port_is_tls(port, web_result) else "http"))
-                        if (_http_scheme == "https" and port == 443) or (_http_scheme == "http" and port == 80):
-                            _http_url = f"{_http_scheme}://{ip}/"
-                        else:
-                            _http_url = f"{_http_scheme}://{ip}:{port}/"
+                        _http_url = _clean_url(_http_scheme, ip, port)
                         _http_lines = [
                             f"URL       : {_http_url}",
                             f"Status    : {web_result.get('status_code', 'unknown')}",
@@ -14592,7 +14597,7 @@ def download_web_files(
 
     Returns a list of absolute local file paths that were written.
     """
-    base_url = f"{scheme}://{ip}:{port}"
+    base_url = _clean_url(scheme, ip, port, "")
     save_dir = output_mgr.web_path(ip, port)
 
     host_hdr = hostname or ip
@@ -17490,7 +17495,7 @@ def check_tomcat_manager(
         ("/host-manager/html", "Tomcat Virtual Host Manager"),
     ]
 
-    base = f"{scheme}://{ip}:{port}"
+    base = _clean_url(scheme, ip, port, "")
     host_hdr = hostname or ip
 
     # Save all Tomcat-specific files under web/<ip>_<port>/tomcat/
@@ -17735,7 +17740,7 @@ def check_default_webpage(
     When a match is found the function also attempts to extract the server
     software version and OS from the page body and Server header.
     """
-    url = f"{scheme}://{ip}:{port}/"
+    url = _clean_url(scheme, ip, port)
     try:
         resp = _HTTP_SESSION.get(
             url, timeout=timeout, verify=False, allow_redirects=True,
@@ -17915,7 +17920,7 @@ def run_shcheck(
     HTTP response headers.  Missing headers are logged as LOW or MEDIUM findings.
     HSTS (Strict-Transport-Security) absence is MEDIUM; other headers are LOW.
     """
-    url = f"{scheme}://{ip}:{port}/"
+    url = _clean_url(scheme, ip, port)
     out_dir = output_mgr.web_path(ip, port)
     safe_ip   = ip.replace(".", "_")
     out_file  = out_dir / f"{safe_ip}_{port}_shcheck.txt"
@@ -18172,7 +18177,7 @@ def run_gobuster(
         )
         return
 
-    url = f"{scheme}://{ip}:{port}/"
+    url = _clean_url(scheme, ip, port)
     out_dir = output_mgr.web_path(ip, port)
     safe_ip  = ip.replace(".", "_")
     out_file = out_dir / f"{safe_ip}_{port}_gobuster.txt"
@@ -18304,7 +18309,7 @@ def run_webanalyze(
     software inventory.  Returns True if WordPress was detected (so the caller
     can trigger WPScan), False otherwise.
     """
-    url = f"{scheme}://{ip}:{port}/"
+    url = _clean_url(scheme, ip, port)
     out_dir = output_mgr.web_path(ip, port)
     safe_ip  = ip.replace(".", "_")
     out_file = out_dir / f"{safe_ip}_{port}_webanalyze.txt"
@@ -18453,7 +18458,7 @@ def run_wpscan(
     - Plugin vulnerabilities         → HIGH
     - User enumeration results       → MEDIUM
     """
-    url = f"{scheme}://{ip}:{port}/"
+    url = _clean_url(scheme, ip, port)
     out_dir = output_mgr.web_path(ip, port)
     safe_ip  = ip.replace(".", "_")
     out_file = out_dir / f"{safe_ip}_{port}_wpscan.json"
@@ -22855,7 +22860,7 @@ def check_esxi_fingerprint(
             + f"Page body excerpt:\n{resp_text[:500]}"
         ),
         sources="esxi-fingerprint",
-        affected=f"{scheme}://{ip}:{port}/",
+        affected=_clean_url(scheme, ip, port),
         output_file=_esxi_rel,
     )
 
@@ -24525,7 +24530,7 @@ def run_jenkins_unauth_check(
     ts_safe  = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_file = out_dir / f"{ip.replace('.', '_')}_{port}_jenkins_{ts_safe}.txt"
 
-    base_url = f"{scheme}://{ip}:{port}"
+    base_url = _clean_url(scheme, ip, port, "")
     _tprint(f"  {Fore.CYAN}[*] Jenkins unauth check: {base_url}{Style.RESET_ALL}")
     lines = [
         f"Jenkins unauth check: {base_url}",
@@ -25921,7 +25926,7 @@ def _check_hydra_http_target(ip: str, port: int,
     """
     import urllib.request
     import ssl
-    url = f"{scheme}://{ip}:{port}/"
+    url = _clean_url(scheme, ip, port)
     try:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
@@ -25981,7 +25986,7 @@ def _is_redirect_out_of_scope(ip: str, port: int, scheme: str,
     import urllib.request
     import ssl
     import socket
-    url = f"{scheme}://{ip}:{port}/"
+    url = _clean_url(scheme, ip, port)
     try:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
@@ -26977,7 +26982,7 @@ def scan_scope(
                 port   = svc.get("port", 80)
                 scheme = (svc.get("scheme")
                           or ("https" if port_is_tls(port, svc) else "http"))
-                web_url_targets.append(f"{scheme}://{ip}:{port}/")
+                web_url_targets.append(_clean_url(scheme, ip, port))
 
         if web_url_targets:
             print(
