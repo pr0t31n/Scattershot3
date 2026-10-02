@@ -127,14 +127,14 @@ def zypper_install(packages):
 # System packages
 # ---------------------------------------------------------------------------
 APT_PACKAGES = [
-    "nmap", "sslscan", "wpscan", "nikto",
+    "nmap", "sslscan", "wpscan",
     "enum4linux", "enum4linux-ng",
     "samba-common-bin", "smbclient", "smbmap",
     "snmp", "snmp-mibs-downloader",
     "nfs-common", "ipmitool",
     "nbtscan", "avahi-utils", "dnsutils",
     "hydra", "exploitdb", "sqlmap",
-    "ssh-audit", "ike-scan",
+    "ssh-audit", "ike-scan", "ntp",
     # OWASP ZAP for the web-DAST phase
     "zaproxy",
     # Headless browser + driver for the screenshot phase
@@ -144,7 +144,7 @@ APT_PACKAGES = [
     "libsasl2-dev", "libldap2-dev", "libkrb5-dev", "libssl-dev",
 ]
 DNF_PACKAGES = [
-    "nmap", "sslscan", "nikto",
+    "nmap", "sslscan",
     "samba-common-tools", "samba-client", "smbmap",
     "net-snmp-utils",
     "nfs-utils", "ipmitool",
@@ -159,7 +159,7 @@ DNF_PACKAGES = [
     "epel-release",
 ]
 ZYPPER_PACKAGES = [
-    "nmap", "sslscan", "nikto",
+    "nmap", "sslscan",
     "samba", "samba-client",
     "net-snmp",
     "nfs-client", "ipmitool",
@@ -171,7 +171,7 @@ ZYPPER_PACKAGES = [
     "openssl-devel",
 ]
 BREW_PACKAGES = [
-    "nmap", "sslscan", "nikto", "hydra", "sqlmap",
+    "nmap", "sslscan", "hydra", "sqlmap",
     "snmp", "git", "ipmitool", "samba",
     "ssh-audit", "ike-scan", "exploitdb",
     "testssl",
@@ -301,14 +301,12 @@ def install_pip():
 # ---------------------------------------------------------------------------
 GO_TOOLS = [
     ("github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",  "nuclei"),
-    ("github.com/projectdiscovery/httpx/cmd/httpx@latest",        "httpx"),
     ("github.com/rverton/webanalyze/cmd/webanalyze@latest",       "webanalyze"),
     ("github.com/OJ/gobuster/v3@latest",                          "gobuster"),
     ("github.com/ropnop/kerbrute@latest",                          "kerbrute"),
 ]
 
 OFFLINE_BUNDLE_URLS = {
-    "httpx":       "https://raw.githubusercontent.com/pr0t31n/OfflineInstallers/main/httpx_offline_kali.tar.gz",
     "webanalyze":  "https://raw.githubusercontent.com/pr0t31n/OfflineInstallers/main/webanalyze_offline_kali.tar.gz",
 }
 
@@ -838,7 +836,7 @@ def install_symlinks():
 VERIFY_TOOLS = [
     "nmap", "sslscan", "nuclei", "gobuster", "wpscan",
     "hydra", "enum4linux", "rpcclient", "smbmap", "smbclient",
-    "snmpwalk", "searchsploit", "nikto", "httpx",
+    "snmpwalk", "searchsploit",
     "showmount", "ipmitool", "testssl.sh", "rustscan",
     "msfconsole", "nbtscan", "kerbrute", "sqlmap",
     "ike-scan",
