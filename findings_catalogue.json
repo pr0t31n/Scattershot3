@@ -92,7 +92,7 @@
         "CWE-200"
       ],
       "description": "An open TCP/UDP port was detected on a live host. The service listening on the port will be probed for version information and vulnerabilities.",
-      "impact": "",
+      "impact": "Each discovered open port represents a network service accessible to attackers. Identifying all open ports is a prerequisite for targeted service exploitation and provides the baseline for vulnerability assessment.",
       "_x_severity": "INFO",
       "_x_category": "Port Scan",
       "_x_remediation": "Review all open ports and close any that are not required for business operations.",
@@ -4827,7 +4827,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "A web page or HTTP service was identified on a non-standard port or host during service enumeration. The URL, title, status code, and response headers are recorded in the finding evidence for subsequent web application testing phases. This finding documents the presence of a web-accessible service for the engagement scope.",
-      "impact": "",
+      "impact": "Identified web pages confirm active web content and reveal application structure, response patterns, and technology indicators. This information guides targeted testing of discovered endpoints and functionality.",
       "_x_severity": "INFO",
       "_x_category": "Web Enumeration",
       "_x_remediation": "Review all web services exposed on the host and verify they are authorised and required. Remove or restrict access to any web interfaces that are not required for business operations.",
@@ -5206,7 +5206,7 @@
         "CWE-311"
       ],
       "description": "A web application or service is served over unencrypted HTTP. All data transmitted between the client and server including session cookies, form data, and credentials is transmitted in plaintext and can be intercepted by any network-positioned observer. Without HTTPS, the service is also susceptible to SSL stripping and man-in-the-middle content injection attacks.",
-      "impact": "",
+      "impact": "HTTP services transmit all data in plaintext, allowing any attacker with network access to passively intercept credentials, session tokens, API keys, and business data. Active MITM attackers can also inject malicious content, redirect authentication flows, and modify transactions in transit.",
       "_x_severity": "MEDIUM",
       "_x_category": "HTTP/HTTPS",
       "_x_remediation": "Migrate the service to HTTPS with a valid TLS certificate. Configure HTTP to HTTPS redirection. Set the Strict-Transport-Security (HSTS) header with a long max-age value. Obtain a certificate from Let's Encrypt (free) or a commercial CA.",
@@ -5376,7 +5376,7 @@
         "CWE-326"
       ],
       "description": "The server is susceptible to the BEAST attack (Browser Exploit Against SSL/TLS, CVE-2011-3389). BEAST exploits a CBC mode initialisation vector (IV) predictability vulnerability in TLS 1.0 and earlier, allowing a man-in-the-middle attacker who can inject chosen plaintext to decrypt CBC-encrypted session data. While the attack requires a network-adjacent attacker and active JavaScript injection in the victim's browser, TLS 1.0 should not be used in modern deployments.",
-      "impact": "",
+      "impact": "BEAST (Browser Exploit Against SSL/TLS) exploits a vulnerability in TLS 1.0's CBC-mode cipher initialization to decrypt HTTPS cookies and authentication tokens. An attacker with network access can inject chosen plaintext to recover session secrets, enabling session hijacking.",
       "_x_severity": "MEDIUM",
       "_x_category": "SSL/TLS",
       "_x_remediation": "Disable TLS 1.0 and SSLv3 entirely. Enable TLS 1.2 and TLS 1.3. Prioritise AEAD cipher suites (AES-GCM, ChaCha20-Poly1305) which are not susceptible to BEAST. Modern TLS 1.2 with RC4 elimination and GCM prioritisation eliminates the BEAST attack surface.",
@@ -5432,7 +5432,7 @@
         "CWE-326"
       ],
       "description": "The server supports CBC mode cipher suites with HMAC-SHA1 or HMAC-MD5, making it potentially susceptible to the LUCKY13 timing attack (CVE-2013-0169). LUCKY13 is a padding oracle attack against CBC-mode TLS that allows an attacker with precise network timing measurements to decrypt recorded TLS session data. The attack requires approximately 2^23 oracle queries per 16 bytes of plaintext decrypted and is primarily a theoretical concern but indicates use of non-AEAD cipher suites.",
-      "impact": "",
+      "impact": "LUCKY13 (CVE-2013-0169) is a timing side-channel attack against CBC-mode cipher suites in TLS. An attacker with network-level access can recover plaintext from encrypted sessions by measuring processing time differences.",
       "_x_severity": "MEDIUM",
       "_x_category": "SSL/TLS",
       "_x_remediation": "Prioritise and restrict TLS cipher suites to AEAD algorithms (AES-GCM, ChaCha20-Poly1305) which are immune to CBC padding oracle attacks. Disable all CBC mode cipher suites. Enable TLS 1.3 which exclusively uses AEAD ciphers.",
@@ -5488,7 +5488,7 @@
         "CWE-326"
       ],
       "description": "The server supports cipher suites using 64-bit block ciphers (Triple-DES/3DES or Blowfish), making it susceptible to the SWEET32 birthday attack (CVE-2016-2183). After approximately 2^32 blocks (about 32 GB of traffic), an attacker capturing a long-lived TLS session can exploit birthday bound collisions in the CBC mode to recover short, repeated plaintext segments such as HTTP cookies. 3DES-based cipher suites (TLS_RSA_WITH_3DES_EDE_CBC_SHA) should be considered deprecated.",
-      "impact": "",
+      "impact": "SWEET32 exploits the birthday bound weakness in 64-bit block ciphers (3DES, Blowfish) used in TLS. After capturing approximately 32GB of ciphertext from a long-lived session, an attacker can recover plaintext blocks, potentially exposing session cookies and authentication tokens.",
       "_x_severity": "MEDIUM",
       "_x_category": "SSL/TLS",
       "_x_remediation": "Disable all 64-bit block cipher suites including 3DES (TRIPLE-DES, 3DES-EDE-CBC-SHA) and Blowfish. Ensure the server's cipher list does not include any cipher containing DES or 3DES. Enable only AES-128 and AES-256 based ciphers with GCM mode.",
@@ -5544,7 +5544,7 @@
         "CWE-297"
       ],
       "description": "The TLS server does not present the full certificate chain during the TLS handshake, omitting one or more intermediate CA certificates. Clients that do not have the intermediate certificate pre-cached will be unable to build a trusted chain to the root CA and will display a certificate error. This indicates a misconfiguration in the server's TLS certificate installation. Some strict clients and mobile browsers do not perform intermediate certificate fetching (AIA chasing) and will fail validation.",
-      "impact": "",
+      "impact": "An incomplete certificate chain prevents clients from validating the certificate's trust path. Some clients may reject the connection outright, while others silently proceed without full validation, creating inconsistent security posture across the user base.",
       "_x_severity": "MEDIUM",
       "_x_category": "SSL/TLS",
       "_x_remediation": "Reconfigure the TLS server to present the full certificate chain including all required intermediate CA certificates. Obtain the intermediate certificates from the issuing CA and concatenate them with the server certificate in the correct order (leaf first, then intermediates). Verify with: openssl s_client -connect <host>:443 -showcerts.",
@@ -5598,7 +5598,7 @@
         "CWE-298"
       ],
       "description": "The TLS certificate has a validity period exceeding 398 days (approximately 13 months). Since September 2020, Apple, Google, and Mozilla enforce a maximum certificate validity of 398 days, and certificates with longer lifetimes will be rejected by current versions of Safari, Chrome, and Firefox. Longer validity periods also increase the exposure window if a private key is compromised, as the certificate cannot be superseded until it expires or is revoked.",
-      "impact": "",
+      "impact": "Long-lived certificates increase the window of exposure if the private key is compromised. Industry best practice limits certificate lifetime to reduce the impact of key compromise and ensure regular rotation of cryptographic material.",
       "_x_severity": "LOW",
       "_x_category": "SSL/TLS",
       "_x_remediation": "Replace the certificate with one having a validity period of 398 days or less. Configure automated certificate renewal (ACME/Let's Encrypt or vendor auto-renewal) to ensure certificates are routinely replaced before expiry. For new certificates, request 90-day validity where possible.",
@@ -5652,7 +5652,7 @@
         "CWE-297"
       ],
       "description": "The TLS certificate does not contain a Subject Alternative Name (SAN) extension. Since 2017, all major browsers require a SAN to be present and have deprecated reliance on the Common Name (CN) field for hostname validation. Certificates without a SAN will cause certificate validation errors in Chrome, Firefox, and Safari for any hostname validation, even if the CN matches. This is a certificate issuance and lifecycle management deficiency.",
-      "impact": "",
+      "impact": "A certificate without Subject Alternative Names (SAN) relies solely on the Common Name field for hostname validation. Modern browsers require SAN entries and may reject CN-only certificates, causing service interruptions and security warnings.",
       "_x_severity": "LOW",
       "_x_category": "SSL/TLS",
       "_x_remediation": "Replace the certificate with one that includes a valid Subject Alternative Name (SAN) extension containing the intended hostname(s). All modern CAs issue certificates with SAN by default. If using an internal CA, update the certificate template to include the SAN extension.",
@@ -5706,7 +5706,7 @@
         "CWE-334"
       ],
       "description": "The TLS certificate serial number has low entropy, suggesting it was generated with a non-random or predictable serial number algorithm. CA/Browser Forum Baseline Requirements (Section 7.1) require that certificate serial numbers contain at least 64 bits of unpredictable entropy. Low-entropy serial numbers may indicate an outdated certificate authority or CA software configuration, and in conjunction with other weaknesses can facilitate certificate collision or impersonation attacks.",
-      "impact": "",
+      "impact": "Low entropy in certificate serial numbers indicates weak random number generation in the issuing CA's infrastructure. This can enable serial number prediction attacks that facilitate certificate forgery.",
       "_x_severity": "INFO",
       "_x_category": "SSL/TLS",
       "_x_remediation": "Replace the certificate if issued by an internal CA with an outdated serial number generation algorithm. Update the internal CA software or configuration to generate serial numbers with at least 64 bits of CSPRNG-sourced entropy. For externally issued certificates, verify the CA is CA/B Forum compliant.",
@@ -5759,7 +5759,7 @@
         "CWE-327"
       ],
       "description": "The TLS certificate uses a weak signature algorithm or public key. This includes SHA-1 signed certificates (deprecated since 2017), RSA keys shorter than 2048 bits, DSA keys shorter than 2048 bits, or Elliptic Curve keys shorter than 224 bits. Certificates signed with SHA-1 are vulnerable to chosen-prefix collision attacks (demonstrated by SHAttered). Certificates with short RSA keys are vulnerable to factorisation attacks given current computational resources.",
-      "impact": "",
+      "impact": "Certificates signed with weak algorithms (SHA-1, MD5) are vulnerable to collision attacks that allow an attacker to forge a certificate with the same signature, enabling man-in-the-middle attacks that bypass certificate validation entirely.",
       "_x_severity": "MEDIUM",
       "_x_category": "SSL/TLS",
       "_x_remediation": "Replace the certificate with one using SHA-256 (or stronger) as the signature algorithm and at minimum RSA-2048 or ECDSA P-256 for the public key. Verify the replacement certificate: openssl x509 -in cert.pem -text | grep 'Signature Algorithm'.",
@@ -5814,7 +5814,7 @@
         "CWE-613"
       ],
       "description": "The TLS server allows session resumption with a session ticket lifetime or session cache timeout exceeding recommended limits (typically more than 24 hours for session tickets or more than 10 hours for session IDs). Long-lived TLS sessions extend the window during which a stolen session ticket or cached session key can be replayed by an attacker to resume a session without re-authenticating. This also limits the effectiveness of forward secrecy when session tickets are encrypted with a long-lived key.",
-      "impact": "",
+      "impact": "Excessively long TLS session lifetimes increase the window for session resumption attacks and reduce the effectiveness of forward secrecy. Compromised session tickets remain valid for the entire session duration.",
       "_x_severity": "LOW",
       "_x_category": "SSL/TLS",
       "_x_remediation": "Reduce TLS session ticket lifetime to a maximum of 24 hours. Rotate TLS session ticket encryption keys regularly (every 6-12 hours). Set the session cache timeout to a reasonable value. On nginx: ssl_session_timeout 1h; ssl_session_ticket_key rotation should be automated.",
@@ -5868,7 +5868,7 @@
         "CWE-757"
       ],
       "description": "The TLS server does not enforce server-side cipher suite ordering, instead accepting the client's preferred cipher suite. Without server-side cipher preference (SSLHonorCipherOrder), a client can negotiate a weak or deprecated cipher suite even if stronger ciphers are available. This allows a downgrade by a malicious client or a MITM that manipulates ClientHello cipher preferences. Server-side ordering ensures the strongest mutually supported cipher is always selected.",
-      "impact": "",
+      "impact": "Without server-enforced cipher order, the client's cipher preference is used, which may select weaker ciphers over stronger alternatives. An attacker can manipulate the client to negotiate weak ciphers through downgrade attacks.",
       "_x_severity": "MEDIUM",
       "_x_category": "SSL/TLS",
       "_x_remediation": "Enable server-side cipher suite ordering. On Apache: SSLHonorCipherOrder On. On nginx: ssl_prefer_server_ciphers on. Define a strong cipher list that places AEAD ciphers (ECDHE+AESGCM, ECDHE+CHACHA20) first and excludes weak ciphers entirely.",
@@ -5925,7 +5925,7 @@
         "CWE-757"
       ],
       "description": "The TLS server supports one or more obsolete cipher suites that have been removed from TLS 1.3 and marked as prohibited or deprecated by RFC 8996 and NIST SP 800-52r2. Obsolete cipher suites include those using NULL encryption, EXPORT key exchange, RC4, MD5 MACs, anonymous DH (aNULL/eNULL), or IDEA. Support for these ciphers indicates the server has not been hardened against known cryptographic attacks and may be negotiating weak encryption with vulnerable or misconfigured clients.",
-      "impact": "",
+      "impact": "Obsolete cipher suites such as RC4 and CBC-mode ciphers are vulnerable to known cryptographic attacks including CVE-2013-2566 (RC4 key stream bias) and CVE-2015-2808 (Bar Mitzvah attack). An attacker performing passive traffic capture can recover plaintext from sessions negotiated with these ciphers, compromising the confidentiality of all transmitted data including credentials and session tokens.",
       "_x_severity": "HIGH",
       "_x_category": "SSL/TLS",
       "_x_remediation": "Audit and update the server's cipher suite configuration. Remove all NULL, EXPORT, RC4, MD5, anon, IDEA, and SEED ciphers. Use a tested cipher string such as the Mozilla TLS configuration generator (ssl-config.mozilla.org) set to 'Intermediate' or 'Modern'. Verify the final cipher list with: openssl s_client -connect <host>:443.",
@@ -5984,7 +5984,7 @@
         "CWE-126"
       ],
       "description": "The target server is confirmed vulnerable to Heartbleed (CVE-2014-0160). The OpenSSL heartbeat extension does not properly validate the length field in TLS heartbeat requests, allowing an unauthenticated attacker to read up to 64 KB of server process memory per request. Repeated exploitation can expose TLS private keys, session tokens, plaintext credentials, and other sensitive in-memory data without leaving log entries. This vulnerability is distinct from SS3-010 (which covers testssl detection) — this entry is raised when the Scattershot3 Heartbleed probe module independently confirms the vulnerability.",
-      "impact": "",
+      "impact": "Heartbleed (CVE-2014-0160) is a critical memory disclosure vulnerability in OpenSSL that allows an attacker to read up to 64KB of server memory per request without authentication or logging. Leaked memory routinely contains private keys, session tokens, and user credentials, enabling complete compromise of the affected server.",
       "_x_severity": "CRITICAL",
       "_x_category": "SSL/TLS",
       "_x_remediation": "Upgrade OpenSSL to version 1.0.1g or later (or 1.0.2 branch). Revoke and replace the server's TLS certificate and private key immediately — the private key must be assumed compromised. Invalidate all active user sessions. Reissue any client certificates if a client PKI is in use.",
@@ -6211,7 +6211,7 @@
         "CWE-200"
       ],
       "description": "A specific software version was detected on the target host via service banner, HTTP header, or application response fingerprinting. The detected version is recorded for CVE correlation, EOL status assessment, and public exploit research. Software version disclosure aids an attacker in selecting targeted exploit tooling without active exploitation.",
-      "impact": "",
+      "impact": "Disclosed software versions allow an attacker to search vulnerability databases for known CVEs affecting that specific version, reducing the effort required for targeted exploitation. Version information also reveals the organization's patching cadence and maintenance practices.",
       "_x_severity": "INFO",
       "_x_category": "Host Information",
       "_x_remediation": "This is an informational finding. Cross-reference the detected version against the NVD and vendor security bulletins for known vulnerabilities. Suppress version information from service banners and HTTP headers where possible to reduce information exposure.",
@@ -6687,7 +6687,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "",
-      "impact": "",
+      "impact": "Unencrypted protocol services expose all transmitted data to passive interception and active manipulation by network-level attackers. Credentials, tokens, and business data are transmitted in cleartext.",
       "_scaffold_from": "scattershot3.py:6119",
       "_template": true
     },
@@ -6882,7 +6882,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "",
-      "impact": "",
+      "impact": "Missing HTTP security headers reduce the browser's ability to enforce security boundaries, potentially exposing the application to client-side attacks. Each absent header represents a defense-in-depth layer that an attacker can bypass.",
       "_scaffold_from": "scattershot3.py:13900",
       "_template": true
     },
@@ -7350,7 +7350,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "",
-      "impact": "",
+      "impact": "Disclosed software versions allow an attacker to search vulnerability databases for known CVEs affecting that specific version, reducing the effort required for targeted exploitation. Version information also reveals the organization's patching cadence and maintenance practices.",
       "_scaffold_from": "scattershot3.py:10038",
       "_template": true
     },
@@ -7896,7 +7896,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "",
-      "impact": "",
+      "impact": "Discovered hostnames reveal the hosting provider and infrastructure relationships, enabling an attacker to fingerprint the technology stack and identify potential attack vectors specific to that platform. This reconnaissance data is a prerequisite for targeted exploitation and social engineering campaigns.",
       "_scaffold_from": "scattershot3.py:17754",
       "_template": false
     },
@@ -8130,7 +8130,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "",
-      "impact": "",
+      "impact": "Missing HTTP security headers reduce the browser's ability to enforce security boundaries, potentially exposing the application to client-side attacks including XSS, clickjacking, and MIME-type confusion. Implementing these headers is a low-effort, high-value hardening measure.",
       "_scaffold_from": "scattershot3.py:7827",
       "_template": false
     },
@@ -8208,7 +8208,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "",
-      "impact": "",
+      "impact": "Each discovered open port represents an accessible network service and a potential entry point for attackers.",
       "_scaffold_from": "scattershot3.py:3108",
       "_template": false
     },
@@ -8247,7 +8247,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "",
-      "impact": "",
+      "impact": "Identified open ports map the external attack surface and reveal which services are accessible from the network. Each open port is a potential entry point; services on unexpected ports may indicate shadow IT or misconfigured infrastructure.",
       "_scaffold_from": "scattershot3.py:5451",
       "_template": false
     },
@@ -8559,7 +8559,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "",
-      "impact": "",
+      "impact": "Certificate details including issuer, validity period, subject alternative names, and key parameters provide an attacker with infrastructure intelligence. This information reveals hosting relationships, internal hostnames, and certificate management practices that inform targeted attacks.",
       "_scaffold_from": "scattershot3.py:7284",
       "_template": false
     },
@@ -8598,7 +8598,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "",
-      "impact": "",
+      "impact": "Self-signed certificates are not validated by any trusted certificate authority, meaning clients cannot verify the server's identity. An attacker can trivially generate their own self-signed certificate and perform man-in-the-middle attacks without detection.",
       "_scaffold_from": "scattershot3.py:7298",
       "_template": false
     },
@@ -8676,7 +8676,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "",
-      "impact": "",
+      "impact": "Without a CAA (Certificate Authority Authorization) DNS record, any certificate authority can issue certificates for the domain. An attacker who compromises a less-secure CA or exploits a CA validation flaw can obtain a legitimate certificate for the domain, enabling transparent man-in-the-middle attacks that bypass certificate validation.",
       "_scaffold_from": "scattershot3.py:7865",
       "_template": false
     },
@@ -8715,7 +8715,7 @@
       "remediation_effort": "",
       "validation_tools": [],
       "description": "",
-      "impact": "",
+      "impact": "LUCKY13 (CVE-2013-0169) is a timing side-channel attack against CBC-mode cipher suites in TLS. By measuring the time taken to process specially crafted records, an attacker can recover plaintext bytes from encrypted sessions. While practical exploitation requires significant network access and is mitigated by modern TLS implementations, the presence of vulnerable cipher suites indicates incomplete hardening.",
       "_scaffold_from": "scattershot3.py:7389",
       "_template": false
     },
