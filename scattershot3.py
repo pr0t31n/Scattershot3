@@ -4996,11 +4996,16 @@ def host_discovery_range(
     IPs absent from nmap's output are mapped to False.
     """
     if nmap_args is None:
+        _host_timeout = "30s" if scope == "ext" else "10s"
+        _max_retries  = "2"  if scope == "ext" else "1"
         nmap_args = (
             "-n -sn --reason "
             "-PE "
-            "-PS80,443,8080,8443,22,445,3389 "
-            "--max-retries 1 --min-parallelism 20 --host-timeout 10s"
+            "-PS21,22,23,25,53,80,110,111,135,139,143,179,389,443,445,"
+            "465,587,636,993,995,1433,1723,2525,3306,3389,5432,5900,"
+            "8080,8443,8888,9090,9443 "
+            f"--max-retries {_max_retries} --min-parallelism 20 "
+            f"--host-timeout {_host_timeout}"
         )
 
     # Reasons that indicate the response came from a router/firewall rather
@@ -11110,23 +11115,20 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                                     re.findall(r'\b([A-Z][A-Z0-9_-]{4,})\b', _obs_text)
                                 ))
                             if not _obs_ciphers:
-                                output_mgr.log_action_item(
-                                    item_type="testssl_incomplete",
-                                    recommended_tool="testssl",
-                                    target=f"{ip}:{port}",
-                                    ip=ip,
-                                    port=port,
-                                    hostname=hostname,
-                                    title="Obsolete Ciphers Detected — Re-Scan Required",
+                                output_mgr.log_finding(
+                                    title="SSL/TLS Ciphers: Obsolete Ciphers Detected",
+                                    ip=ip, port=port, command=cmd, hostname=hostname,
+                                    risk=_tsf_risk,
                                     description=(
-                                        f"testssl detected obsolete CBC ciphers offered on "
-                                        f"{ip}:{port} but could not enumerate specific "
-                                        f"cipher suites (connection dropped). Re-run "
-                                        f"testssl against this target to collect full "
-                                        f"evidence for reporting."
+                                        f"testssl detected obsolete ciphers offered on "
+                                        f"{ip}:{port}. Individual cipher suites could not "
+                                        f"be enumerated from the output."
                                     ),
-                                    source_finding="cipherlist_OBSOLETED",
-                                    priority="HIGH",
+                                    sources="testssl",
+                                    cves=_tsf_cve,
+                                    output=f"testssl finding: {_tsf_finding}",
+                                    affected=f"{ip}:{port}",
+                                    output_file=_ts_out_file,
                                 )
                                 continue
                             for _obs_cipher in _obs_ciphers:
@@ -14169,6 +14171,57 @@ def _parse_server_header(server_hdr: str) -> "tuple[str, str | None]":
     return server_hdr.strip(), None
 
 
+_SW_CANONICAL = {
+    "nginx":              "Nginx",
+    "apache":             "Apache",
+    "apache httpd":       "Apache",
+    "apache/2":           "Apache",
+    "iis":                "Microsoft IIS",
+    "microsoft-iis":      "Microsoft IIS",
+    "microsoft iis":      "Microsoft IIS",
+    "openssh":            "OpenSSH",
+    "openssl":            "OpenSSL",
+    "lighttpd":           "Lighttpd",
+    "tomcat":             "Apache Tomcat",
+    "apache tomcat":      "Apache Tomcat",
+    "apache-coyote":      "Apache Tomcat",
+    "litespeed":          "LiteSpeed",
+    "caddy":              "Caddy",
+    "haproxy":            "HAProxy",
+    "gunicorn":           "Gunicorn",
+    "uvicorn":            "Uvicorn",
+    "express":            "Express",
+    "kestrel":            "Kestrel",
+    "microsoft asp.net":  "ASP.NET",
+    "asp.net":            "ASP.NET",
+    "php":                "PHP",
+    "python":             "Python",
+    "node.js":            "Node.js",
+    "nodejs":             "Node.js",
+    "cloudflare":         "Cloudflare",
+    "varnish":            "Varnish",
+    "squid":              "Squid",
+    "envoy":              "Envoy",
+    "windows server":     "Windows Server",
+    "microsoft ftpd":     "Microsoft FTPD",
+    "vsftpd":             "vsftpd",
+    "proftpd":            "ProFTPD",
+    "pure-ftpd":          "Pure-FTPd",
+    "exim":               "Exim",
+    "postfix":            "Postfix",
+    "sendmail":           "Sendmail",
+    "dovecot":            "Dovecot",
+    "microsoft exchange": "Microsoft Exchange",
+    "citrix":             "Citrix",
+    "citrix netscaler":   "Citrix NetScaler",
+    "f5 big-ip":          "F5 BIG-IP",
+    "fortinet":           "Fortinet",
+    "fortigate":          "FortiGate",
+    "palo alto":          "Palo Alto",
+    "sonicwall":          "SonicWall",
+}
+
+
 def record_software(
     output_mgr: "OutputManager",
     ip: str,
@@ -14208,6 +14261,9 @@ def record_software(
     _unknown_re = re.compile(r"\bUNKNOWN\b", re.IGNORECASE)
     software_name = _unknown_re.sub("", software_name).strip()
     software_name = re.sub(r"\s{2,}", " ", software_name).strip()
+
+    # Normalise product names so entries from different detection methods merge
+    software_name = _SW_CANONICAL.get(software_name.lower(), software_name)
     if not software_name:
         return
     if version:
@@ -14250,7 +14306,23 @@ def record_software(
             )
         except Exception:
             existing = []
-        existing.append(entry)
+        # Dedup: skip if same (software, ip, port) already exists with a version
+        _sw_key = (entry["software"].lower(), str(entry["ip"]), int(entry["port"]))
+        _dominated = False
+        for _ex in existing:
+            _ex_key = ((_ex.get("software") or "").lower(),
+                       str(_ex.get("ip", "")), int(_ex.get("port", 0)))
+            if _ex_key == _sw_key:
+                if _ex.get("version") and not entry.get("version"):
+                    _dominated = True
+                    break
+                if not _ex.get("version") and entry.get("version"):
+                    existing.remove(_ex)
+                    break
+                _dominated = True
+                break
+        if not _dominated:
+            existing.append(entry)
         output_mgr.software_inventory.write_text(
             json.dumps(existing, indent=2), encoding="utf-8"
         )
@@ -26810,16 +26882,21 @@ def scan_scope(
         print(f"{Fore.CYAN}[*] {scope_label} Phase 1b: supplemental discovery "
               f"(-PS -PA -PR, {len(_first_dead)} non-responsive host(s))...{Style.RESET_ALL}",
               flush=True)
+        _1b_timeout  = "30s" if scope == "ext" else "10s"
+        _1b_retries  = "2"  if scope == "ext" else "1"
         _alive_map_2 = host_discovery_range(
             _first_dead,
             output_mgr=output_mgr,
             nmap_path=nmap_path,
             nmap_args=(
                 "-n -sn --reason "
-                "-PS80,443,8080,8443,22,445,3389 "
+                "-PS21,22,23,25,53,80,110,111,135,139,143,179,389,443,445,"
+                "465,587,636,993,995,1433,1723,2525,3306,3389,5432,5900,"
+                "8080,8443,8888,9090,9443 "
                 "-PA80,443 "
                 "-PR "
-                "--max-retries 1 --min-parallelism 20 --host-timeout 10s"
+                f"--max-retries {_1b_retries} --min-parallelism 20 "
+                f"--host-timeout {_1b_timeout}"
             ),
             scope=scope,
         )
@@ -26829,6 +26906,56 @@ def scan_scope(
             print(f"    {Fore.GREEN}[+] {ip} — ALIVE (supplemental probe){Style.RESET_ALL}")
         if not _newly_alive:
             print(f"    {Fore.YELLOW}[~] No additional hosts found in supplemental pass{Style.RESET_ALL}")
+
+    # ── Phase 1c: -Pn port verification for dead hosts ──────────────────────
+    # Hosts behind strict firewalls may drop ALL discovery probes (ICMP + TCP
+    # SYN/ACK + ARP) while still having open ports (e.g. BGP/179 that only
+    # responds to direct connect, not SYN discovery).  Run a quick -Pn scan
+    # on the top 500 ports to catch hosts that passed through Phases 1 + 1b
+    # as dead but actually have at least one open port.
+    _still_dead = [ip for ip in targets if not alive_map.get(ip)]
+    if _still_dead:
+        print(f"{Fore.CYAN}[*] {scope_label} Phase 1c: -Pn port verification "
+              f"({len(_still_dead)} non-responsive host(s))...{Style.RESET_ALL}",
+              flush=True)
+        _vc.status(f"{scope}_p1c_pn_verify",
+                   label="Phase 1c: Port Verification (-Pn)",
+                   status="running",
+                   step=f"{len(_still_dead)} host(s)")
+        if scope == "ext":
+            _1c_args = ("-n -Pn -sS --top-ports 500 -T4 "
+                        "--max-retries 2 --max-rtt-timeout 3000ms "
+                        "--host-timeout 90s")
+        else:
+            _1c_args = ("-n -Pn -sS --top-ports 500 -T4 "
+                        "--max-retries 2 --max-rtt-timeout 1000ms "
+                        "--host-timeout 30s")
+        _1c_rescued: list[str] = []
+        for _1c_ip in _still_dead:
+            try:
+                _1c_nm = nmap.PortScanner()
+                _1c_nm.scan(hosts=_1c_ip, arguments=_1c_args)
+                if (_1c_ip in _1c_nm.all_hosts()
+                        and any(
+                            _1c_nm[_1c_ip].get(proto, {}).get(p, {}).get("state", "").startswith("open")
+                            for proto in _1c_nm[_1c_ip].all_protocols()
+                            for p in _1c_nm[_1c_ip][proto]
+                        )):
+                    alive_map[_1c_ip] = True
+                    _1c_rescued.append(_1c_ip)
+                    print(f"    {Fore.GREEN}[+] {_1c_ip} — ALIVE "
+                          f"(port verification -Pn){Style.RESET_ALL}")
+                    _vc.target(ip=_1c_ip, hostname=None, scope=scope,
+                               alive=True, source="nmap-pn")
+            except Exception:
+                pass
+        if not _1c_rescued:
+            print(f"    {Fore.YELLOW}[~] No additional hosts found in "
+                  f"-Pn verification{Style.RESET_ALL}")
+        _vc.status(f"{scope}_p1c_pn_verify",
+                   label="Phase 1c: Port Verification (-Pn)",
+                   status="complete",
+                   step=f"{len(_1c_rescued)} rescued")
 
     alive_ips   = [ip for ip in targets if alive_map.get(ip)]
     dead_ips    = [ip for ip in targets if not alive_map.get(ip)]
