@@ -161,6 +161,12 @@ _SCAN_SEM           = _AdaptiveSemaphore(_SCAN_CONCURRENCY)
 
 # ── Per-subprocess memory limit ──────────────────────────────────────────────
 _SUBPROCESS_MEM_LIMIT_BYTES = int(2 * 1024 ** 3)  # 2 GB per child process
+_GO_SUBPROCESS_MEM_LIMIT   = "2147483648"         # same 2 GB, as GOMEMLIMIT string
+
+_GO_BINARIES = frozenset({
+    "nuclei", "gobuster", "webanalyze", "rustscan", "kerbrute",
+    "amass", "subfinder", "dnsx", "httpx", "naabu",
+})
 
 def _mem_limit_preexec():
     """preexec_fn: set process group + cap virtual address space."""
@@ -173,6 +179,12 @@ def _mem_limit_preexec():
                         (_SUBPROCESS_MEM_LIMIT_BYTES, _SUBPROCESS_MEM_LIMIT_BYTES))
     except (AttributeError, ValueError, OSError):
         pass
+
+
+def _setsid_only_preexec():
+    """preexec_fn for Go binaries: process group only, no RLIMIT_AS."""
+    if sys.platform != "win32":
+        os.setsid()
 
 
 def _kill_proc_tree(proc):
@@ -1540,10 +1552,19 @@ _SUBPROCESS_FLAGS: dict = (
 def _popen(cmd: list, **kwargs) -> subprocess.Popen:
     """
     subprocess.Popen wrapper that applies platform-specific flags and
-    per-subprocess memory limits.
+    per-subprocess memory limits.  Go binaries get GOMEMLIMIT in the
+    environment instead of RLIMIT_AS (Go pre-reserves huge virtual arenas
+    that trip the AS limit long before real memory is consumed).
     """
     if "preexec_fn" not in kwargs and sys.platform != "win32":
-        kwargs["preexec_fn"] = _mem_limit_preexec
+        _bin = Path(cmd[0]).stem if cmd else ""
+        if _bin in _GO_BINARIES:
+            kwargs["preexec_fn"] = _setsid_only_preexec
+            env = kwargs.get("env") or dict(os.environ)
+            env.setdefault("GOMEMLIMIT", _GO_SUBPROCESS_MEM_LIMIT)
+            kwargs["env"] = env
+        else:
+            kwargs["preexec_fn"] = _mem_limit_preexec
     proc = subprocess.Popen(cmd, **_SUBPROCESS_FLAGS, **kwargs)
     _track_proc(proc)
     return proc
@@ -1552,10 +1573,17 @@ def _popen(cmd: list, **kwargs) -> subprocess.Popen:
 def _run(cmd: list, **kwargs) -> subprocess.CompletedProcess:
     """
     subprocess.run wrapper that applies platform-specific flags and
-    per-subprocess memory limits.
+    per-subprocess memory limits.  Go binaries use GOMEMLIMIT instead.
     """
     if "preexec_fn" not in kwargs and sys.platform != "win32":
-        kwargs["preexec_fn"] = _mem_limit_preexec
+        _bin = Path(cmd[0]).stem if cmd else ""
+        if _bin in _GO_BINARIES:
+            kwargs["preexec_fn"] = _setsid_only_preexec
+            env = kwargs.get("env") or dict(os.environ)
+            env.setdefault("GOMEMLIMIT", _GO_SUBPROCESS_MEM_LIMIT)
+            kwargs["env"] = env
+        else:
+            kwargs["preexec_fn"] = _mem_limit_preexec
     return subprocess.run(cmd, **_SUBPROCESS_FLAGS, **kwargs)
 
 
@@ -25793,6 +25821,138 @@ _WAF_BODY_SIGNATURES = (
 )
 
 
+# ── Hydra post-verification: lockout / error patterns that indicate FP ───
+# When hydra claims a credential, we replay the login and check the response
+# body for these patterns.  Their presence means the server returned a lockout,
+# error, or block page — not an authenticated session.
+_HYDRA_FP_BODY_PATTERNS = (
+    "too many attempts",
+    "too many failed",
+    "account locked",
+    "account has been locked",
+    "temporarily locked",
+    "login attempts exceeded",
+    "maximum.*attempts",
+    "please contact.*department",
+    "please contact.*administrator",
+    "please contact.*support",
+    "please contact.*help desk",
+    "access denied",
+    "access blocked",
+    "your account has been disabled",
+    "your ip has been blocked",
+    "login attempted from ip",
+    "rate limit",
+    "throttled",
+    "captcha",
+    "recaptcha",
+    "g-recaptcha",
+    "challenge-form",
+    "are you a robot",
+    "verify you are human",
+    "unauthorized",
+    "forbidden",
+    "session expired",
+    "invalid credentials",
+    "authentication failed",
+    "login failed",
+    "incorrect password",
+    "invalid username or password",
+    "bad credentials",
+)
+
+_HYDRA_FP_BODY_RE = re.compile(
+    "|".join(re.escape(p) for p in _HYDRA_FP_BODY_PATTERNS),
+    re.IGNORECASE,
+)
+
+
+def _verify_hydra_credential(
+    ip: str, port: int, scheme: str, user: str, pwd: str,
+    auth_info: "dict | None", output_mgr: "OutputManager",
+    hostname: "str | None" = None,
+) -> "tuple[bool, str, str]":
+    """Replay a Hydra-claimed credential and verify the response.
+
+    Returns (verified, response_body, screenshot_path).
+    verified is False if the response contains lockout/error FP patterns.
+    """
+    import urllib.request
+    import urllib.parse
+    import ssl
+
+    resp_body = ""
+    screenshot_path = ""
+
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        if auth_info and auth_info.get("type") == "form":
+            action = auth_info["action"]
+            base_url = f"{scheme}://{ip}:{port}"
+            post_url = urllib.parse.urljoin(base_url, action)
+            form_data = {
+                auth_info["user_field"]: user,
+                auth_info["pass_field"]: pwd,
+            }
+            if auth_info.get("extra_params"):
+                for pair in auth_info["extra_params"].split("&"):
+                    if "=" in pair:
+                        k, v = pair.split("=", 1)
+                        form_data[k] = v
+            encoded = urllib.parse.urlencode(form_data).encode("utf-8")
+            req = urllib.request.Request(
+                post_url, data=encoded,
+                headers={"User-Agent": "Mozilla/5.0",
+                         "Content-Type": "application/x-www-form-urlencoded"},
+            )
+        else:
+            url = f"{scheme}://{ip}:{port}/"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            import base64
+            cred_b64 = base64.b64encode(f"{user}:{pwd}".encode()).decode()
+            req.add_header("Authorization", f"Basic {cred_b64}")
+
+        try:
+            resp = urllib.request.urlopen(req, timeout=10, context=ctx)
+            resp_body = resp.read(65536).decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as he:
+            resp_body = he.read(65536).decode("utf-8", errors="replace") if he.fp else ""
+        except Exception:
+            pass
+
+        # Save the verification response
+        verify_dir = output_mgr.scope_tool_path("hydra")
+        verify_file = verify_dir / f"{ip.replace('.','_')}_{port}_verify_response.html"
+        try:
+            verify_file.write_text(resp_body or "(no response)", encoding="utf-8")
+        except Exception:
+            pass
+
+        # Take a screenshot of the post-login page
+        try:
+            ss = take_web_screenshot(ip, port, scheme, output_mgr,
+                                     hostname=hostname, timeout_ms=10_000)
+            if ss:
+                screenshot_path = ss
+        except Exception:
+            pass
+
+        # Check for FP patterns
+        if resp_body and _HYDRA_FP_BODY_RE.search(resp_body):
+            return False, resp_body, screenshot_path
+
+        if not resp_body:
+            return False, "(no response body captured)", screenshot_path
+
+        return True, resp_body, screenshot_path
+
+    except Exception:
+        return False, resp_body, screenshot_path
+
+
 # CSRF-like hidden field indicators — forms with these are CSRF-protected
 # and hydra cannot handle dynamic per-request tokens.
 _CSRF_INDICATORS = (
@@ -26170,13 +26330,34 @@ def run_hydra_brute(
                 m = re.search(r'host:\s*\S+.*?login:\s*(\S+)\s+password:\s*(\S+)', line)
                 if m:
                     user, pwd = m.group(1), m.group(2)
-                    _tprint(f"  {Fore.RED}[!] Hydra FOUND: {user}:{pwd} @ {ip}:{port} ({_effective_svc}){Style.RESET_ALL}")
+                    _tprint(f"  {Fore.CYAN}[*] Hydra claims: {user}:{pwd} @ {ip}:{port} ({_effective_svc}) — verifying...{Style.RESET_ALL}")
+                    _hyd_scheme = "https" if "https" in _effective_svc else "http"
+                    _auth_for_verify = _auth if _use_form else None
+                    _verified, _vbody, _vss = _verify_hydra_credential(
+                        ip, port, _hyd_scheme, user, pwd,
+                        _auth_for_verify, output_mgr, hostname=hostname,
+                    )
+                    if not _verified:
+                        _fp_match = _HYDRA_FP_BODY_RE.search(_vbody) if _vbody else None
+                        _fp_reason = _fp_match.group(0) if _fp_match else "no valid response"
+                        _tprint(f"  {Fore.YELLOW}[~] Hydra FP: {user}:{pwd} @ {ip}:{port} — "
+                                f"verification failed ({_fp_reason}){Style.RESET_ALL}")
+                        _tprint(f"  {Fore.YELLOW}    Response indicates lockout/error, not valid auth{Style.RESET_ALL}")
+                        output_mgr.log_command(
+                            "hydra-verify", "hydra", cmd,
+                            output_mgr.scope_tool_path("hydra") / f"{ip.replace('.','_')}_{port}_verify_response.html",
+                        )
+                        continue
+                    _tprint(f"  {Fore.RED}[!] Hydra VERIFIED: {user}:{pwd} @ {ip}:{port} ({_effective_svc}){Style.RESET_ALL}")
                     _hyd_target = _form_spec if _use_form else target
+                    _verify_note = ""
+                    if _vss:
+                        _verify_note = f"\nVerification screenshot: {_vss}"
                     output_mgr.log_finding(
                         title=f"Valid Credentials via Brute Force ({_effective_svc.upper()})",
                         ip=ip, port=port, hostname=hostname,
                         command=" ".join(cmd), risk="CRITICAL",
-                        description=f"Hydra confirmed {user}:{pwd} for {_effective_svc.upper()} on {ip}:{port}.",
+                        description=f"Hydra confirmed {user}:{pwd} for {_effective_svc.upper()} on {ip}:{port}. Credential verified by replay.",
                         sources="hydra",
                         affected=f"{ip}:{port}",
                         output=(
@@ -26184,7 +26365,9 @@ def run_hydra_brute(
                             f"Target: {_hyd_target}\n"
                             f"Username: {user}\n"
                             f"Password: {pwd}\n"
-                            f"Source line: {line.strip()}"
+                            f"Source line: {line.strip()}\n"
+                            f"Verification: PASSED — authenticated response received"
+                            f"{_verify_note}"
                         ),
                         output_file=str(out_file),
                     )
@@ -26251,19 +26434,34 @@ def run_sqlmap(
             proc = _popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             out_b, _ = proc.communicate(timeout=timeout)
             raw = out_b.decode("utf-8", errors="replace")
-            if re.search(r'is vulnerable|Type:|injectable|Parameter:', raw):
+            # sqlmap confirms injection with lines like:
+            #   "Parameter: id (GET)" followed by "Type: ..." payload lines
+            #   "... is vulnerable" (positive confirmation)
+            # But also prints negatives like "does not seem to be injectable"
+            # and "do not appear to be injectable".  Only report when sqlmap
+            # confirms at least one injection AND doesn't end with the
+            # "all tested parameters do not appear to be injectable" verdict.
+            _sm_negative = bool(re.search(
+                r'do not appear to be injectable|'
+                r'does not seem to be injectable|'
+                r'all tested parameters .* not .* injectable',
+                raw, re.IGNORECASE))
+            _sm_positive = bool(re.search(
+                r'(?:Parameter:.*\n.*Type:.*\n.*Payload:)|'
+                r'\bis vulnerable\b|'
+                r'sqlmap identified the following injection point',
+                raw, re.IGNORECASE | re.DOTALL))
+            if _sm_positive and not _sm_negative:
                 host = _up.urlparse(url).hostname or ""
-                # Persist the sqlmap stdout for the output_file reference
                 try:
                     _sm_log = out_dir / "sqlmap_stdout.txt"
                     _sm_log.write_text(raw, encoding="utf-8")
                     _sm_rel = str(_sm_log.relative_to(output_mgr.root))
                 except Exception:
                     _sm_rel = str(out_dir)
-                # Snippet of the lines that triggered the match
                 _sm_trigger = "\n".join(
                     l for l in raw.splitlines()
-                    if re.search(r'is vulnerable|Type:|injectable|Parameter:', l)
+                    if re.search(r'is vulnerable|Type:.*injection|Payload:|injection point', l, re.IGNORECASE)
                 )[:1500]
                 output_mgr.log_finding(
                     title="SQL Injection (Error-Based)",
