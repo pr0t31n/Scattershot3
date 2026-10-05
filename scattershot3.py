@@ -59,7 +59,7 @@ import traceback
 import atexit
 import xml.etree.ElementTree as _ET
 import hashlib
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
 from datetime import datetime
 from pathlib import Path
 import time
@@ -25897,18 +25897,14 @@ _WAF_BODY_SIGNATURES = (
 # When hydra claims a credential, we replay the login and check the response
 # body for these patterns.  Their presence means the server returned a lockout,
 # error, or block page — not an authenticated session.
-_HYDRA_FP_BODY_PATTERNS = (
+_HYDRA_FP_BODY_PATTERNS_LITERAL = (
     "too many attempts",
     "too many failed",
+    "too many login",
     "account locked",
     "account has been locked",
     "temporarily locked",
     "login attempts exceeded",
-    "maximum.*attempts",
-    "please contact.*department",
-    "please contact.*administrator",
-    "please contact.*support",
-    "please contact.*help desk",
     "access denied",
     "access blocked",
     "your account has been disabled",
@@ -25931,10 +25927,24 @@ _HYDRA_FP_BODY_PATTERNS = (
     "incorrect password",
     "invalid username or password",
     "bad credentials",
+    "information services department",
+)
+_HYDRA_FP_BODY_PATTERNS_REGEX = (
+    r"maximum.{0,30}attempts",
+    r"please\s+contact.{0,60}department",
+    r"please\s+contact.{0,60}administrator",
+    r"please\s+contact.{0,60}support",
+    r"please\s+contact.{0,60}help\s*desk",
+    r"exceeded.{0,30}login.{0,20}attempts",
+    r"too\s+many.{0,30}requests",
+    r"try\s+again.{0,30}(later|minutes|seconds)",
 )
 
 _HYDRA_FP_BODY_RE = re.compile(
-    "|".join(re.escape(p) for p in _HYDRA_FP_BODY_PATTERNS),
+    "|".join(
+        [re.escape(p) for p in _HYDRA_FP_BODY_PATTERNS_LITERAL]
+        + list(_HYDRA_FP_BODY_PATTERNS_REGEX)
+    ),
     re.IGNORECASE,
 )
 
@@ -25987,10 +25997,13 @@ def _verify_hydra_credential(
             cred_b64 = base64.b64encode(f"{user}:{pwd}".encode()).decode()
             req.add_header("Authorization", f"Basic {cred_b64}")
 
+        _resp_code = 0
         try:
             resp = urllib.request.urlopen(req, timeout=10, context=ctx)
+            _resp_code = resp.getcode() or 0
             resp_body = resp.read(65536).decode("utf-8", errors="replace")
         except urllib.error.HTTPError as he:
+            _resp_code = he.code
             resp_body = he.read(65536).decode("utf-8", errors="replace") if he.fp else ""
         except Exception:
             pass
@@ -26012,7 +26025,11 @@ def _verify_hydra_credential(
         except Exception:
             pass
 
-        # Check for FP patterns
+        # Reject on HTTP error status codes
+        if _resp_code in (401, 403, 429, 503):
+            return False, resp_body, screenshot_path
+
+        # Check for FP patterns in response body
         if resp_body and _HYDRA_FP_BODY_RE.search(resp_body):
             return False, resp_body, screenshot_path
 
@@ -26907,55 +26924,8 @@ def scan_scope(
         if not _newly_alive:
             print(f"    {Fore.YELLOW}[~] No additional hosts found in supplemental pass{Style.RESET_ALL}")
 
-    # ── Phase 1c: -Pn port verification for dead hosts ──────────────────────
-    # Hosts behind strict firewalls may drop ALL discovery probes (ICMP + TCP
-    # SYN/ACK + ARP) while still having open ports (e.g. BGP/179 that only
-    # responds to direct connect, not SYN discovery).  Run a quick -Pn scan
-    # on the top 500 ports to catch hosts that passed through Phases 1 + 1b
-    # as dead but actually have at least one open port.
+    # Phase 1c (rustscan rescue) now runs in parallel with Phase 2 — see below.
     _still_dead = [ip for ip in targets if not alive_map.get(ip)]
-    if _still_dead:
-        print(f"{Fore.CYAN}[*] {scope_label} Phase 1c: -Pn port verification "
-              f"({len(_still_dead)} non-responsive host(s))...{Style.RESET_ALL}",
-              flush=True)
-        _vc.status(f"{scope}_p1c_pn_verify",
-                   label="Phase 1c: Port Verification (-Pn)",
-                   status="running",
-                   step=f"{len(_still_dead)} host(s)")
-        if scope == "ext":
-            _1c_args = ("-n -Pn -sS --top-ports 500 -T4 "
-                        "--max-retries 2 --max-rtt-timeout 3000ms "
-                        "--host-timeout 90s")
-        else:
-            _1c_args = ("-n -Pn -sS --top-ports 500 -T4 "
-                        "--max-retries 2 --max-rtt-timeout 1000ms "
-                        "--host-timeout 30s")
-        _1c_rescued: list[str] = []
-        for _1c_ip in _still_dead:
-            try:
-                _1c_nm = nmap.PortScanner()
-                _1c_nm.scan(hosts=_1c_ip, arguments=_1c_args)
-                if (_1c_ip in _1c_nm.all_hosts()
-                        and any(
-                            _1c_nm[_1c_ip].get(proto, {}).get(p, {}).get("state", "").startswith("open")
-                            for proto in _1c_nm[_1c_ip].all_protocols()
-                            for p in _1c_nm[_1c_ip][proto]
-                        )):
-                    alive_map[_1c_ip] = True
-                    _1c_rescued.append(_1c_ip)
-                    print(f"    {Fore.GREEN}[+] {_1c_ip} — ALIVE "
-                          f"(port verification -Pn){Style.RESET_ALL}")
-                    _vc.target(ip=_1c_ip, hostname=None, scope=scope,
-                               alive=True, source="nmap-pn")
-            except Exception:
-                pass
-        if not _1c_rescued:
-            print(f"    {Fore.YELLOW}[~] No additional hosts found in "
-                  f"-Pn verification{Style.RESET_ALL}")
-        _vc.status(f"{scope}_p1c_pn_verify",
-                   label="Phase 1c: Port Verification (-Pn)",
-                   status="complete",
-                   step=f"{len(_1c_rescued)} rescued")
 
     alive_ips   = [ip for ip in targets if alive_map.get(ip)]
     dead_ips    = [ip for ip in targets if not alive_map.get(ip)]
@@ -27068,11 +27038,8 @@ def scan_scope(
     _start_concurrency_monitor(_SCAN_SEM)
     _start_oom_watchdog()
     with ThreadPoolExecutor(max_workers=n_workers) as pool:
-            # Nuclei is now submitted per-IP as soon as each host's port scan
-            # completes and open ports are confirmed, rather than as a single
-            # batch at the start of Phase 2.
             _nuclei_base       = getattr(args, "nuclei_timeout", 600)
-            _nuclei_batch_ips: list = []    # collected for single batch run after port scans
+            _nuclei_batch_ips: list = []
 
             # ── Submit one port-scan worker per alive host ────────────────────
             for ip in alive_ips:
@@ -27102,9 +27069,203 @@ def scan_scope(
                     rustscan_path,
                 )] = ip
 
-            # ── Collect port-scan results as they complete ────────────────────
-            for future in as_completed(port_futures):
-                ip = port_futures[future]
+            # ── Phase 1c: Background rustscan rescue (parallel with Phase 2) ─
+            # Runs concurrently with Phase 2 port scans on known-alive hosts.
+            # Uses rustscan (all 65535 ports) to find hosts that dropped every
+            # discovery probe but have at least one open port.  Falls back to
+            # nmap -Pn when rustscan is unavailable.  Rescued hosts are
+            # submitted to the same Phase 2 worker pool for full analysis.
+            _rescue_lock    = threading.Lock()
+            _rescue_pending: list[tuple] = []
+            _rescue_done    = threading.Event()
+
+            def _bg_rustscan_rescue():
+                if not _still_dead:
+                    _rescue_done.set()
+                    return
+                _eff_rs = rustscan_path or shutil.which("rustscan")
+                _tprint(f"\n{Fore.CYAN}[*] {scope_label} Phase 1c: background "
+                        f"host rescue ({len(_still_dead)} non-responsive "
+                        f"host(s), {'rustscan' if _eff_rs else 'nmap -Pn'} "
+                        f"all 65535 ports)...{Style.RESET_ALL}")
+                _vc.status(f"{scope}_p1c_rescue",
+                           label="Phase 1c: Host Rescue (parallel)",
+                           status="running",
+                           step=f"{len(_still_dead)} host(s) · "
+                                f"{'rustscan' if _eff_rs else 'nmap'}")
+                _rescued: list[str] = []
+                for _r_ip in _still_dead:
+                    _r_ports: list[int] = []
+                    try:
+                        if _eff_rs:
+                            _rs_cmd = [_eff_rs, "-a", _r_ip, "--ulimit",
+                                       "5000", "--greppable", "-p", "1-65535"]
+                            _rs_timeout = 120 if scope == "ext" else 60
+                            _rs_p = subprocess.run(
+                                _rs_cmd, capture_output=True,
+                                timeout=_rs_timeout)
+                            _rs_txt = _rs_p.stdout.decode(
+                                "utf-8", errors="replace")
+                            for _rl in _rs_txt.splitlines():
+                                _rm = (re.search(r'Open\s+[\d.]+:(\d+)',
+                                                 _rl) or
+                                       re.search(r'Open\s+(\d+)', _rl))
+                                if _rm:
+                                    _r_ports.append(int(_rm.group(1)))
+                        else:
+                            _pn_args = ("-n -Pn -sS -p- -T4 "
+                                        "--max-retries 2 "
+                                        "--max-rtt-timeout 3000ms "
+                                        "--host-timeout 300s")
+                            _pn_nm = nmap.PortScanner()
+                            _pn_nm.scan(hosts=_r_ip, arguments=_pn_args)
+                            if _r_ip in _pn_nm.all_hosts():
+                                for _pr in _pn_nm[_r_ip].all_protocols():
+                                    for _pp in _pn_nm[_r_ip][_pr]:
+                                        if _pn_nm[_r_ip][_pr][_pp].get(
+                                                "state", ""
+                                        ).startswith("open"):
+                                            _r_ports.append(int(_pp))
+                    except (subprocess.TimeoutExpired, OSError,
+                            ValueError, Exception):
+                        pass
+                    if _r_ports:
+                        alive_map[_r_ip] = True
+                        _rescued.append(_r_ip)
+                        _r_hn = None
+                        try:
+                            _r_hn_name, _, _ = socket.gethostbyaddr(_r_ip)
+                            _r_hn = _r_hn_name
+                        except Exception:
+                            pass
+                        hostnames[_r_ip] = _r_hn
+                        _tprint(f"    {Fore.GREEN}[+] {_r_ip} — ALIVE "
+                                f"({len(_r_ports)} port(s), "
+                                f"{'rustscan' if _eff_rs else 'nmap'} "
+                                f"rescue){Style.RESET_ALL}")
+                        _vc.target(ip=_r_ip, hostname=_r_hn, scope=scope,
+                                   alive=True,
+                                   source="rustscan-rescue"
+                                          if _eff_rs else "nmap-pn-rescue")
+                        _f = pool.submit(
+                            _port_scan_worker,
+                            _r_ip, _r_hn, args.fast, output_mgr,
+                            nmap_path, args, sslscan_path, testssl_path,
+                            snmpwalk_path, smbmap_path, enum4linux_path,
+                            adenum_path, scope, cred_store, gobuster_path,
+                            wpscan_path, webanalyze_path, shcheck_path,
+                            wpscan_token, showmount_path, ipmitool_path,
+                            rustscan_path)
+                        with _rescue_lock:
+                            _rescue_pending.append((_f, _r_ip))
+                if not _rescued:
+                    _tprint(f"    {Fore.YELLOW}[~] No additional hosts found "
+                            f"in rescue pass{Style.RESET_ALL}")
+                _vc.status(f"{scope}_p1c_rescue",
+                           label="Phase 1c: Host Rescue (parallel)",
+                           status="complete",
+                           step=f"{len(_rescued)} rescued")
+                _rescue_done.set()
+
+            _rescue_thread = threading.Thread(
+                target=_bg_rustscan_rescue, daemon=True)
+            _rescue_thread.start()
+
+            # ── Collect port-scan results (dynamic — rescue adds futures) ─────
+            _pending = set(port_futures.keys())
+            _fut_to_ip = dict(port_futures)
+
+            while _pending or not _rescue_done.is_set():
+                with _rescue_lock:
+                    for _rf, _rip in _rescue_pending:
+                        _pending.add(_rf)
+                        _fut_to_ip[_rf] = _rip
+                    _rescue_pending.clear()
+
+                if not _pending:
+                    time.sleep(0.5)
+                    continue
+
+                _done, _pending = wait(
+                    _pending, timeout=2.0,
+                    return_when=FIRST_COMPLETED)
+
+                for future in _done:
+                    ip = _fut_to_ip[future]
+                    try:
+                        result_ip, host_result = future.result()
+                        host_result["scope"]        = scope
+                        host_result["source_ip"]    = scope_source_ip
+                        host_result["source_iface"] = scope_iface_name
+                        host_result["source_host"]  = scope_source_host
+                        all_results[result_ip] = host_result
+
+                        with _PRINT_LOCK:
+                            print_host_header(result_ip, True)
+                            for port, info in host_result[
+                                    "open_ports"].items():
+                                fqdn = host_result.get(
+                                    "hostnames_by_port", {}
+                                ).get(port)
+                                print_port(
+                                    port, info, info.get("web"),
+                                    info.get("banner"))
+                                if fqdn:
+                                    print(
+                                        f"           {Fore.CYAN}FQDN "
+                                        f"(port {port}): "
+                                        f"{fqdn}{Style.RESET_ALL}")
+                            for port, ssl_data in host_result.get(
+                                "ssl_results", {}
+                            ).items():
+                                print_ssl_results(
+                                    result_ip, port,
+                                    ssl_data.get("sslscan"),
+                                    ssl_data.get("testssl"))
+
+                        if run_nuclei_flag and host_result.get("open_ports"):
+                            _nuclei_batch_ips.append(result_ip)
+
+                    except Exception as exc:
+                        _tprint(
+                            f"{Fore.RED}  [!] Worker failed for {ip}: "
+                            f"{exc}{Style.RESET_ALL}")
+                        try:
+                            _w_tb  = traceback.format_exc()
+                            _w_msg = (
+                                f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+                                f"PORT SCAN WORKER CRASH — {ip}: "
+                                f"{type(exc).__name__}: {exc}\n{_w_tb}\n")
+                            with output_mgr._log_lock:
+                                with output_mgr.error_log.open(
+                                        "a", encoding="utf-8") as _ef:
+                                    _ef.write(_w_msg)
+                                with output_mgr.log_file.open(
+                                        "a", encoding="utf-8") as _lf:
+                                    _lf.write(_w_msg)
+                        except Exception:
+                            pass
+                        all_results[ip] = {
+                            "alive": True, "hostname": hostnames.get(ip),
+                            "scope": scope, "source_ip": scope_source_ip,
+                            "source_iface": scope_iface_name,
+                            "source_host": scope_source_host,
+                            "open_ports": {}, "web_services": [],
+                            "ssl_results": {}, "hostnames_by_port": {},
+                            "web_files": {},
+                        }
+
+            # Ensure rescue thread is fully done before moving on
+            _rescue_thread.join(timeout=10)
+
+            # Final sweep — any futures added in the last rescue cycle
+            with _rescue_lock:
+                for _rf, _rip in _rescue_pending:
+                    _pending.add(_rf)
+                    _fut_to_ip[_rf] = _rip
+                _rescue_pending.clear()
+            for future in as_completed(_pending):
+                ip = _fut_to_ip[future]
                 try:
                     result_ip, host_result = future.result()
                     host_result["scope"]        = scope
@@ -27112,55 +27273,10 @@ def scan_scope(
                     host_result["source_iface"] = scope_iface_name
                     host_result["source_host"]  = scope_source_host
                     all_results[result_ip] = host_result
-
-                    with _PRINT_LOCK:
-                        print_host_header(result_ip, True)
-                        for port, info in host_result["open_ports"].items():
-                            fqdn = host_result.get(
-                                "hostnames_by_port", {}
-                            ).get(port)
-                            print_port(
-                                port, info, info.get("web"), info.get("banner")
-                            )
-                            if fqdn:
-                                print(
-                                    f"           {Fore.CYAN}FQDN (port {port}): "
-                                    f"{fqdn}{Style.RESET_ALL}"
-                                )
-                        for port, ssl_data in host_result.get(
-                            "ssl_results", {}
-                        ).items():
-                            print_ssl_results(
-                                result_ip, port,
-                                ssl_data.get("sslscan"),
-                                ssl_data.get("testssl"),
-                            )
-
-                    # Track hosts with open ports for batch Nuclei scan after
-                    # all port scans complete (single invocation, not per-IP).
                     if run_nuclei_flag and host_result.get("open_ports"):
                         _nuclei_batch_ips.append(result_ip)
-
-                except Exception as exc:
-                    _tprint(
-                        f"{Fore.RED}  [!] Worker failed for {ip}: "
-                        f"{exc}{Style.RESET_ALL}"
-                    )
-                    try:
-                        _w_tb  = traceback.format_exc()
-                        _w_msg = (
-                            f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
-                            f"PORT SCAN WORKER CRASH — {ip}: "
-                            f"{type(exc).__name__}: {exc}\n{_w_tb}\n"
-                        )
-                        with output_mgr._log_lock:
-                            with output_mgr.error_log.open("a", encoding="utf-8") as _ef:
-                                _ef.write(_w_msg)
-                            with output_mgr.log_file.open("a", encoding="utf-8") as _lf:
-                                _lf.write(_w_msg)
-                    except Exception:
-                        pass
-                    all_results[ip] = {
+                except Exception:
+                    all_results.setdefault(ip, {
                         "alive": True, "hostname": hostnames.get(ip),
                         "scope": scope, "source_ip": scope_source_ip,
                         "source_iface": scope_iface_name,
@@ -27168,7 +27284,7 @@ def scan_scope(
                         "open_ports": {}, "web_services": [],
                         "ssl_results": {}, "hostnames_by_port": {},
                         "web_files": {},
-                    }
+                    })
 
             # ── Batch Nuclei scan — single invocation for all hosts with open ports ─
             if _nuclei_batch_ips:
@@ -27207,6 +27323,28 @@ def scan_scope(
 
     _vc.status(f"{scope}_p2_portscan", label="Phase 2: Port Scan & Service Analysis",
                status="complete" if alive_ips else "skipped")
+
+    # Recompute after rescue — rescued hosts are now in alive_map
+    alive_ips   = [ip for ip in targets if alive_map.get(ip)]
+    dead_ips    = [ip for ip in targets if not alive_map.get(ip)]
+    alive_count = len(alive_ips)
+
+    # Rewrite active_ips.txt with all alive hosts (including rescued)
+    if alive_ips:
+        try:
+            active_ips_file = output_mgr.root / "targets" / "active_ips.txt"
+            active_ips_file.write_text(
+                "\n".join(alive_ips) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
+    # Ensure dead stubs exist for truly-dead hosts only
+    for ip in dead_ips:
+        if ip not in all_results:
+            all_results[ip] = {
+                "alive": False, "hostname": None, "scope": scope,
+                "open_ports": {}, "web_services": [], "ssl_results": {},
+            }
 
     # ── Scope-level summary ───────────────────────────────────────────────────
     print(f"\n{scope_label} {Fore.CYAN}Scope complete — "
