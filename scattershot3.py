@@ -18414,13 +18414,15 @@ def run_webanalyze(
     safe_ip  = ip.replace(".", "_")
     out_file = out_dir / f"{safe_ip}_{port}_webanalyze.txt"
 
+    _wa_db = Path("/var/lib/pr0t31n/webanalyze")
+    _wa_cwd = str(_wa_db) if _wa_db.is_dir() else None
     cmd = [webanalyze_path, "-host", url]
     _tprint(f"  {Fore.CYAN}[>] webanalyze {url}{Style.RESET_ALL}")
     try:
         _started = datetime.now().astimezone()
         proc = subprocess.run(
             cmd, capture_output=True, text=True,
-            timeout=timeout, errors="replace",
+            timeout=timeout, errors="replace", cwd=_wa_cwd,
         )
         _ended = datetime.now().astimezone()
         combined = proc.stdout + (proc.stderr or "")
@@ -28493,17 +28495,20 @@ def main():
         _update_results["nuclei"] = {"installed": False, "path": "", "result": "not-installed"}
 
     # webanalyze -update  (refreshes the technologies.json fingerprint database)
+    # Use a shared location so the 2 MB database is not copied into every scan dir.
+    _WA_DB_DIR = Path("/var/lib/pr0t31n/webanalyze")
     if webanalyze_path:
         _vc.status("init_updates", label="INIT: Plugin Updates", status="running",
                    step="webanalyze -update")
         print(f"{Fore.CYAN}[*] Updating webanalyze technology database...{Style.RESET_ALL}",
               flush=True)
         _wa_upd_result = "failed"
+        _WA_DB_DIR.mkdir(parents=True, exist_ok=True)
         try:
             _wa_upd = subprocess.run(
                 [webanalyze_path, "-update"],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, timeout=120,
+                text=True, timeout=120, cwd=str(_WA_DB_DIR),
             )
             if _wa_upd.returncode == 0:
                 _wa_upd_result = "updated"
