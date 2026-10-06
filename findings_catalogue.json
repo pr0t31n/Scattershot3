@@ -10190,8 +10190,10 @@
     },
     {
       "id": "SS-003",
-      "title": "Default Webpage Detected: {matched_server}",
-      "aliases": [],
+      "title": "Discovery: Default Webpage",
+      "aliases": [
+        "Default Webpage Detected: {matched_server}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -13188,8 +13190,10 @@
     },
     {
       "id": "SS-057",
-      "title": "SSL/TLS Certificate Information",
-      "aliases": [],
+      "title": "Discovery: SSL/TLS Certificate",
+      "aliases": [
+        "SSL/TLS Certificate Information"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -13402,8 +13406,10 @@
     },
     {
       "id": "SS-061",
-      "title": "SSL/TLS Vulnerability (Potential): Lucky13",
-      "aliases": [],
+      "title": "SSL/TLS Vulnerability: Lucky13 [UNCONFIRMED]",
+      "aliases": [
+        "SSL/TLS Vulnerability (Potential): Lucky13"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -13721,7 +13727,7 @@
     },
     {
       "id": "SS-067",
-      "title": "Weak Cipher Identified",
+      "title": "SSL/TLS Ciphers: Weak Cipher",
       "aliases": [
         "Weak Cipher Identified",
         "SSL/TLS Cipher: No Cipher Order Configured",
@@ -14025,8 +14031,10 @@
     },
     {
       "id": "SS3-180",
-      "title": "SSH Algorithm Hardening Recommendations",
-      "aliases": [],
+      "title": "SSH Configuration: Algorithm Hardening",
+      "aliases": [
+        "SSH Algorithm Hardening Recommendations"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -14266,10 +14274,11 @@
     },
     {
       "id": "SS3-184",
-      "title": "WinRM Service Exposed",
+      "title": "Discovery: WinRM Service",
       "aliases": [
         "WinRM Detected",
-        "WS-Management Accessible"
+        "WS-Management Accessible",
+        "WinRM Service Exposed"
       ],
       "source_tools": [
         "scattershot3"
@@ -14317,10 +14326,11 @@
     },
     {
       "id": "SS3-185",
-      "title": "WinRM Over Cleartext HTTP",
+      "title": "Insecure Protocol Detected: WinRM (Cleartext)",
       "aliases": [
         "WinRM HTTP",
-        "WS-Management Unencrypted"
+        "WS-Management Unencrypted",
+        "WinRM Over Cleartext HTTP"
       ],
       "source_tools": [
         "scattershot3"
