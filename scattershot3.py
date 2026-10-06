@@ -19063,6 +19063,11 @@ def run_searchsploit(
             }
             for _ep in _exploit_ports:
                 _matched_svc = _xml_port_info.get(_ep, {}) if _ep else {}
+                # No version detected → can't determine exploit applicability;
+                # emitting findings for every exploit ever written for a product
+                # (e.g. all 18+ nginx CVEs) creates unworkable noise.
+                if not (_matched_svc.get("version") or "").strip():
+                    continue
                 _svc_label = " ".join(
                     p for p in (_matched_svc.get("product", ""),
                                 _matched_svc.get("version", ""),
