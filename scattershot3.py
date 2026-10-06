@@ -6163,7 +6163,7 @@ def probe_uncertain_and_nonstandard_ports(
                         _rfc_risk = "MEDIUM" if getattr(output_mgr, "scope", "ext") == "ext" else "LOW"
                         _rfc_ips_str = ", ".join(sorted(_rfc1918_found))
                         output_mgr.log_finding(
-                            title="Internal IP Address Disclosed in HTTP Response",
+                            title="Information Disclosure: Internal IP in HTTP Response",
                             ip=ip, port=_port, hostname=hostname,
                             command=_r["cmd"], risk=_rfc_risk,
                             description=(
@@ -6415,7 +6415,7 @@ def probe_uncertain_and_nonstandard_ports(
                     if _ihn_found:
                         _ihn_str = ", ".join(sorted(_ihn_found))
                         output_mgr.log_finding(
-                            title="Internal Hostname Disclosed in HTTP Response",
+                            title="Information Disclosure: Internal Hostname in HTTP Response",
                             ip=ip, port=_port, hostname=hostname,
                             command=_r["cmd"], risk="LOW",
                             description=(
@@ -6556,7 +6556,7 @@ def probe_uncertain_and_nonstandard_ports(
                             if _sensitive_paths:
                                 _sp_str = ", ".join(_sensitive_paths[:15])
                                 output_mgr.log_finding(
-                                    title="Robots.txt Discloses Sensitive Paths",
+                                    title="Information Disclosure: Sensitive Path in robots.txt",
                                     ip=ip, port=_port, hostname=hostname,
                                     command=f"curl -sk {_scheme}://{_curl_host}:{_port}/robots.txt",
                                     risk="INFO",
@@ -6772,7 +6772,7 @@ def probe_uncertain_and_nonstandard_ports(
                 _ihn_found.add(_ihn_m.group(1).lower())
             if _ihn_found:
                 output_mgr.log_finding(
-                    title="Internal Hostname Disclosed in HTTP Response",
+                    title="Information Disclosure: Internal Hostname in HTTP Response",
                     ip=ip, port=_port, hostname=hostname,
                     command=_r.get("cmd", f"curl -sk {_gp_base}/"),
                     risk="LOW",
@@ -11068,7 +11068,7 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                             if _san_internal:
                                 _san_int_str = ", ".join(sorted(set(_san_internal)))
                                 output_mgr.log_finding(
-                                    title="SSL/TLS Certificate: Internal Hostnames in SAN",
+                                    title="Information Disclosure: Internal Hostname in SAN",
                                     ip=ip, port=port, command=cmd, hostname=hostname,
                                     risk="LOW",
                                     description=(
@@ -11214,6 +11214,15 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                                 _tsf_risk  = "HIGH"
                             else:
                                 continue
+                        elif _tsf_id.startswith("FS"):
+                            if "offered" in _tsf_finding_lo and "not" not in _tsf_finding_lo:
+                                continue
+                            if _tsf_id in ("FS", "FS_offered", "FS_ciphers"):
+                                _tsf_title = "SSL/TLS Forward Secrecy: Not Supported"
+                                _tsf_risk  = "MEDIUM"
+                            else:
+                                _tsf_title = f"SSL/TLS Forward Secrecy: {_tsf_id}"
+                                _tsf_risk  = "LOW"
                         else:
                             # Generic fallback — suppress clean results and INFO noise
                             if _tsf_risk == "INFO":
@@ -14829,7 +14838,7 @@ def download_web_files(
                     except Exception:
                         _cred_rel = fpath_str
                     output_mgr.log_finding(
-                        title=f"Plaintext Credentials Found in Web Content",
+                        title=f"Information Disclosure: Plaintext Credentials in Web Content",
                         ip=ip, port=port,
                         command=f"credential-extraction {fpath_str}",
                         hostname=hostname,
