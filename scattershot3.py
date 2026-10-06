@@ -3848,7 +3848,7 @@ class OutputManager:
                         ex["service"] = service
                     ex["finding_count"] = ex.get("finding_count", 0) + 1
 
-            # New-format "Open Ports Identified" with affected list
+            # New-format "Discovery: Open Ports" with affected list
             elif title.lower() == "open ports identified":
                 for line in (f.get("affected") or "").split("\n"):
                     line = line.strip()
@@ -3869,7 +3869,7 @@ class OutputManager:
                     if pk not in h["ports_map"]:
                         h["ports_map"][pk] = {"port": p_num, "protocol": proto,
                             "service": svc_desc or "—", "risk": "INFO",
-                            "title": "Open Ports Identified",
+                            "title": "Discovery: Open Ports",
                             "fqdn": h.get("hostname") or "", "finding_count": 1}
                     else:
                         ex = h["ports_map"][pk]
@@ -7815,7 +7815,7 @@ def _port_scan_worker(
         if _uf_count:
             _parts.append(f"{_uf_count} unconfirmed UDP")
         _tprint(f"  {Fore.GREEN}    {ip} — {' · '.join(_parts)}{Style.RESET_ALL}")
-        # Log "Open Ports Identified" immediately — before port handlers run —
+        # Log "Discovery: Open Ports" immediately — before port handlers run —
         # so single-port hosts (where the handler may be the only slow task)
         # still produce this finding regardless of later handler timing/errors.
         if output_mgr and open_ports:
@@ -7844,7 +7844,7 @@ def _port_scan_worker(
                     hostname=hostname,
                 )
             output_mgr.log_finding(
-                title="Open Ports Identified",
+                title="Discovery: Open Ports",
                 ip=ip, port=0,
                 command=f"nmap -sV {ip}",
                 hostname=hostname,
@@ -7957,7 +7957,7 @@ def _port_scan_worker(
                                 _http_lines.append(f"Set-Cookie: {_sc_hdr}")
                         _http_file.write_text("\n".join(_http_lines), encoding="utf-8")
                         output_mgr.log_finding(
-                            title="Web Page Identified",
+                            title="Discovery: Web Page",
                             ip=ip, port=port, command=[],
                             hostname=hostname,
                             risk="INFO",
@@ -7981,7 +7981,7 @@ def _port_scan_worker(
                                 "authentication, session management, etc.)."
                             ),
                             hostname=hostname,
-                            source_finding="Web Page Identified",
+                            source_finding="Discovery: Web Page",
                             priority="HIGH",
                         )
                         # ── Action Item: API indicators → Siphon ─────
@@ -8013,7 +8013,7 @@ def _port_scan_worker(
                                     "rate limiting, data exposure, etc.)."
                                 ),
                                 hostname=hostname,
-                                source_finding="Web Page Identified",
+                                source_finding="Discovery: Web Page",
                                 priority="HIGH",
                             )
                     except Exception:
@@ -17656,7 +17656,7 @@ def check_tomcat_manager(
             _tom_rel = None
 
         output_mgr.log_finding(
-            title=f"Apache Tomcat Manager Login Page Detected: {url}",
+            title="Discovery: Apache Tomcat Manager Login Page",
             ip=ip,
             port=port,
             command=f"HTTP GET {url}",
@@ -17812,7 +17812,7 @@ def detect_login_form(
         _lf_out_parts.append(f"Form action: {_form_action}")
     _lf_out_parts.append("Detected fields: password input + username/email input")
     output_mgr.log_finding(
-        title="Login Page Detected",
+        title="Discovery: Login Page",
         ip=ip, port=port, hostname=hostname,
         command=f"HTTP GET {url}",
         risk=_risk,
@@ -18363,7 +18363,7 @@ def run_gobuster(
             f"on {ip}:{port}{Style.RESET_ALL}"
         )
         output_mgr.log_finding(
-            title="Web Page Identified",
+            title="Discovery: Web Page",
             ip=ip, port=port, hostname=hostname,
             risk="INFO",
             command=" ".join(cmd),
@@ -25142,7 +25142,7 @@ def run_hostname_resolution(
             for m in data["methods"]:
                 sources_used.add(m)
             output_mgr.log_finding(
-                title="Hostname Identified",
+                title="Discovery: Hostname",
                 ip=ip,
                 port=0,
                 hostname=hn,
