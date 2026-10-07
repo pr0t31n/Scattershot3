@@ -26049,6 +26049,29 @@ def _verify_hydra_credential(
         if resp_body and _HYDRA_FP_BODY_RE.search(resp_body):
             return False, resp_body, screenshot_path
 
+        # Follow-up GET to the login page — lockout messages often appear
+        # on the login page, not in the POST response (which may redirect
+        # to a generic page or return a non-HTML response).
+        if auth_info and auth_info.get("type") == "form":
+            try:
+                login_url = auth_info.get("login_url") or f"{scheme}://{ip}:{port}/"
+                get_req = urllib.request.Request(
+                    login_url, headers={"User-Agent": "Mozilla/5.0"})
+                try:
+                    get_resp = urllib.request.urlopen(
+                        get_req, timeout=10, context=ctx)
+                    login_body = get_resp.read(65536).decode(
+                        "utf-8", errors="replace")
+                except urllib.error.HTTPError as _he2:
+                    login_body = (_he2.read(65536).decode(
+                        "utf-8", errors="replace") if _he2.fp else "")
+                except Exception:
+                    login_body = ""
+                if login_body and _HYDRA_FP_BODY_RE.search(login_body):
+                    return False, login_body, screenshot_path
+            except Exception:
+                pass
+
         if not resp_body:
             return False, "(no response body captured)", screenshot_path
 
@@ -26167,6 +26190,7 @@ def _extract_login_form(html: str, page_url: str) -> "dict | None":
             "user_field": user_field,
             "pass_field": pass_field,
             "extra_params": extra,
+            "login_url": page_url,
         }
 
     return None
@@ -26459,7 +26483,7 @@ def run_hydra_brute(
                     if _vss:
                         _verify_note = f"\nVerification screenshot: {_vss}"
                     output_mgr.log_finding(
-                        title=f"Valid Credentials via Brute Force ({_effective_svc.upper()})",
+                        title="Brute Force: Web Server Permits Weak/Default Passwords",
                         ip=ip, port=port, hostname=hostname,
                         command=" ".join(cmd), risk="CRITICAL",
                         description=f"Hydra confirmed {user}:{pwd} for {_effective_svc.upper()} on {ip}:{port}. Credential verified by replay.",
