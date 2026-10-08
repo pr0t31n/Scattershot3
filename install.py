@@ -134,7 +134,7 @@ APT_PACKAGES = [
     "nfs-common", "ipmitool",
     "nbtscan", "avahi-utils", "dnsutils",
     "hydra", "exploitdb", "sqlmap",
-    "ssh-audit", "ike-scan", "ntp",
+    "ssh-audit", "ike-scan", "ntpsec",
     # OWASP ZAP for the web-DAST phase
     "zaproxy",
     # Headless browser + driver for the screenshot phase
