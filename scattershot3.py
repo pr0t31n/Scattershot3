@@ -6324,7 +6324,7 @@ def probe_uncertain_and_nonstandard_ports(
                             _dangerous = [m for m in _methods if m in ("PUT", "DELETE", "MOVE", "COPY", "PROPFIND")]
                             if _dangerous:
                                 output_mgr.log_finding(
-                                    title="Dangerous HTTP Methods Enabled",
+                                    title="HTTP Methods: Unsafe Methods Enabled",
                                     ip=ip, port=_port, hostname=hostname,
                                     command=f"curl -sk -X OPTIONS -I {_scheme}://{_curl_host}:{_port}/",
                                     risk="MEDIUM",
@@ -6351,10 +6351,10 @@ def probe_uncertain_and_nonstandard_ports(
                         _trace_body = _trace_r.stdout.decode("utf-8", errors="replace")
                         if "TRACE / HTTP" in _trace_body:
                             output_mgr.log_finding(
-                                title="HTTP TRACE Method Enabled",
+                                title="HTTP Methods: Unsafe Methods Enabled",
                                 ip=ip, port=_port, hostname=hostname,
                                 command=f"curl -sk -X TRACE {_scheme}://{_curl_host}:{_port}/",
-                                risk="LOW",
+                                risk="MEDIUM",
                                 description=(
                                     f"The web server at {_scheme}://{ip}:{_port} responds "
                                     f"to HTTP TRACE requests by echoing the request. The "
@@ -6729,7 +6729,7 @@ def probe_uncertain_and_nonstandard_ports(
                             _allow = _hm_resp.headers.get("Allow", "")
                             if _allow and any(m in _allow.upper() for m in ("PUT", "DELETE", "TRACE")):
                                 output_mgr.log_finding(
-                                    title="Dangerous HTTP Methods Allowed",
+                                    title="HTTP Methods: Unsafe Methods Enabled",
                                     ip=ip, port=_port, hostname=hostname,
                                     command=f"curl -sk -X OPTIONS {_gp_base}/",
                                     risk="MEDIUM",
@@ -6744,7 +6744,7 @@ def probe_uncertain_and_nonstandard_ports(
                         elif _hm == "TRACE":
                             if "TRACE" in _hm_resp.text[:200].upper():
                                 output_mgr.log_finding(
-                                    title="HTTP TRACE Method Enabled",
+                                    title="HTTP Methods: Unsafe Methods Enabled",
                                     ip=ip, port=_port, hostname=hostname,
                                     command=f"curl -sk -X TRACE {_gp_base}/",
                                     risk="MEDIUM",
@@ -11114,37 +11114,27 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                                 _obs_ciphers = list(dict.fromkeys(
                                     re.findall(r'\b([A-Z][A-Z0-9_-]{4,})\b', _obs_text)
                                 ))
-                            if not _obs_ciphers:
-                                output_mgr.log_finding(
-                                    title="SSL/TLS Ciphers: Obsolete Ciphers Detected",
+                            output_mgr.log_finding(
+                                    title="SSL/TLS Ciphers: Obsolete Ciphers",
                                     ip=ip, port=port, command=cmd, hostname=hostname,
-                                    risk=_tsf_risk,
+                                    risk="MEDIUM",
                                     description=(
-                                        f"testssl detected obsolete ciphers offered on "
-                                        f"{ip}:{port}. Individual cipher suites could not "
-                                        f"be enumerated from the output."
+                                        f"Obsolete cipher suites offered: {', '.join(_obs_ciphers)}"
+                                        if _obs_ciphers else
+                                        "Obsolete ciphers detected but could not enumerate individual suites."
                                     ),
                                     sources="testssl",
                                     cves=_tsf_cve,
-                                    output=f"testssl finding: {_tsf_finding}",
-                                    affected=f"{ip}:{port}",
-                                    output_file=_ts_out_file,
-                                )
-                                continue
-                            for _obs_cipher in _obs_ciphers:
-                                output_mgr.log_finding(
-                                    title=f"SSL/TLS Ciphers: Obsolete Cipher — {_obs_cipher}",
-                                    ip=ip, port=port, command=cmd, hostname=hostname,
-                                    risk=_tsf_risk,
-                                    description=_tsf_finding,
-                                    sources="testssl",
-                                    cves=_tsf_cve,
                                     output=(
-                                        f"Obsolete cipher: {_obs_cipher}\n"
+                                        f"Obsolete ciphers: {', '.join(_obs_ciphers)}\ntestssl finding: {_tsf_finding}"
+                                        if _obs_ciphers else
                                         f"testssl finding: {_tsf_finding}"
                                     ),
                                     affected=f"{ip}:{port}",
                                     output_file=_ts_out_file,
+                                    owasp="A02:2025 Cryptographic Failures",
+                                    nist="SC-8",
+                                    remediation="Disable weak and obsolete cipher suites; use modern TLS 1.2/1.3 with AEAD ciphers.",
                                 )
                             continue
                         elif _tsf_id == "DNS_CAArecord":
@@ -15545,6 +15535,46 @@ def check_selenium_ready() -> bool:
     return False
 
 
+def _overlay_url_bar(img_path, url):
+    """Overlay a browser-style URL address bar at the top of a screenshot."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return
+    try:
+        img = Image.open(img_path)
+    except Exception:
+        return
+    BAR_H = 36
+    PAD_LEFT = 40
+    w, h = img.size
+    composite = Image.new("RGB", (w, h + BAR_H), (240, 240, 240))
+    draw = ImageDraw.Draw(composite)
+    draw.rectangle([0, 0, w, BAR_H], fill=(245, 245, 245))
+    draw.line([0, BAR_H - 1, w, BAR_H - 1], fill=(210, 210, 210))
+    # URL input field
+    field_y = 6
+    field_h = BAR_H - 12
+    draw.rounded_rectangle(
+        [PAD_LEFT, field_y, w - 12, field_y + field_h],
+        radius=4, fill=(255, 255, 255), outline=(200, 200, 200))
+    prefix = "\U0001f512 " if url.startswith("https") else ""
+    label = prefix + url
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 13)
+    except Exception:
+        try:
+            font = ImageFont.truetype("/System/Library/Fonts/SFNSMono.ttf", 13)
+        except Exception:
+            font = ImageFont.load_default()
+    draw.text((PAD_LEFT + 8, field_y + 3), label, fill=(50, 50, 50), font=font)
+    composite.paste(img, (0, BAR_H))
+    try:
+        composite.save(img_path)
+    except Exception:
+        pass
+
+
 def take_web_screenshot(
     ip: str,
     port: int,
@@ -15600,12 +15630,14 @@ def take_web_screenshot(
 
         svc    = _build_chrome_service()
         driver = webdriver.Chrome(service=svc, options=opts)
+        final_url = url
         try:
             driver.set_page_load_timeout(timeout_s)
             try:
                 driver.get(url)
             except Exception:
                 pass   # timeout / load error — screenshot whatever loaded
+            final_url = driver.current_url or url
             # Expand window to full page height for a full-page-equivalent capture
             total_height = driver.execute_script(
                 "return Math.max("
@@ -15620,6 +15652,8 @@ def take_web_screenshot(
                 driver.quit()
             except Exception:
                 pass
+
+        _overlay_url_bar(out_path, final_url)
 
         _tprint(
             f"  {Fore.GREEN}[+] Screenshot: {ip}:{port} → {out_path.name}{Style.RESET_ALL}"
@@ -17719,7 +17753,9 @@ def check_tomcat_manager(
                             driver.get(url)
                         except Exception:
                             pass
+                        _tc_final_url = driver.current_url or url
                         driver.save_screenshot(str(shot_path))
+                        _overlay_url_bar(shot_path, _tc_final_url)
                         _tprint(
                             f"  {Fore.GREEN}[+] Tomcat screenshot: "
                             f"{url} → {shot_path.name}{Style.RESET_ALL}"
