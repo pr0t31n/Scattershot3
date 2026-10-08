@@ -4693,6 +4693,128 @@ def expand_targets(raw_targets: list) -> list:
     return sorted(ips, key=lambda ip: int(ipaddress.ip_address(ip)))
 
 
+# Above this threshold, CIDRs are passed directly to nmap without expanding
+# to individual IPs — avoids OOM on large ranges (e.g. /8 = 16.7M IPs).
+_LAZY_EXPAND_THRESHOLD = 10000
+
+
+def count_targets(raw_targets: list) -> int:
+    """Count total individual IPs in target specs without expanding them."""
+    count = 0
+    for target in raw_targets:
+        target = target.strip()
+        if not target:
+            continue
+        if "/" in target:
+            try:
+                network = ipaddress.ip_network(target, strict=False)
+                n = network.num_addresses
+                count += max(n - 2, 1) if n > 2 else n
+                continue
+            except ValueError:
+                pass
+        if "-" in target:
+            start_str, end_str = (p.strip() for p in target.split("-", 1))
+            if _RE_IPV4.match(end_str):
+                try:
+                    start_int = int(ipaddress.ip_address(start_str))
+                    end_int = int(ipaddress.ip_address(end_str))
+                    count += max(end_int - start_int + 1, 0)
+                    continue
+                except ValueError:
+                    pass
+            else:
+                try:
+                    start_oct = int(start_str.split(".")[-1])
+                    end_oct = min(int(end_str), 255)
+                    count += max(end_oct - start_oct + 1, 0)
+                    continue
+                except ValueError:
+                    pass
+        try:
+            ipaddress.ip_address(target)
+            count += 1
+        except ValueError:
+            pass
+    return count
+
+
+def _ip_in_spec(ip_str: str, spec: str) -> bool:
+    """Check if an individual IP falls within a raw target spec."""
+    spec = spec.strip()
+    if not spec:
+        return False
+    try:
+        addr = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    if "/" in spec:
+        try:
+            return addr in ipaddress.ip_network(spec, strict=False)
+        except ValueError:
+            return False
+    if "-" in spec:
+        start_str, end_str = (p.strip() for p in spec.split("-", 1))
+        if _RE_IPV4.match(end_str):
+            try:
+                s = int(ipaddress.ip_address(start_str))
+                e = int(ipaddress.ip_address(end_str))
+                return s <= int(addr) <= e
+            except ValueError:
+                return False
+        else:
+            try:
+                base = ".".join(start_str.split(".")[:3])
+                if not ip_str.startswith(base + "."):
+                    return False
+                return (int(start_str.split(".")[-1])
+                        <= int(ip_str.split(".")[-1])
+                        <= min(int(end_str), 255))
+            except (ValueError, IndexError):
+                return False
+    return ip_str == spec
+
+
+def _expand_sample_ips(raw_specs: list, n: int = 10) -> list:
+    """Expand at most *n* IPs from raw specs for subnet-membership checks."""
+    result: list = []
+    for spec in raw_specs:
+        spec = spec.strip()
+        if not spec:
+            continue
+        if "/" in spec:
+            try:
+                net = ipaddress.ip_network(spec, strict=False)
+                for host in net.hosts():
+                    result.append(str(host))
+                    if len(result) >= n:
+                        return result
+                continue
+            except ValueError:
+                pass
+        if "-" in spec:
+            start_str, end_str = (p.strip() for p in spec.split("-", 1))
+            if _RE_IPV4.match(end_str):
+                try:
+                    s = int(ipaddress.ip_address(start_str))
+                    e = int(ipaddress.ip_address(end_str))
+                    for i in range(s, min(e + 1, s + n)):
+                        result.append(str(ipaddress.ip_address(i)))
+                        if len(result) >= n:
+                            return result
+                    continue
+                except ValueError:
+                    pass
+        try:
+            ipaddress.ip_address(spec)
+            result.append(spec)
+            if len(result) >= n:
+                return result
+        except ValueError:
+            pass
+    return result
+
+
 # ─────────────────────────────────────────────
 # Web service detection
 # ─────────────────────────────────────────────
@@ -5041,10 +5163,16 @@ def host_discovery_range(
     else:
         nmap_targets = list(ips)
 
+    if not nmap_targets:
+        return {ip: False for ip in ips}
+
     hosts_str = " ".join(nmap_targets)
     cmd_list  = ["nmap"] + nmap_args.split() + nmap_targets
 
-    alive_map: dict[str, bool] = {ip: False for ip in ips}
+    # When ips is empty (lazy-expand mode), don't pre-populate — just collect
+    # alive IPs from nmap output.  Callers use .get(ip) which returns None
+    # (falsy) for absent keys, same semantics as False.
+    alive_map: dict[str, bool] = {ip: False for ip in ips} if ips else {}
 
     nm = nmap.PortScanner()
     try:
@@ -5074,7 +5202,7 @@ def host_discovery_range(
             )
 
         for ip in nm.all_hosts():
-            if ip not in alive_map:
+            if ips and ip not in alive_map:
                 continue
             state  = nm[ip].state()
             reason = nm[ip].get("status", {}).get("reason", "").lower()
@@ -26899,6 +27027,8 @@ def scan_scope(
     msdat_path:      "str | None" = None,
     enumdb_path:     "str | None" = None,
     zap_path:        "str | None" = None,
+    target_count:    int = 0,
+    exclude_ips:     "set | None" = None,
 ) -> dict:
     """
     Run a complete discovery + port + web + banner + SSL scan pass for one
@@ -26921,8 +27051,12 @@ def scan_scope(
     scope_colour = Fore.GREEN if scope == "int" else Fore.YELLOW
     scope_label  = f"{scope_colour}[{scope.upper()}]{Style.RESET_ALL}"
 
+    _lazy = target_count > 0 and not targets
+    _n_targets = target_count if _lazy else len(targets)
+    _exclude = exclude_ips or set()
+
     print(f"\n{Fore.CYAN}{'═'*60}{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}[*] {scope_label} {Fore.CYAN}pass — {len(targets)} target(s){Style.RESET_ALL}")
+    print(f"{Fore.CYAN}[*] {scope_label} {Fore.CYAN}pass — {_n_targets:,} target(s){Style.RESET_ALL}")
     print(f"{Fore.CYAN}{'═'*60}{Style.RESET_ALL}")
 
     _sod = getattr(args, "scope_output_dirs", {})
@@ -26949,9 +27083,9 @@ def scan_scope(
     print()
 
     # ── Phase 1: Batch host discovery ─────────────────────────────────────────
-    _spec_desc = (f"{len(raw_specs)} spec(s) → {len(targets)} IP(s)"
-                  if raw_specs and len(raw_specs) != len(targets)
-                  else f"{len(targets)} target(s)")
+    _spec_desc = (f"{len(raw_specs)} spec(s) → {_n_targets:,} IP(s)"
+                  if raw_specs and len(raw_specs) != _n_targets
+                  else f"{_n_targets:,} target(s)")
     print(f"{Fore.CYAN}[*] {scope_label} {Fore.CYAN}Phase 1: host discovery "
           f"({_spec_desc} in one nmap pass)...{Style.RESET_ALL}",
           flush=True)
@@ -26965,47 +27099,83 @@ def scan_scope(
         raw_specs=raw_specs,
         scope=scope,
     )
+    # In lazy mode, exclude local IPs from alive results
+    if _lazy and _exclude:
+        for _eip in _exclude:
+            alive_map.pop(_eip, None)
 
     # ── Phase 1b: Supplemental host discovery (-sn -PS -PA -PR) ─────────────
     # A second nmap pass with TCP-SYN, TCP-ACK, and ARP probes catches hosts
     # that do not respond to ICMP but reply to TCP handshake probes or ARP
     # (common on hardened servers and local-network segments).
-    _first_dead = [ip for ip in targets if not alive_map.get(ip)]
-    if _first_dead:
+    _1b_timeout  = "30s" if scope == "ext" else "10s"
+    _1b_retries  = "2"  if scope == "ext" else "1"
+    _1b_nmap_args = (
+        "-n -sn --reason "
+        "-PS21,22,23,25,53,80,110,111,135,139,143,179,389,443,445,"
+        "465,587,636,993,995,1433,1723,2525,3306,3389,5432,5900,"
+        "8080,8443,8888,9090,9443 "
+        "-PA80,443 "
+        "-PR "
+        f"--max-retries {_1b_retries} --min-parallelism 20 "
+        f"--host-timeout {_1b_timeout}"
+    )
+    if _lazy:
+        # Re-scan full scope with supplemental probes — nmap handles CIDRs
+        _alive_before = sum(1 for v in alive_map.values() if v)
         print(f"{Fore.CYAN}[*] {scope_label} Phase 1b: supplemental discovery "
-              f"(-PS -PA -PR, {len(_first_dead)} non-responsive host(s))...{Style.RESET_ALL}",
+              f"(-PS -PA -PR, full scope re-scan)...{Style.RESET_ALL}",
               flush=True)
-        _1b_timeout  = "30s" if scope == "ext" else "10s"
-        _1b_retries  = "2"  if scope == "ext" else "1"
         _alive_map_2 = host_discovery_range(
-            _first_dead,
+            [],
             output_mgr=output_mgr,
             nmap_path=nmap_path,
-            nmap_args=(
-                "-n -sn --reason "
-                "-PS21,22,23,25,53,80,110,111,135,139,143,179,389,443,445,"
-                "465,587,636,993,995,1433,1723,2525,3306,3389,5432,5900,"
-                "8080,8443,8888,9090,9443 "
-                "-PA80,443 "
-                "-PR "
-                f"--max-retries {_1b_retries} --min-parallelism 20 "
-                f"--host-timeout {_1b_timeout}"
-            ),
+            raw_specs=raw_specs,
+            nmap_args=_1b_nmap_args,
             scope=scope,
         )
-        _newly_alive = [ip for ip, alive in _alive_map_2.items() if alive]
+        _newly_alive = [ip for ip, alive in _alive_map_2.items()
+                        if alive and not alive_map.get(ip)
+                        and ip not in _exclude]
         for ip in _newly_alive:
             alive_map[ip] = True
             print(f"    {Fore.GREEN}[+] {ip} — ALIVE (supplemental probe){Style.RESET_ALL}")
         if not _newly_alive:
             print(f"    {Fore.YELLOW}[~] No additional hosts found in supplemental pass{Style.RESET_ALL}")
+    else:
+        _first_dead = [ip for ip in targets if not alive_map.get(ip)]
+        if _first_dead:
+            print(f"{Fore.CYAN}[*] {scope_label} Phase 1b: supplemental discovery "
+                  f"(-PS -PA -PR, {len(_first_dead)} non-responsive host(s))...{Style.RESET_ALL}",
+                  flush=True)
+            _alive_map_2 = host_discovery_range(
+                _first_dead,
+                output_mgr=output_mgr,
+                nmap_path=nmap_path,
+                nmap_args=_1b_nmap_args,
+                scope=scope,
+            )
+            _newly_alive = [ip for ip, alive in _alive_map_2.items() if alive]
+            for ip in _newly_alive:
+                alive_map[ip] = True
+                print(f"    {Fore.GREEN}[+] {ip} — ALIVE (supplemental probe){Style.RESET_ALL}")
+            if not _newly_alive:
+                print(f"    {Fore.YELLOW}[~] No additional hosts found in supplemental pass{Style.RESET_ALL}")
 
     # Phase 1c (rustscan rescue) now runs in parallel with Phase 2 — see below.
-    _still_dead = [ip for ip in targets if not alive_map.get(ip)]
+    # In lazy mode, skip per-IP dead enumeration (millions of IPs).
+    _still_dead = [] if _lazy else [ip for ip in targets if not alive_map.get(ip)]
 
-    alive_ips   = [ip for ip in targets if alive_map.get(ip)]
-    dead_ips    = [ip for ip in targets if not alive_map.get(ip)]
+    if _lazy:
+        alive_ips = sorted(
+            [ip for ip, v in alive_map.items() if v],
+            key=lambda a: int(ipaddress.ip_address(a)))
+        dead_ips    = []
+    else:
+        alive_ips   = [ip for ip in targets if alive_map.get(ip)]
+        dead_ips    = [ip for ip in targets if not alive_map.get(ip)]
     alive_count = len(alive_ips)
+    _dead_count = _n_targets - alive_count
 
     # ── Write persistent active-IPs file ─────────────────────────────────────
     active_ips_file: "Path | None" = None
@@ -27017,11 +27187,14 @@ def scan_scope(
             active_ips_file = None
 
     print(f"{Fore.GREEN}[+] {scope_label} Discovery complete: "
-          f"{alive_count} alive / {len(targets)} total{Style.RESET_ALL}")
+          f"{alive_count} alive / {_n_targets:,} total{Style.RESET_ALL}")
     _vc.status(f"{scope}_p1_discovery", label="Phase 1: Host Discovery",
-               status="complete", step=f"{alive_count} alive / {len(targets)} total")
-    for ip in dead_ips:
-        print(f"    {Fore.RED}[-] {ip} — no response{Style.RESET_ALL}")
+               status="complete", step=f"{alive_count} alive / {_n_targets:,} total")
+    if _lazy and _dead_count > 0:
+        print(f"    {Fore.RED}[-] {_dead_count:,} host(s) — no response{Style.RESET_ALL}")
+    else:
+        for ip in dead_ips:
+            print(f"    {Fore.RED}[-] {ip} — no response{Style.RESET_ALL}")
     for ip in alive_ips:
         print(f"    {Fore.GREEN}[+] {ip} — ALIVE{Style.RESET_ALL}")
         # Live-emit so Vantage's Targets tab adds the host immediately,
@@ -27073,12 +27246,14 @@ def scan_scope(
                    status="skipped")
 
     # Initialise result dict — dead hosts get a minimal stub entry
+    # (skipped in lazy mode to avoid creating millions of entries)
     all_results: dict = {}
-    for ip in dead_ips:
-        all_results[ip] = {
-            "alive": False, "hostname": None, "scope": scope,
-            "open_ports": {}, "web_services": [], "ssl_results": {},
-        }
+    if not _lazy:
+        for ip in dead_ips:
+            all_results[ip] = {
+                "alive": False, "hostname": None, "scope": scope,
+                "open_ports": {}, "web_services": [], "ssl_results": {},
+            }
 
     # ── Detect source IP / interface for this scope ───────────────────────────
     scope_source_ip    = None
@@ -27401,8 +27576,14 @@ def scan_scope(
                status="complete" if alive_ips else "skipped")
 
     # Recompute after rescue — rescued hosts are now in alive_map
-    alive_ips   = [ip for ip in targets if alive_map.get(ip)]
-    dead_ips    = [ip for ip in targets if not alive_map.get(ip)]
+    if _lazy:
+        alive_ips = sorted(
+            [ip for ip, v in alive_map.items() if v],
+            key=lambda a: int(ipaddress.ip_address(a)))
+        dead_ips = []
+    else:
+        alive_ips   = [ip for ip in targets if alive_map.get(ip)]
+        dead_ips    = [ip for ip in targets if not alive_map.get(ip)]
     alive_count = len(alive_ips)
 
     # Rewrite active_ips.txt with all alive hosts (including rescued)
@@ -27415,17 +27596,19 @@ def scan_scope(
             pass
 
     # Ensure dead stubs exist for truly-dead hosts only
-    for ip in dead_ips:
-        if ip not in all_results:
-            all_results[ip] = {
-                "alive": False, "hostname": None, "scope": scope,
-                "open_ports": {}, "web_services": [], "ssl_results": {},
-            }
+    # (skipped in lazy mode)
+    if not _lazy:
+        for ip in dead_ips:
+            if ip not in all_results:
+                all_results[ip] = {
+                    "alive": False, "hostname": None, "scope": scope,
+                    "open_ports": {}, "web_services": [], "ssl_results": {},
+                }
 
     # ── Scope-level summary ───────────────────────────────────────────────────
     print(f"\n{scope_label} {Fore.CYAN}Scope complete — "
           f"{Fore.GREEN}{alive_count} alive{Fore.CYAN} / "
-          f"{len(targets)} total{Style.RESET_ALL}")
+          f"{_n_targets:,} total{Style.RESET_ALL}")
 
     web_hosts = [ip for ip, r in all_results.items() if r.get("web_services")]
     if web_hosts:
@@ -28343,48 +28526,73 @@ def main():
     # Resolve any URL/FQDN targets to IPs (substitutes in-place)
     resolved = _resolve_url_fqdn_targets(resolved)
 
-    # Expand to individual IPs and deduplicate
-    all_ips = expand_targets(resolved)
-    if not all_ips:
+    # ── Count and conditionally expand targets ──────────────────────────
+    _target_count = count_targets(resolved)
+    if _target_count == 0:
         print(f"{Fore.RED}[!] No valid targets after expansion. Exiting.{Style.RESET_ALL}")
         sys.exit(1)
 
+    _lazy_targets = _target_count > _LAZY_EXPAND_THRESHOLD
+
+    if _lazy_targets:
+        print(f"{Fore.CYAN}[*] Large target space ({_target_count:,} IPs) — "
+              f"passing CIDRs directly to nmap (no pre-expansion){Style.RESET_ALL}")
+        all_ips = []
+    else:
+        all_ips = expand_targets(resolved)
+        if not all_ips:
+            print(f"{Fore.RED}[!] No valid targets after expansion. Exiting.{Style.RESET_ALL}")
+            sys.exit(1)
+
     # ── Remove originating-host IPs — never scan ourselves ────────────
     local_ips = _get_local_ips()
+    _local_in_scope: set = set()
     if local_ips:
-        excluded = [ip for ip in all_ips if ip in local_ips]
-        if excluded:
-            print(f"{Fore.YELLOW}[~] Excluding {len(excluded)} local interface IP(s) from scope: "
-                  f"{', '.join(sorted(excluded))}{Style.RESET_ALL}")
-        all_ips = [ip for ip in all_ips if ip not in local_ips]
-    if not all_ips:
+        if _lazy_targets:
+            _local_in_scope = {lip for lip in local_ips
+                               if any(_ip_in_spec(lip, s) for s in resolved)}
+            if _local_in_scope:
+                print(f"{Fore.YELLOW}[~] Local IP(s) in target scope (will be "
+                      f"excluded from alive results): "
+                      f"{', '.join(sorted(_local_in_scope))}{Style.RESET_ALL}")
+        else:
+            excluded = [ip for ip in all_ips if ip in local_ips]
+            if excluded:
+                print(f"{Fore.YELLOW}[~] Excluding {len(excluded)} local interface IP(s) from scope: "
+                      f"{', '.join(sorted(excluded))}{Style.RESET_ALL}")
+            all_ips = [ip for ip in all_ips if ip not in local_ips]
+    if not _lazy_targets and not all_ips:
         print(f"{Fore.RED}[!] No valid targets remain after excluding local IPs. Exiting.{Style.RESET_ALL}")
         sys.exit(1)
 
-    # ── Classify into internal / external ─────────────────────────────
-    scopes = partition_targets(all_ips)
-    internal_ips = scopes.get("int", [])
-    external_ips = scopes.get("ext", [])
-
     # ── Preserve raw specs per scope for compact nmap discovery calls ──
-    # partition_raw_targets() classifies each original CIDR/range/IP string
-    # by scope so that host_discovery_range() can pass "10.0.1.0/24" to nmap
-    # instead of 254 individual IP strings.  expand_targets() + partition_targets()
-    # above still produce the flat IP lists used by all downstream phases.
     raw_scopes    = partition_raw_targets(resolved)
     raw_internal  = raw_scopes.get("int", [])
     raw_external  = raw_scopes.get("ext", [])
+
+    # ── Classify into internal / external ─────────────────────────────
+    if _lazy_targets:
+        internal_ips = []
+        external_ips = []
+        _int_count = count_targets(raw_internal)
+        _ext_count = count_targets(raw_external)
+    else:
+        scopes = partition_targets(all_ips)
+        internal_ips = scopes.get("int", [])
+        external_ips = scopes.get("ext", [])
+        _int_count = len(internal_ips)
+        _ext_count = len(external_ips)
 
     # Print target breakdown before scanning starts
     print(f"\n{Fore.CYAN}[*] Mode   : {'Fast (top-1000)' if args.fast else 'Full (all 65535 ports)'}{Style.RESET_ALL}")
     print(f"{Fore.CYAN}[*] Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{Style.RESET_ALL}")
     print(f"\n{Fore.CYAN}[*] Target breakdown:{Style.RESET_ALL}")
-    print(f"    {Fore.GREEN}[INT]{Style.RESET_ALL}  {len(internal_ips):>4} target(s)  "
+    print(f"    {Fore.GREEN}[INT]{Style.RESET_ALL}  {_int_count:>8,} target(s)  "
           f"(RFC-1918 / private address space)")
-    print(f"    {Fore.YELLOW}[EXT]{Style.RESET_ALL}  {len(external_ips):>4} target(s)  "
+    print(f"    {Fore.YELLOW}[EXT]{Style.RESET_ALL}  {_ext_count:>8,} target(s)  "
           f"(publicly routable)")
-    print(f"    {'─'*42}")
-    print(f"    {'Total':>10}  {len(all_ips):>4} target(s)  "
+    print(f"    {'─'*50}")
+    print(f"    {'Total':>10}  {_target_count:>8,} target(s)  "
           f"(after deduplication + expansion)")
 
     if not args.no_web:
@@ -28409,7 +28617,7 @@ def main():
     # fails reachability validation, scan execution is aborted — there
     # is no point scanning targets that cannot be reached.
     route_setup_result: dict = {}
-    if internal_ips and not getattr(args, "no_route_setup", False):
+    if (internal_ips or (_lazy_targets and raw_internal)) and not getattr(args, "no_route_setup", False):
         dry = getattr(args, "dry_run_routes", False)
         route_setup_result = setup_internal_routes(
             raw_internal,
@@ -28435,7 +28643,7 @@ def main():
                   f"and --route-gateway explicitly, then re-run."
                   f"{Style.RESET_ALL}")
             sys.exit(2)
-    elif not internal_ips:
+    elif not internal_ips and not (_lazy_targets and raw_internal):
         pass  # no internal targets — nothing to route
     else:
         print(f"{Fore.YELLOW}[~] Internal route setup disabled (--no-route-setup){Style.RESET_ALL}")
@@ -28616,19 +28824,19 @@ def main():
         "hostname":         "",
         "title":            "Launch Nessus Vulnerability Scan",
         "description":      (f"Run a Nessus vulnerability scan against the full "
-                             f"project scope ({len(all_ips)} target(s)). Nessus "
+                             f"project scope ({_target_count:,} target(s)). Nessus "
                              f"can run in parallel with Scattershot3 for maximum "
                              f"coverage."),
         "source_finding":   "",
         "priority":         "HIGH",
-        "scope":            "int" if internal_ips else "ext",
+        "scope":            "int" if (internal_ips or raw_internal) else "ext",
         "status":           "pending",
         "datetime":         datetime.now().isoformat(),
         "metadata":         {
             "scope_targets": resolved,
-            "all_ips":       all_ips,
-            "internal_count": len(internal_ips),
-            "external_count": len(external_ips),
+            "all_ips":       all_ips if all_ips else resolved,
+            "internal_count": _int_count,
+            "external_count": _ext_count,
         },
         "_scope":           "int",
     }
@@ -28672,24 +28880,26 @@ def main():
     # broadcast name-resolution requests during the scan window are captured.
     # Linux-only; skipped silently on Windows/macOS.
     responder_proc: "subprocess.Popen | None" = None
-    if (internal_ips
+    _has_internal = bool(internal_ips) or (_lazy_targets and bool(raw_internal))
+    if (_has_internal
             and responder_path
             and platform.system() == "Linux"
             and not getattr(args, "no_responder", False)):
-        if not _server_shares_segment_with_targets(internal_ips):
+        _responder_sample = internal_ips or _expand_sample_ips(raw_internal, 10)
+        if not _server_shares_segment_with_targets(_responder_sample):
             print(
                 f"{Fore.YELLOW}[~] Responder: server is not on the same network "
                 f"segment as any internal target — skipping{Style.RESET_ALL}"
             )
         else:
-            iface = _detect_responder_interface(internal_ips)
+            iface = _detect_responder_interface(_responder_sample)
             if iface:
                 responder_proc = run_responder_background(
                     responder_path, iface,
                     project_root_early,
                     cred_store,
                     smbmap_path=smbmap_path,
-                    target_ips=internal_ips,
+                    target_ips=_responder_sample,
                 )
             else:
                 print(
@@ -28698,7 +28908,7 @@ def main():
                 )
 
     def _run_scope_int():
-        if not internal_ips:
+        if not internal_ips and not (_lazy_targets and raw_internal):
             print(f"\n{Fore.CYAN}[~] No INT targets — skipping internal pass.{Style.RESET_ALL}")
             _pm.set_phase_status("scope_int", "skipped", label="Scan: Internal")
             _vc.status("scope_int", label="Scan: Internal", status="skipped")
@@ -28709,7 +28919,7 @@ def main():
         else:
             _pm.set_phase_status("scope_int", "running", label="Scan: Internal")
             _vc.status("scope_int", label="Scan: Internal", status="running",
-                       step=f"{len(internal_ips)} targets")
+                       step=f"{_int_count:,} targets")
         results = scan_scope("int", internal_ips, args,
                              nmap_path, sslscan_path, testssl_path,
                              nuclei_path=nuclei_path,
@@ -28739,13 +28949,15 @@ def main():
                              odat_path=odat_path,
                              msdat_path=msdat_path,
                              enumdb_path=enumdb_path,
-                             zap_path=zap_path)
+                             zap_path=zap_path,
+                             target_count=_int_count,
+                             exclude_ips=_local_in_scope)
         combined_results["int"] = results
         _pm.set_phase_status("scope_int", "complete", label="Scan: Internal")
         _vc.status("scope_int", label="Scan: Internal", status="complete")
 
     def _run_scope_ext():
-        if not external_ips:
+        if not external_ips and not (_lazy_targets and raw_external):
             print(f"\n{Fore.CYAN}[~] No EXT targets — skipping external pass.{Style.RESET_ALL}")
             _pm.set_phase_status("scope_ext", "skipped", label="Scan: External")
             _vc.status("scope_ext", label="Scan: External", status="skipped")
@@ -28756,7 +28968,7 @@ def main():
         else:
             _pm.set_phase_status("scope_ext", "running", label="Scan: External")
             _vc.status("scope_ext", label="Scan: External", status="running",
-                       step=f"{len(external_ips)} targets")
+                       step=f"{_ext_count:,} targets")
         results = scan_scope("ext", external_ips, args,
                              nmap_path, sslscan_path, testssl_path,
                              nuclei_path=nuclei_path,
@@ -28786,7 +28998,9 @@ def main():
                              odat_path=odat_path,
                              msdat_path=msdat_path,
                              enumdb_path=enumdb_path,
-                             zap_path=zap_path)
+                             zap_path=zap_path,
+                             target_count=_ext_count,
+                             exclude_ips=_local_in_scope)
         combined_results["ext"] = results
         _pm.set_phase_status("scope_ext", "complete", label="Scan: External")
         _vc.status("scope_ext", label="Scan: External", status="complete")
@@ -28839,7 +29053,8 @@ def main():
                 # Write per-scope findings for all captured hashes and credentials
                 scanned = [s for s in ("int", "ext")
                            if (project_root_early / s).exists()]
-                log_responder_findings(project_root_early, cred_store, scanned, target_ips=internal_ips)
+                log_responder_findings(project_root_early, cred_store, scanned,
+                                      target_ips=internal_ips or _expand_sample_ips(raw_internal, 10))
                 _resp_ai = {
                     "id":              str(_uuid.uuid4()),
                     "type":            "credential_reuse",
@@ -29006,9 +29221,9 @@ def main():
             "route_setup":    route_setup_result,
         },
         "provided_targets": {
-            "int":   internal_ips,
-            "ext":   external_ips,
-            "total": len(all_ips),
+            "int":   internal_ips if internal_ips else raw_internal,
+            "ext":   external_ips if external_ips else raw_external,
+            "total": _target_count,
         },
         "alive_counts": {
             scope: sum(1 for r in res.values() if r.get("alive"))
