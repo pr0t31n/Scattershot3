@@ -5243,6 +5243,421 @@ def host_discovery_range(
     return alive_map
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Chunked discovery pipeline — breaks large ranges into /20 chunks, runs
+# discovery and per-host enrichment concurrently.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _chunk_ranges(
+    raw_specs: "list[str]",
+    chunk_prefix: int = 20,
+) -> "list[str]":
+    """
+    Split a list of CIDR/IP specs into /chunk_prefix subnets.
+
+    Individual IPs and ranges smaller than or equal to /<chunk_prefix> pass
+    through unchanged.  Larger CIDRs are exploded into /<chunk_prefix>
+    subnets (e.g. 10.0.0.0/8 → 4096 x /20 chunks).
+
+    Returns a list of CIDR strings suitable for passing to nmap.
+    """
+    chunks: list[str] = []
+    for spec in raw_specs:
+        spec = spec.strip()
+        if not spec:
+            continue
+        try:
+            net = ipaddress.ip_network(spec, strict=False)
+        except ValueError:
+            chunks.append(spec)
+            continue
+        if net.prefixlen >= chunk_prefix:
+            chunks.append(str(net))
+        else:
+            for subnet in net.subnets(new_prefix=chunk_prefix):
+                chunks.append(str(subnet))
+    return chunks
+
+
+def _parse_nmap_xml_alive(xml_path: "Path | str") -> "tuple[list[str], list[str]]":
+    """
+    Parse an nmap -sn XML output file and return (alive_ips, all_ips).
+
+    alive_ips: IPs that nmap reported as "up" with a non-spurious reason.
+    all_ips:   every IP that appeared in nmap's output (up or down).
+
+    Reasons from routers/firewalls rather than the target itself are excluded
+    (same logic as host_discovery_range).
+    """
+    _SPURIOUS_REASONS = frozenset({
+        "host-unreach", "net-unreach", "admin-prohibited",
+        "host-prohibited", "no-response",
+    })
+    alive: list[str] = []
+    all_hosts: list[str] = []
+    try:
+        tree = _ET.parse(str(xml_path))
+        root = tree.getroot()
+        for host_el in root.findall("host"):
+            addr_el = host_el.find("address[@addrtype='ipv4']")
+            if addr_el is None:
+                addr_el = host_el.find("address[@addrtype='ipv6']")
+            if addr_el is None:
+                continue
+            ip = addr_el.get("addr", "")
+            if not ip:
+                continue
+            all_hosts.append(ip)
+            status_el = host_el.find("status")
+            if status_el is None:
+                continue
+            state = (status_el.get("state", "") or "").lower()
+            reason = (status_el.get("reason", "") or "").lower()
+            if (
+                state == "up"
+                and reason not in _SPURIOUS_REASONS
+                and "filter" not in reason
+                and "unreach" not in reason
+            ):
+                alive.append(ip)
+    except Exception:
+        pass
+    return alive, all_hosts
+
+
+def _discover_chunk(
+    chunk_spec: str,
+    chunk_idx: int,
+    total_chunks: int,
+    output_mgr: "OutputManager",
+    nmap_path: str,
+    scope: str,
+    nmap_args: "str | None" = None,
+    supp_nmap_args: "str | None" = None,
+    rustscan_path: "str | None" = None,
+) -> "tuple[list[str], list[str]]":
+    """
+    Run host discovery on one /20 chunk using direct nmap subprocess.
+
+    Steps:
+      1. Primary -sn sweep with -oA (native file output)
+      2. Supplemental pass (-PS -PA -PR) for non-responsive hosts
+      3. Per-chunk rustscan/nmap-Pn rescue for still-dead hosts
+
+    Returns (alive_ips, dead_ips) for this chunk.
+    """
+    scope_colour = Fore.GREEN if scope == "int" else Fore.YELLOW
+    scope_label = f"{scope_colour}[{scope.upper()}]{Style.RESET_ALL}"
+    ts_safe = datetime.now().strftime("%Y%m%d_%H%M%S")
+    chunk_safe = chunk_spec.replace("/", "_").replace(".", "-")
+    disc_dir = output_mgr.scope_tool_path("nmap_discovery")
+
+    # ── Default discovery args ────────────────────────────────────────────────
+    if nmap_args is None:
+        _host_timeout = "30s" if scope == "ext" else "10s"
+        _max_retries = "2" if scope == "ext" else "1"
+        nmap_args = (
+            "-n -sn --reason "
+            "-PE "
+            "-PS21,22,23,25,53,80,110,111,135,139,143,179,389,443,445,"
+            "465,587,636,993,995,1433,1723,2525,3306,3389,5432,5900,"
+            "8080,8443,8888,9090,9443 "
+            f"--max-retries {_max_retries} --min-parallelism 20 "
+            f"--host-timeout {_host_timeout}"
+        )
+
+    # ── Step 1: Primary discovery sweep ───────────────────────────────────────
+    oA_base = disc_dir / f"chunk_{chunk_safe}_{ts_safe}"
+    cmd = [nmap_path] + nmap_args.split() + ["-oA", str(oA_base), chunk_spec]
+
+    _tprint(
+        f"  {Fore.CYAN}[>] Chunk {chunk_idx}/{total_chunks}: "
+        f"{chunk_spec} (primary sweep)...{Style.RESET_ALL}",
+        flush=True,
+    )
+
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=600, errors="replace",
+        )
+        output_mgr.log_command(
+            "nmap", nmap_path, cmd, oA_base.with_suffix(".xml"),
+            extra={
+                "target": chunk_spec,
+                "scan_type": "chunk_discovery",
+                "chunk_idx": chunk_idx,
+            },
+        )
+        if proc.stderr and proc.stderr.strip():
+            try:
+                with output_mgr._log_lock:
+                    with output_mgr.error_log.open("a", encoding="utf-8") as ef:
+                        ef.write(
+                            f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+                            f"nmap discovery chunk {chunk_spec} stderr: "
+                            f"{proc.stderr.strip()}\n"
+                        )
+            except Exception:
+                pass
+    except subprocess.TimeoutExpired:
+        _tprint(
+            f"  {Fore.RED}[!] Chunk {chunk_idx} ({chunk_spec}) "
+            f"timed out after 600s{Style.RESET_ALL}"
+        )
+        output_mgr.log_error(
+            "nmap", nmap_path, cmd,
+            f"Discovery chunk {chunk_spec} timed out (600s)",
+            extra={"target": chunk_spec, "scan_type": "chunk_discovery"},
+        )
+        return [], []
+    except OSError as exc:
+        _tprint(f"  {Fore.RED}[!] nmap error for chunk {chunk_spec}: {exc}{Style.RESET_ALL}")
+        output_mgr.log_error(
+            "nmap", nmap_path, cmd, str(exc),
+            extra={"target": chunk_spec, "scan_type": "chunk_discovery"},
+        )
+        return [], []
+
+    # Parse XML for alive hosts
+    xml_path = oA_base.with_suffix(".xml")
+    alive_ips, all_ips = _parse_nmap_xml_alive(xml_path)
+    dead_ips = [ip for ip in all_ips if ip not in set(alive_ips)]
+
+    # ── Step 2: Supplemental pass for non-responsive hosts ────────────────────
+    if dead_ips and supp_nmap_args:
+        supp_base = disc_dir / f"chunk_{chunk_safe}_supp_{ts_safe}"
+        supp_cmd = (
+            [nmap_path] + supp_nmap_args.split()
+            + ["-oA", str(supp_base)]
+            + dead_ips
+        )
+        try:
+            subprocess.run(
+                supp_cmd, capture_output=True, text=True,
+                timeout=300, errors="replace",
+            )
+            output_mgr.log_command(
+                "nmap", nmap_path, supp_cmd, supp_base.with_suffix(".xml"),
+                extra={
+                    "target": chunk_spec,
+                    "scan_type": "chunk_discovery_supplemental",
+                    "chunk_idx": chunk_idx,
+                    "dead_count": len(dead_ips),
+                },
+            )
+            supp_alive, _ = _parse_nmap_xml_alive(supp_base.with_suffix(".xml"))
+            if supp_alive:
+                alive_set = set(alive_ips)
+                for ip in supp_alive:
+                    if ip not in alive_set:
+                        alive_ips.append(ip)
+                        alive_set.add(ip)
+                        _tprint(
+                            f"    {Fore.GREEN}[+] {ip} — ALIVE "
+                            f"(supplemental probe){Style.RESET_ALL}"
+                        )
+                dead_ips = [ip for ip in dead_ips if ip not in alive_set]
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+
+    # ── Step 3: Per-chunk rustscan rescue for still-dead hosts ─────────────────
+    if dead_ips:
+        _eff_rs = rustscan_path or shutil.which("rustscan")
+        rescued: list[str] = []
+        for r_ip in dead_ips:
+            r_ports: list[int] = []
+            try:
+                if _eff_rs:
+                    rs_cmd = [
+                        _eff_rs, "-a", r_ip, "--ulimit", "5000",
+                        "--greppable", "-p", "1-65535",
+                    ]
+                    rs_p = subprocess.run(
+                        rs_cmd, capture_output=True,
+                        timeout=120 if scope == "ext" else 60,
+                    )
+                    rs_txt = rs_p.stdout.decode("utf-8", errors="replace")
+                    for rl in rs_txt.splitlines():
+                        rm = (
+                            re.search(r"Open\s+[\d.]+:(\d+)", rl)
+                            or re.search(r"Open\s+(\d+)", rl)
+                        )
+                        if rm:
+                            r_ports.append(int(rm.group(1)))
+                else:
+                    pn_args = (
+                        "-n -Pn -sS -p- -T4 "
+                        "--max-retries 2 --max-rtt-timeout 3000ms "
+                        "--host-timeout 300s"
+                    )
+                    pn_nm = nmap.PortScanner()
+                    pn_nm.scan(hosts=r_ip, arguments=pn_args)
+                    if r_ip in pn_nm.all_hosts():
+                        for pr in pn_nm[r_ip].all_protocols():
+                            for pp in pn_nm[r_ip][pr]:
+                                if pn_nm[r_ip][pr][pp].get(
+                                    "state", ""
+                                ).startswith("open"):
+                                    r_ports.append(int(pp))
+            except (subprocess.TimeoutExpired, OSError, ValueError, Exception):
+                pass
+            if r_ports:
+                rescued.append(r_ip)
+                _tprint(
+                    f"    {Fore.GREEN}[+] {r_ip} — ALIVE "
+                    f"({len(r_ports)} port(s), "
+                    f"{'rustscan' if _eff_rs else 'nmap'} rescue)"
+                    f"{Style.RESET_ALL}"
+                )
+        alive_ips.extend(rescued)
+        dead_ips = [ip for ip in dead_ips if ip not in set(rescued)]
+
+    # Live-emit alive hosts so Vantage's Targets tab updates immediately
+    for ip in alive_ips:
+        _vc.target(ip=ip, hostname=None, scope=scope, alive=True, source="nmap")
+
+    count_tag = (
+        f"{Fore.GREEN}{len(alive_ips)} alive{Style.RESET_ALL}"
+        if alive_ips
+        else f"{Fore.YELLOW}0 alive{Style.RESET_ALL}"
+    )
+    _tprint(
+        f"  {Fore.CYAN}[*] Chunk {chunk_idx}/{total_chunks} "
+        f"({chunk_spec}): {count_tag}{Style.RESET_ALL}"
+    )
+
+    return alive_ips, dead_ips
+
+
+def _resolve_hostname_single(
+    ip: str,
+    output_mgr: "OutputManager",
+    nbtscan_path: "str | None" = None,
+    nmblookup_path: "str | None" = None,
+    avahi_resolve_path: "str | None" = None,
+    timeout: int = 10,
+) -> "str | None":
+    """
+    Resolve hostname for a single IP (per-host, inside port-scan worker).
+
+    Uses reverse DNS, optionally nmblookup and avahi-resolve.
+    nbtscan is skipped (it's a batch tool, not suitable per-host).
+    Returns the resolved hostname or None.
+    """
+    hostname: "str | None" = None
+    methods: list[str] = []
+
+    # Method 1: Reverse DNS (PTR)
+    try:
+        name, _, _ = socket.gethostbyaddr(ip)
+        if name:
+            hostname = name
+            methods.append("rdns")
+    except Exception:
+        pass
+
+    # Method 2: nmblookup (per-IP, Linux/macOS)
+    os_name = platform.system()
+    if nmblookup_path and os_name in ("Linux", "Darwin") and not hostname:
+        try:
+            proc = subprocess.run(
+                [nmblookup_path, "-A", ip],
+                capture_output=True, text=True,
+                timeout=timeout, errors="replace",
+            )
+            for line in proc.stdout.splitlines():
+                line = line.strip()
+                if "<00>" in line or "<20>" in line:
+                    parts = line.split()
+                    if parts and not parts[0].startswith("\\"):
+                        candidate = parts[0].strip()
+                        if "<GROUP>" not in line and candidate:
+                            hostname = candidate
+                            methods.append("nmblookup")
+                            break
+        except Exception:
+            pass
+
+    # Method 3: avahi-resolve (mDNS)
+    if avahi_resolve_path and os_name in ("Linux", "Darwin") and not hostname:
+        try:
+            proc = subprocess.run(
+                [avahi_resolve_path, "--address", ip],
+                capture_output=True, text=True,
+                timeout=timeout, errors="replace",
+            )
+            for line in proc.stdout.splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 2 and parts[0] == ip:
+                    hostname = parts[1].rstrip(".")
+                    methods.append("avahi")
+                    break
+        except Exception:
+            pass
+
+    # Log finding
+    if hostname and output_mgr:
+        output_mgr.log_finding(
+            title="Discovery: Hostname",
+            ip=ip, port=0, hostname=hostname,
+            risk="INFO",
+            command="hostname_resolution",
+            description=(
+                f"Hostname '{hostname}' resolved for {ip} via "
+                f"{', '.join(methods) or 'reverse DNS'}."
+            ),
+            output=f"IP: {ip}\nHostname: {hostname}\nMethods: {', '.join(methods)}",
+            affected=ip,
+            sources=",".join(methods) or "rdns",
+        )
+        _vc.target(ip=ip, hostname=hostname, scope=None,
+                   alive=True, source="hostname_resolution")
+
+    return hostname
+
+
+def _write_discovery_checkpoint(
+    disc_dir: Path,
+    completed_chunks: "list[str]",
+    alive_hosts: "list[str]",
+    total_chunks: int,
+) -> None:
+    """Write checkpoint.json so a crashed scan can resume."""
+    ckpt = {
+        "schema": "ss3_discovery_checkpoint_v1",
+        "timestamp": datetime.now().isoformat(),
+        "total_chunks": total_chunks,
+        "completed_chunks": completed_chunks,
+        "alive_hosts": alive_hosts,
+    }
+    ckpt_path = disc_dir / "checkpoint.json"
+    try:
+        ckpt_path.write_text(json.dumps(ckpt, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _load_discovery_checkpoint(
+    disc_dir: Path,
+) -> "tuple[list[str], list[str]] | None":
+    """
+    Load a discovery checkpoint if one exists.
+
+    Returns (completed_chunks, alive_hosts) or None if no checkpoint.
+    """
+    ckpt_path = disc_dir / "checkpoint.json"
+    if not ckpt_path.exists():
+        return None
+    try:
+        data = json.loads(ckpt_path.read_text(encoding="utf-8"))
+        if data.get("schema") != "ss3_discovery_checkpoint_v1":
+            return None
+        return data.get("completed_chunks", []), data.get("alive_hosts", [])
+    except Exception:
+        return None
+
+
 def _parse_nse_findings(
     output_mgr: "OutputManager",
     ip: str,
@@ -7820,6 +8235,10 @@ def _port_scan_worker(
     showmount_path: "str | None" = None,
     ipmitool_path:  "str | None" = None,
     rustscan_path: "str | None" = None,
+    resolve_hostname: bool = False,
+    nmblookup_path: "str | None" = None,
+    avahi_resolve_path: "str | None" = None,
+    hostnames_out: "dict | None" = None,
 ) -> "tuple[str, dict]":
     """
     Self-contained worker: port scan one IP then run all per-port secondary
@@ -7851,6 +8270,16 @@ def _port_scan_worker(
 
     Returns (ip, host_result_dict).
     """
+    # ── Per-host hostname resolution (when chunked pipeline is active) ────
+    if resolve_hostname and hostname is None:
+        hostname = _resolve_hostname_single(
+            ip, output_mgr,
+            nmblookup_path=nmblookup_path,
+            avahi_resolve_path=avahi_resolve_path,
+        )
+        if hostnames_out is not None:
+            hostnames_out[ip] = hostname
+
     _tprint(f"  {Fore.WHITE}[>] Scanning {ip}...{Style.RESET_ALL}", flush=True)
 
     open_ports, _ps_out_path = port_scan(
@@ -27041,13 +27470,20 @@ def scan_scope(
     Run a complete discovery + port + web + banner + SSL scan pass for one
     scope ("int" or "ext") against the given list of IPs.
 
-    Pipeline
-    --------
-    Phase 1   — Batch host discovery
-    Phase 1.5 — Hostname resolution (PTR + NetBIOS + mDNS)
-        A single nmap -sn call covers all targets at once.  When *raw_specs*
-        is supplied, nmap receives the original CIDR/range strings rather than
-        the expanded flat IP list — e.g. "10.0.1.0/24" instead of 254 IPs.
+    Pipeline (two modes)
+    --------------------
+    Large ranges (>4096 targets with raw_specs):
+      Chunked /20 discovery — each chunk runs nmap -sn via direct subprocess
+      with -oA for native file output, then submits alive hosts to the Phase 2
+      worker pool immediately.  Port scanning starts concurrently with the next
+      chunk's discovery.  Per-chunk supplemental probes and rustscan rescue.
+      Hostname resolution is per-host inside each port-scan worker.
+      Checkpoint file enables crash recovery.
+
+    Small target sets (≤4096 targets or no raw_specs):
+      Original monolithic pipeline — single nmap -sn call for all targets,
+      batch hostname resolution, then concurrent port scans with background
+      rustscan rescue thread.
 
     Phase 2 — Concurrent port scans + secondary tasks (20 workers)
         Each alive host gets its own worker thread (up to
@@ -27089,32 +27525,16 @@ def scan_scope(
     )
     print()
 
-    # ── Phase 1: Batch host discovery ─────────────────────────────────────────
-    _spec_desc = (f"{len(raw_specs)} spec(s) → {_n_targets:,} IP(s)"
-                  if raw_specs and len(raw_specs) != _n_targets
-                  else f"{_n_targets:,} target(s)")
-    print(f"{Fore.CYAN}[*] {scope_label} {Fore.CYAN}Phase 1: host discovery "
-          f"({_spec_desc} in one nmap pass)...{Style.RESET_ALL}",
-          flush=True)
-    _vc.status(f"{scope}_p1_discovery", label="Phase 1: Host Discovery",
-               status="running", step=_spec_desc)
+    # ── Discovery + Phase 2 pipeline ─────────────────────────────────────────
+    # When raw_specs describe large ranges (>4096 IPs), discovery is chunked
+    # into /20 subnets.  Each chunk's alive hosts are submitted to the Phase 2
+    # port-scan pool immediately, so discovery and port scanning overlap.
+    # Hostname resolution moves per-host (inside the port-scan worker) and
+    # rescue runs per-chunk instead of as a single background thread.
+    #
+    # For smaller target sets, the original monolithic pipeline is used.
+    _use_chunked = bool(raw_specs) and _n_targets > 4096
 
-    alive_map = host_discovery_range(
-        targets,
-        output_mgr=output_mgr,
-        nmap_path=nmap_path,
-        raw_specs=raw_specs,
-        scope=scope,
-    )
-    # In lazy mode, exclude local IPs from alive results
-    if _lazy and _exclude:
-        for _eip in _exclude:
-            alive_map.pop(_eip, None)
-
-    # ── Phase 1b: Supplemental host discovery (-sn -PS -PA -PR) ─────────────
-    # A second nmap pass with TCP-SYN, TCP-ACK, and ARP probes catches hosts
-    # that do not respond to ICMP but reply to TCP handshake probes or ARP
-    # (common on hardened servers and local-network segments).
     _1b_timeout  = "30s" if scope == "ext" else "10s"
     _1b_retries  = "2"  if scope == "ext" else "1"
     _1b_nmap_args = (
@@ -27127,403 +27547,203 @@ def scan_scope(
         f"--max-retries {_1b_retries} --min-parallelism 20 "
         f"--host-timeout {_1b_timeout}"
     )
-    if _lazy:
-        # Re-scan full scope with supplemental probes — nmap handles CIDRs
-        _alive_before = sum(1 for v in alive_map.values() if v)
-        print(f"{Fore.CYAN}[*] {scope_label} Phase 1b: supplemental discovery "
-              f"(-PS -PA -PR, full scope re-scan)...{Style.RESET_ALL}",
-              flush=True)
-        _alive_map_2 = host_discovery_range(
-            [],
-            output_mgr=output_mgr,
-            nmap_path=nmap_path,
-            raw_specs=raw_specs,
-            nmap_args=_1b_nmap_args,
-            scope=scope,
-        )
-        _newly_alive = [ip for ip, alive in _alive_map_2.items()
-                        if alive and not alive_map.get(ip)
-                        and ip not in _exclude]
-        for ip in _newly_alive:
-            alive_map[ip] = True
-            print(f"    {Fore.GREEN}[+] {ip} — ALIVE (supplemental probe){Style.RESET_ALL}")
-        if not _newly_alive:
-            print(f"    {Fore.YELLOW}[~] No additional hosts found in supplemental pass{Style.RESET_ALL}")
-    else:
-        _first_dead = [ip for ip in targets if not alive_map.get(ip)]
-        if _first_dead:
-            print(f"{Fore.CYAN}[*] {scope_label} Phase 1b: supplemental discovery "
-                  f"(-PS -PA -PR, {len(_first_dead)} non-responsive host(s))...{Style.RESET_ALL}",
-                  flush=True)
-            _alive_map_2 = host_discovery_range(
-                _first_dead,
-                output_mgr=output_mgr,
-                nmap_path=nmap_path,
-                nmap_args=_1b_nmap_args,
-                scope=scope,
+
+    if _use_chunked:
+        # ══════════════════════════════════════════════════════════════════════
+        # CHUNKED DISCOVERY PIPELINE — /20 chunks, pipelined with port scans
+        # ══════════════════════════════════════════════════════════════════════
+        hostnames: dict[str, "str | None"] = {}
+        alive_map: dict[str, bool] = {}
+        all_results: dict = {}
+
+        chunks = _chunk_ranges(raw_specs, chunk_prefix=20)
+        total_chunks = len(chunks)
+        disc_dir = output_mgr.scope_tool_path("nmap_discovery")
+
+        # Check for checkpoint (resume from crash)
+        _ckpt = _load_discovery_checkpoint(disc_dir)
+        _completed_specs: set[str] = set()
+        if _ckpt:
+            _completed_specs = set(_ckpt[0])
+            for _ck_ip in _ckpt[1]:
+                alive_map[_ck_ip] = True
+            _tprint(
+                f"  {Fore.CYAN}[*] Resuming from checkpoint: "
+                f"{len(_completed_specs)} chunks done, "
+                f"{len(_ckpt[1])} alive hosts{Style.RESET_ALL}"
             )
-            _newly_alive = [ip for ip, alive in _alive_map_2.items() if alive]
-            for ip in _newly_alive:
-                alive_map[ip] = True
-                print(f"    {Fore.GREEN}[+] {ip} — ALIVE (supplemental probe){Style.RESET_ALL}")
-            if not _newly_alive:
-                print(f"    {Fore.YELLOW}[~] No additional hosts found in supplemental pass{Style.RESET_ALL}")
 
-    # Phase 1c (rustscan rescue) now runs in parallel with Phase 2 — see below.
-    # In lazy mode, skip per-IP dead enumeration (millions of IPs).
-    _still_dead = [] if _lazy else [ip for ip in targets if not alive_map.get(ip)]
-
-    if _lazy:
-        alive_ips = sorted(
-            [ip for ip, v in alive_map.items() if v],
-            key=lambda a: int(ipaddress.ip_address(a)))
-        dead_ips    = []
-    else:
-        alive_ips   = [ip for ip in targets if alive_map.get(ip)]
-        dead_ips    = [ip for ip in targets if not alive_map.get(ip)]
-    alive_count = len(alive_ips)
-    _dead_count = _n_targets - alive_count
-
-    # ── Write persistent active-IPs file ─────────────────────────────────────
-    active_ips_file: "Path | None" = None
-    if alive_ips:
-        try:
-            active_ips_file = output_mgr.root / "targets" / "active_ips.txt"
-            active_ips_file.write_text("\n".join(alive_ips) + "\n", encoding="utf-8")
-        except Exception:
-            active_ips_file = None
-
-    print(f"{Fore.GREEN}[+] {scope_label} Discovery complete: "
-          f"{alive_count} alive / {_n_targets:,} total{Style.RESET_ALL}")
-    _vc.status(f"{scope}_p1_discovery", label="Phase 1: Host Discovery",
-               status="complete", step=f"{alive_count} alive / {_n_targets:,} total")
-    if _lazy and _dead_count > 0:
-        print(f"    {Fore.RED}[-] {_dead_count:,} host(s) — no response{Style.RESET_ALL}")
-    else:
-        for ip in dead_ips:
-            print(f"    {Fore.RED}[-] {ip} — no response{Style.RESET_ALL}")
-    for ip in alive_ips:
-        print(f"    {Fore.GREEN}[+] {ip} — ALIVE{Style.RESET_ALL}")
-        # Live-emit so Vantage's Targets tab adds the host immediately,
-        # without waiting for targets.json to be written at scan end.
-        _vc.target(ip=ip, hostname=None, scope=scope, alive=True, source="nmap")
-
-    # ── Phase 1.5: Hostname Resolution ────────────────────────────────────────
-    hostnames: dict[str, "str | None"] = {}
-    if alive_ips and not getattr(args, "no_hostname_scan", False):
-        _vc.status(f"{scope}_p1_5_hostname",
-                   label="Phase 1.5: Hostname Resolution",
-                   status="running",
-                   step=f"{len(alive_ips)} hosts · PTR"
-                        + (" + nbtscan" if nbtscan_path else "")
-                        + (" + nmblookup" if (nmblookup_path and not nbtscan_path) else "")
-                        + (" + mDNS" if avahi_resolve_path else ""))
-        print(f"\n{Fore.CYAN}[*] {scope_label} Phase 1.5: resolving hostnames "
-              f"({len(alive_ips)} host(s))...{Style.RESET_ALL}")
-        run_hostname_resolution(
-            alive_ips, output_mgr, hostnames,
-            nbtscan_path, nmblookup_path, avahi_resolve_path,
+        print(
+            f"{Fore.CYAN}[*] {scope_label} {Fore.CYAN}Phase 1: chunked host "
+            f"discovery ({total_chunks} chunk(s) of /20, "
+            f"{_n_targets:,} target(s))...{Style.RESET_ALL}",
+            flush=True,
         )
-        enriched = output_mgr.enrich_hostnames(hostnames)
-        if enriched:
-            _tprint(f"  {Fore.CYAN}[*] Enriched {enriched} Phase 1 finding(s) "
-                    f"with resolved hostnames{Style.RESET_ALL}")
-        # Live-emit resolved hostnames so Vantage's Targets tab updates the
-        # FQDN badge on already-listed hosts without a full refresh.
-        for _ip, _hn in hostnames.items():
-            if _hn:
-                _vc.target(ip=_ip, hostname=_hn, scope=scope,
-                           alive=True, source="hostname_resolution")
-        _vc.status(f"{scope}_p1_5_hostname",
-                   label="Phase 1.5: Hostname Resolution",
-                   status="complete",
-                   step=f"{sum(1 for h in hostnames.values() if h)}/{len(alive_ips)} resolved")
-    elif alive_ips:
-        # --no-hostname-scan: still populate dict with None so downstream code
-        # doesn't KeyError, and mark the phase skipped in the status tree.
-        for ip in alive_ips:
-            hostnames[ip] = None
-        _vc.status(f"{scope}_p1_5_hostname",
-                   label="Phase 1.5: Hostname Resolution",
-                   status="skipped")
-    else:
-        # No alive hosts — nothing to resolve; mark the phase skipped.
-        _vc.status(f"{scope}_p1_5_hostname",
-                   label="Phase 1.5: Hostname Resolution",
-                   status="skipped")
+        _vc.status(
+            f"{scope}_p1_discovery",
+            label="Phase 1: Host Discovery",
+            status="running",
+            step=f"{total_chunks} chunks · /20 · {_n_targets:,} targets",
+        )
 
-    # Initialise result dict — dead hosts get a minimal stub entry
-    # (skipped in lazy mode to avoid creating millions of entries)
-    all_results: dict = {}
-    if not _lazy:
-        for ip in dead_ips:
-            all_results[ip] = {
-                "alive": False, "hostname": None, "scope": scope,
-                "open_ports": {}, "web_services": [], "ssl_results": {},
-            }
+        scope_source_ip   = None
+        scope_iface_name  = None
+        scope_source_host = platform.node()
 
-    # ── Detect source IP / interface for this scope ───────────────────────────
-    scope_source_ip    = None
-    scope_iface_name   = None
-    scope_source_host  = platform.node()
-    if alive_ips:
-        scope_source_ip  = get_source_ip_for(alive_ips[0])
-        if scope_source_ip:
-            raw_iface = get_interface_info(scope_source_ip)
-            scope_iface_name = raw_iface.split()[0] if raw_iface else None
+        n_workers = min(
+            getattr(args, "port_scan_workers", _SCAN_CONCURRENCY),
+            _SCAN_SEM.limit,
+        )
+        run_nuclei_flag = bool(
+            nuclei_path and not getattr(args, "no_nuclei", False)
+        )
 
-    # ── Phase 2: Concurrent port scans ───────────────────────────────────────
-    n_workers    = min(getattr(args, "port_scan_workers", _SCAN_CONCURRENCY), _SCAN_SEM.limit)
-    run_nuclei_flag = (
-        nuclei_path
-        and not getattr(args, "no_nuclei", False)
-        and alive_ips
-    )
+        print(
+            f"\n{Fore.CYAN}[*] {scope_label} Phase 2: port scanning "
+            f"(pipelined with discovery, {n_workers} workers)..."
+            f"{Style.RESET_ALL}"
+        )
+        _vc.status(
+            f"{scope}_p2_portscan",
+            label="Phase 2: Port Scan & Service Analysis",
+            status="running",
+            step=f"pipelined · {n_workers} workers",
+            active_tools=[
+                "nmap", "banners", "web", "sslscan", "testssl",
+                "gobuster", "wpscan", "webanalyze", "shcheck",
+                "snmp", "smb", "enum4linux", "adenum", "rdp",
+                "ipmi", "nfs", "smtp", "mysql", "sip",
+                "printer", "redis",
+            ],
+        )
 
-    print(f"\n{Fore.CYAN}[*] {scope_label} Phase 2: port scanning "
-          f"{alive_count} host(s) ({n_workers} workers)...{Style.RESET_ALL}")
-    _vc.status(f"{scope}_p2_portscan", label="Phase 2: Port Scan & Service Analysis",
-               status="running" if alive_ips else "skipped",
-               step=f"{alive_count} hosts · {n_workers} workers",
-               active_tools=["nmap", "banners", "web", "sslscan", "testssl",
-                             "gobuster", "wpscan", "webanalyze", "shcheck",
-                             "snmp", "smb", "enum4linux", "adenum", "rdp",
-                             "ipmi", "nfs", "smtp", "mysql", "sip",
-                             "printer", "redis"] if alive_ips else None)
+        port_futures: dict = {}
+        _nuclei_batch_ips: list = []
 
-    port_futures: dict = {}
-
-    _start_concurrency_monitor(_SCAN_SEM)
-    _start_oom_watchdog()
-    with ThreadPoolExecutor(max_workers=n_workers) as pool:
-            _nuclei_base       = getattr(args, "nuclei_timeout", 600)
-            _nuclei_batch_ips: list = []
-
-            # ── Submit one port-scan worker per alive host ────────────────────
-            for ip in alive_ips:
-                port_futures[pool.submit(
-                    _port_scan_worker,
-                    ip,
-                    hostnames.get(ip),
-                    args.fast,
-                    output_mgr,
-                    nmap_path,
-                    args,
-                    sslscan_path,
-                    testssl_path,
-                    snmpwalk_path,
-                    smbmap_path,
-                    enum4linux_path,
-                    adenum_path,
-                    scope,
-                    cred_store,
-                    gobuster_path,
-                    wpscan_path,
-                    webanalyze_path,
-                    shcheck_path,
-                    wpscan_token,
-                    showmount_path,
-                    ipmitool_path,
-                    rustscan_path,
-                )] = ip
-
-            # ── Phase 1c: Background rustscan rescue (parallel with Phase 2) ─
-            # Runs concurrently with Phase 2 port scans on known-alive hosts.
-            # Uses rustscan (all 65535 ports) to find hosts that dropped every
-            # discovery probe but have at least one open port.  Falls back to
-            # nmap -Pn when rustscan is unavailable.  Rescued hosts are
-            # submitted to the same Phase 2 worker pool for full analysis.
-            _rescue_lock    = threading.Lock()
-            _rescue_pending: list[tuple] = []
-            _rescue_done    = threading.Event()
-
-            def _bg_rustscan_rescue():
-                if not _still_dead:
-                    _rescue_done.set()
-                    return
-                _eff_rs = rustscan_path or shutil.which("rustscan")
-                _tprint(f"\n{Fore.CYAN}[*] {scope_label} Phase 1c: background "
-                        f"host rescue ({len(_still_dead)} non-responsive "
-                        f"host(s), {'rustscan' if _eff_rs else 'nmap -Pn'} "
-                        f"all 65535 ports)...{Style.RESET_ALL}")
-                _vc.status(f"{scope}_p1c_rescue",
-                           label="Phase 1c: Host Rescue (parallel)",
-                           status="running",
-                           step=f"{len(_still_dead)} host(s) · "
-                                f"{'rustscan' if _eff_rs else 'nmap'}")
-                _rescued: list[str] = []
-                for _r_ip in _still_dead:
-                    _r_ports: list[int] = []
-                    try:
-                        if _eff_rs:
-                            _rs_cmd = [_eff_rs, "-a", _r_ip, "--ulimit",
-                                       "5000", "--greppable", "-p", "1-65535"]
-                            _rs_timeout = 120 if scope == "ext" else 60
-                            _rs_p = subprocess.run(
-                                _rs_cmd, capture_output=True,
-                                timeout=_rs_timeout)
-                            _rs_txt = _rs_p.stdout.decode(
-                                "utf-8", errors="replace")
-                            for _rl in _rs_txt.splitlines():
-                                _rm = (re.search(r'Open\s+[\d.]+:(\d+)',
-                                                 _rl) or
-                                       re.search(r'Open\s+(\d+)', _rl))
-                                if _rm:
-                                    _r_ports.append(int(_rm.group(1)))
-                        else:
-                            _pn_args = ("-n -Pn -sS -p- -T4 "
-                                        "--max-retries 2 "
-                                        "--max-rtt-timeout 3000ms "
-                                        "--host-timeout 300s")
-                            _pn_nm = nmap.PortScanner()
-                            _pn_nm.scan(hosts=_r_ip, arguments=_pn_args)
-                            if _r_ip in _pn_nm.all_hosts():
-                                for _pr in _pn_nm[_r_ip].all_protocols():
-                                    for _pp in _pn_nm[_r_ip][_pr]:
-                                        if _pn_nm[_r_ip][_pr][_pp].get(
-                                                "state", ""
-                                        ).startswith("open"):
-                                            _r_ports.append(int(_pp))
-                    except (subprocess.TimeoutExpired, OSError,
-                            ValueError, Exception):
-                        pass
-                    if _r_ports:
-                        alive_map[_r_ip] = True
-                        _rescued.append(_r_ip)
-                        _r_hn = None
-                        try:
-                            _r_hn_name, _, _ = socket.gethostbyaddr(_r_ip)
-                            _r_hn = _r_hn_name
-                        except Exception:
-                            pass
-                        hostnames[_r_ip] = _r_hn
-                        _tprint(f"    {Fore.GREEN}[+] {_r_ip} — ALIVE "
-                                f"({len(_r_ports)} port(s), "
-                                f"{'rustscan' if _eff_rs else 'nmap'} "
-                                f"rescue){Style.RESET_ALL}")
-                        _vc.target(ip=_r_ip, hostname=_r_hn, scope=scope,
-                                   alive=True,
-                                   source="rustscan-rescue"
-                                          if _eff_rs else "nmap-pn-rescue")
-                        _f = pool.submit(
-                            _port_scan_worker,
-                            _r_ip, _r_hn, args.fast, output_mgr,
-                            nmap_path, args, sslscan_path, testssl_path,
-                            snmpwalk_path, smbmap_path, enum4linux_path,
-                            adenum_path, scope, cred_store, gobuster_path,
-                            wpscan_path, webanalyze_path, shcheck_path,
-                            wpscan_token, showmount_path, ipmitool_path,
-                            rustscan_path)
-                        with _rescue_lock:
-                            _rescue_pending.append((_f, _r_ip))
-                if not _rescued:
-                    _tprint(f"    {Fore.YELLOW}[~] No additional hosts found "
-                            f"in rescue pass{Style.RESET_ALL}")
-                _vc.status(f"{scope}_p1c_rescue",
-                           label="Phase 1c: Host Rescue (parallel)",
-                           status="complete",
-                           step=f"{len(_rescued)} rescued")
-                _rescue_done.set()
-
-            _rescue_thread = threading.Thread(
-                target=_bg_rustscan_rescue, daemon=True)
-            _rescue_thread.start()
-
-            # ── Collect port-scan results (dynamic — rescue adds futures) ─────
-            _pending = set(port_futures.keys())
-            _fut_to_ip = dict(port_futures)
-
-            while _pending or not _rescue_done.is_set():
-                with _rescue_lock:
-                    for _rf, _rip in _rescue_pending:
-                        _pending.add(_rf)
-                        _fut_to_ip[_rf] = _rip
-                    _rescue_pending.clear()
-
-                if not _pending:
-                    time.sleep(0.5)
+        _start_concurrency_monitor(_SCAN_SEM)
+        _start_oom_watchdog()
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            # ── Feed discovery chunks into the port-scan pool ─────────────
+            for _ci, _cs in enumerate(chunks, 1):
+                if _cs in _completed_specs:
                     continue
 
-                _done, _pending = wait(
-                    _pending, timeout=2.0,
-                    return_when=FIRST_COMPLETED)
+                _ca, _cd = _discover_chunk(
+                    _cs, _ci, total_chunks,
+                    output_mgr, nmap_path, scope,
+                    supp_nmap_args=_1b_nmap_args,
+                    rustscan_path=rustscan_path,
+                )
 
-                for future in _done:
-                    ip = _fut_to_ip[future]
-                    try:
-                        result_ip, host_result = future.result()
-                        host_result["scope"]        = scope
-                        host_result["source_ip"]    = scope_source_ip
-                        host_result["source_iface"] = scope_iface_name
-                        host_result["source_host"]  = scope_source_host
-                        all_results[result_ip] = host_result
+                if _exclude:
+                    _ca = [ip for ip in _ca if ip not in _exclude]
 
-                        with _PRINT_LOCK:
-                            print_host_header(result_ip, True)
-                            for port, info in host_result[
-                                    "open_ports"].items():
-                                fqdn = host_result.get(
-                                    "hostnames_by_port", {}
-                                ).get(port)
-                                print_port(
-                                    port, info, info.get("web"),
-                                    info.get("banner"))
-                                if fqdn:
-                                    print(
-                                        f"           {Fore.CYAN}FQDN "
-                                        f"(port {port}): "
-                                        f"{fqdn}{Style.RESET_ALL}")
-                            for port, ssl_data in host_result.get(
-                                "ssl_results", {}
-                            ).items():
-                                print_ssl_results(
-                                    result_ip, port,
-                                    ssl_data.get("sslscan"),
-                                    ssl_data.get("testssl"))
+                for ip in _ca:
+                    alive_map[ip] = True
 
-                        if run_nuclei_flag and host_result.get("open_ports"):
-                            _nuclei_batch_ips.append(result_ip)
+                # Detect source IP from first alive host
+                if scope_source_ip is None and _ca:
+                    scope_source_ip = get_source_ip_for(_ca[0])
+                    if scope_source_ip:
+                        _ri = get_interface_info(scope_source_ip)
+                        scope_iface_name = _ri.split()[0] if _ri else None
 
-                    except Exception as exc:
-                        _tprint(
-                            f"{Fore.RED}  [!] Worker failed for {ip}: "
-                            f"{exc}{Style.RESET_ALL}")
-                        try:
-                            _w_tb  = traceback.format_exc()
-                            _w_msg = (
-                                f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
-                                f"PORT SCAN WORKER CRASH — {ip}: "
-                                f"{type(exc).__name__}: {exc}\n{_w_tb}\n")
-                            with output_mgr._log_lock:
-                                with output_mgr.error_log.open(
-                                        "a", encoding="utf-8") as _ef:
-                                    _ef.write(_w_msg)
-                                with output_mgr.log_file.open(
-                                        "a", encoding="utf-8") as _lf:
-                                    _lf.write(_w_msg)
-                        except Exception:
-                            pass
-                        all_results[ip] = {
-                            "alive": True, "hostname": hostnames.get(ip),
-                            "scope": scope, "source_ip": scope_source_ip,
-                            "source_iface": scope_iface_name,
-                            "source_host": scope_source_host,
-                            "open_ports": {}, "web_services": [],
-                            "ssl_results": {}, "hostnames_by_port": {},
-                            "web_files": {},
-                        }
+                # Submit port-scan workers for this chunk's alive hosts
+                for ip in _ca:
+                    port_futures[pool.submit(
+                        _port_scan_worker,
+                        ip,
+                        None,
+                        args.fast,
+                        output_mgr,
+                        nmap_path,
+                        args,
+                        sslscan_path,
+                        testssl_path,
+                        snmpwalk_path,
+                        smbmap_path,
+                        enum4linux_path,
+                        adenum_path,
+                        scope,
+                        cred_store,
+                        gobuster_path,
+                        wpscan_path,
+                        webanalyze_path,
+                        shcheck_path,
+                        wpscan_token,
+                        showmount_path,
+                        ipmitool_path,
+                        rustscan_path,
+                        True,
+                        nmblookup_path,
+                        avahi_resolve_path,
+                        hostnames,
+                    )] = ip
 
-            # Ensure rescue thread is fully done before moving on
-            _rescue_thread.join(timeout=10)
+                # Update checkpoint
+                _completed_specs.add(_cs)
+                _write_discovery_checkpoint(
+                    disc_dir,
+                    sorted(_completed_specs),
+                    sorted(ip for ip, v in alive_map.items() if v),
+                    total_chunks,
+                )
 
-            # Final sweep — any futures added in the last rescue cycle
-            with _rescue_lock:
-                for _rf, _rip in _rescue_pending:
-                    _pending.add(_rf)
-                    _fut_to_ip[_rf] = _rip
-                _rescue_pending.clear()
-            for future in as_completed(_pending):
-                ip = _fut_to_ip[future]
+                # Progress
+                _in_flight = sum(1 for f in port_futures if not f.done())
+                _ta = sum(1 for v in alive_map.values() if v)
+                _vc.status(
+                    f"{scope}_p1_discovery",
+                    label="Phase 1: Host Discovery",
+                    status="running",
+                    step=(
+                        f"Chunk {_ci}/{total_chunks} · "
+                        f"{_ta} alive · {_in_flight} in-flight"
+                    ),
+                )
+
+            # ── Discovery complete ────────────────────────────────────────
+            alive_ips = sorted(
+                [ip for ip, v in alive_map.items() if v],
+                key=lambda a: int(ipaddress.ip_address(a)),
+            )
+            dead_ips: list[str] = []
+            alive_count = len(alive_ips)
+            _dead_count = _n_targets - alive_count
+
+            active_ips_file: "Path | None" = None
+            if alive_ips:
+                try:
+                    active_ips_file = (
+                        output_mgr.root / "targets" / "active_ips.txt"
+                    )
+                    active_ips_file.write_text(
+                        "\n".join(alive_ips) + "\n", encoding="utf-8",
+                    )
+                except Exception:
+                    active_ips_file = None
+
+            print(
+                f"{Fore.GREEN}[+] {scope_label} Discovery complete: "
+                f"{alive_count} alive / {_n_targets:,} total"
+                f"{Style.RESET_ALL}"
+            )
+            _vc.status(
+                f"{scope}_p1_discovery",
+                label="Phase 1: Host Discovery",
+                status="complete",
+                step=f"{alive_count} alive / {_n_targets:,} total",
+            )
+            if _dead_count > 0:
+                print(
+                    f"    {Fore.RED}[-] {_dead_count:,} host(s) — "
+                    f"no response{Style.RESET_ALL}"
+                )
+
+            # ── Collect port-scan results ─────────────────────────────────
+            _nuclei_base = getattr(args, "nuclei_timeout", 600)
+            for future in as_completed(port_futures):
+                ip = port_futures[future]
                 try:
                     result_ip, host_result = future.result()
                     host_result["scope"]        = scope
@@ -27531,10 +27751,53 @@ def scan_scope(
                     host_result["source_iface"] = scope_iface_name
                     host_result["source_host"]  = scope_source_host
                     all_results[result_ip] = host_result
+
+                    with _PRINT_LOCK:
+                        print_host_header(result_ip, True)
+                        for port, info in host_result[
+                                "open_ports"].items():
+                            fqdn = host_result.get(
+                                "hostnames_by_port", {}
+                            ).get(port)
+                            print_port(
+                                port, info, info.get("web"),
+                                info.get("banner"))
+                            if fqdn:
+                                print(
+                                    f"           {Fore.CYAN}FQDN "
+                                    f"(port {port}): "
+                                    f"{fqdn}{Style.RESET_ALL}")
+                        for port, ssl_data in host_result.get(
+                            "ssl_results", {}
+                        ).items():
+                            print_ssl_results(
+                                result_ip, port,
+                                ssl_data.get("sslscan"),
+                                ssl_data.get("testssl"))
+
                     if run_nuclei_flag and host_result.get("open_ports"):
                         _nuclei_batch_ips.append(result_ip)
-                except Exception:
-                    all_results.setdefault(ip, {
+
+                except Exception as exc:
+                    _tprint(
+                        f"{Fore.RED}  [!] Worker failed for {ip}: "
+                        f"{exc}{Style.RESET_ALL}")
+                    try:
+                        _w_tb  = traceback.format_exc()
+                        _w_msg = (
+                            f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+                            f"PORT SCAN WORKER CRASH — {ip}: "
+                            f"{type(exc).__name__}: {exc}\n{_w_tb}\n")
+                        with output_mgr._log_lock:
+                            with output_mgr.error_log.open(
+                                    "a", encoding="utf-8") as _ef:
+                                _ef.write(_w_msg)
+                            with output_mgr.log_file.open(
+                                    "a", encoding="utf-8") as _lf:
+                                _lf.write(_w_msg)
+                    except Exception:
+                        pass
+                    all_results[ip] = {
                         "alive": True, "hostname": hostnames.get(ip),
                         "scope": scope, "source_ip": scope_source_ip,
                         "source_iface": scope_iface_name,
@@ -27542,21 +27805,30 @@ def scan_scope(
                         "open_ports": {}, "web_services": [],
                         "ssl_results": {}, "hostnames_by_port": {},
                         "web_files": {},
-                    })
+                    }
 
-            # ── Batch Nuclei scan — single invocation for all hosts with open ports ─
+            # ── Batch Nuclei IP scan ──────────────────────────────────────
             if _nuclei_batch_ips:
                 _tprint(
                     f"\n{Fore.CYAN}[*] {scope_label} Nuclei IP scan "
-                    f"({len(_nuclei_batch_ips)} host(s))...{Style.RESET_ALL}"
+                    f"({len(_nuclei_batch_ips)} host(s))..."
+                    f"{Style.RESET_ALL}"
                 )
-                _vc.status(f"{scope}_p2_nuclei", label="Phase 2: Nuclei IP Scan",
-                           status="running", step=f"{len(_nuclei_batch_ips)} hosts")
-                nuclei_timeout = max(_nuclei_base, len(_nuclei_batch_ips) * 60)
+                _vc.status(
+                    f"{scope}_p2_nuclei",
+                    label="Phase 2: Nuclei IP Scan",
+                    status="running",
+                    step=f"{len(_nuclei_batch_ips)} hosts",
+                )
+                nuclei_timeout = max(
+                    _nuclei_base, len(_nuclei_batch_ips) * 60
+                )
                 try:
                     run_nuclei(
-                        _nuclei_batch_ips, scope, output_mgr, nuclei_path,
-                        timeout=nuclei_timeout, all_results=all_results,
+                        _nuclei_batch_ips, scope, output_mgr,
+                        nuclei_path,
+                        timeout=nuclei_timeout,
+                        all_results=all_results,
                     )
                 except Exception as exc:
                     _tprint(
@@ -27565,22 +27837,504 @@ def scan_scope(
                     )
                     try:
                         with output_mgr._log_lock:
-                            with output_mgr.error_log.open("a", encoding="utf-8") as _ef:
+                            with output_mgr.error_log.open(
+                                    "a", encoding="utf-8") as _ef:
                                 _ef.write(
                                     f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
-                                    f"NUCLEI SCAN ERROR: {type(exc).__name__}: {exc}\n"
+                                    f"NUCLEI SCAN ERROR: "
+                                    f"{type(exc).__name__}: {exc}\n"
                                 )
                     except Exception:
                         pass
-                _vc.status(f"{scope}_p2_nuclei", label="Phase 2: Nuclei IP Scan",
-                           status="complete")
+                _vc.status(
+                    f"{scope}_p2_nuclei",
+                    label="Phase 2: Nuclei IP Scan",
+                    status="complete",
+                )
                 _tprint(
                     f"{Fore.GREEN}[+] {scope_label} Nuclei IP scan "
                     f"complete{Style.RESET_ALL}"
                 )
 
-    _vc.status(f"{scope}_p2_portscan", label="Phase 2: Port Scan & Service Analysis",
-               status="complete" if alive_ips else "skipped")
+        # Remove checkpoint on successful completion
+        try:
+            _ckpt_path = disc_dir / "checkpoint.json"
+            if _ckpt_path.exists():
+                _ckpt_path.unlink()
+        except Exception:
+            pass
+
+        _vc.status(
+            f"{scope}_p2_portscan",
+            label="Phase 2: Port Scan & Service Analysis",
+            status="complete" if alive_ips else "skipped",
+        )
+
+    else:
+        # ══════════════════════════════════════════════════════════════════════
+        # ORIGINAL MONOLITHIC DISCOVERY PIPELINE — small target sets
+        # ══════════════════════════════════════════════════════════════════════
+        _spec_desc = (f"{len(raw_specs)} spec(s) → {_n_targets:,} IP(s)"
+                      if raw_specs and len(raw_specs) != _n_targets
+                      else f"{_n_targets:,} target(s)")
+        print(f"{Fore.CYAN}[*] {scope_label} {Fore.CYAN}Phase 1: host discovery "
+              f"({_spec_desc} in one nmap pass)...{Style.RESET_ALL}",
+              flush=True)
+        _vc.status(f"{scope}_p1_discovery", label="Phase 1: Host Discovery",
+                   status="running", step=_spec_desc)
+
+        alive_map = host_discovery_range(
+            targets,
+            output_mgr=output_mgr,
+            nmap_path=nmap_path,
+            raw_specs=raw_specs,
+            scope=scope,
+        )
+        # In lazy mode, exclude local IPs from alive results
+        if _lazy and _exclude:
+            for _eip in _exclude:
+                alive_map.pop(_eip, None)
+
+        # ── Phase 1b: Supplemental host discovery (-sn -PS -PA -PR) ───────
+        if _lazy:
+            _alive_before = sum(1 for v in alive_map.values() if v)
+            print(f"{Fore.CYAN}[*] {scope_label} Phase 1b: supplemental discovery "
+                  f"(-PS -PA -PR, full scope re-scan)...{Style.RESET_ALL}",
+                  flush=True)
+            _alive_map_2 = host_discovery_range(
+                [],
+                output_mgr=output_mgr,
+                nmap_path=nmap_path,
+                raw_specs=raw_specs,
+                nmap_args=_1b_nmap_args,
+                scope=scope,
+            )
+            _newly_alive = [ip for ip, alive in _alive_map_2.items()
+                            if alive and not alive_map.get(ip)
+                            and ip not in _exclude]
+            for ip in _newly_alive:
+                alive_map[ip] = True
+                print(f"    {Fore.GREEN}[+] {ip} — ALIVE (supplemental probe){Style.RESET_ALL}")
+            if not _newly_alive:
+                print(f"    {Fore.YELLOW}[~] No additional hosts found in supplemental pass{Style.RESET_ALL}")
+        else:
+            _first_dead = [ip for ip in targets if not alive_map.get(ip)]
+            if _first_dead:
+                print(f"{Fore.CYAN}[*] {scope_label} Phase 1b: supplemental discovery "
+                      f"(-PS -PA -PR, {len(_first_dead)} non-responsive host(s))...{Style.RESET_ALL}",
+                      flush=True)
+                _alive_map_2 = host_discovery_range(
+                    _first_dead,
+                    output_mgr=output_mgr,
+                    nmap_path=nmap_path,
+                    nmap_args=_1b_nmap_args,
+                    scope=scope,
+                )
+                _newly_alive = [ip for ip, alive in _alive_map_2.items() if alive]
+                for ip in _newly_alive:
+                    alive_map[ip] = True
+                    print(f"    {Fore.GREEN}[+] {ip} — ALIVE (supplemental probe){Style.RESET_ALL}")
+                if not _newly_alive:
+                    print(f"    {Fore.YELLOW}[~] No additional hosts found in supplemental pass{Style.RESET_ALL}")
+
+        # Phase 1c (rustscan rescue) now runs in parallel with Phase 2.
+        _still_dead = [] if _lazy else [ip for ip in targets if not alive_map.get(ip)]
+
+        if _lazy:
+            alive_ips = sorted(
+                [ip for ip, v in alive_map.items() if v],
+                key=lambda a: int(ipaddress.ip_address(a)))
+            dead_ips    = []
+        else:
+            alive_ips   = [ip for ip in targets if alive_map.get(ip)]
+            dead_ips    = [ip for ip in targets if not alive_map.get(ip)]
+        alive_count = len(alive_ips)
+        _dead_count = _n_targets - alive_count
+
+        # ── Write persistent active-IPs file ─────────────────────────────
+        active_ips_file: "Path | None" = None
+        if alive_ips:
+            try:
+                active_ips_file = output_mgr.root / "targets" / "active_ips.txt"
+                active_ips_file.write_text("\n".join(alive_ips) + "\n", encoding="utf-8")
+            except Exception:
+                active_ips_file = None
+
+        print(f"{Fore.GREEN}[+] {scope_label} Discovery complete: "
+              f"{alive_count} alive / {_n_targets:,} total{Style.RESET_ALL}")
+        _vc.status(f"{scope}_p1_discovery", label="Phase 1: Host Discovery",
+                   status="complete", step=f"{alive_count} alive / {_n_targets:,} total")
+        if _lazy and _dead_count > 0:
+            print(f"    {Fore.RED}[-] {_dead_count:,} host(s) — no response{Style.RESET_ALL}")
+        else:
+            for ip in dead_ips:
+                print(f"    {Fore.RED}[-] {ip} — no response{Style.RESET_ALL}")
+        for ip in alive_ips:
+            print(f"    {Fore.GREEN}[+] {ip} — ALIVE{Style.RESET_ALL}")
+            _vc.target(ip=ip, hostname=None, scope=scope, alive=True, source="nmap")
+
+        # ── Phase 1.5: Hostname Resolution ────────────────────────────────
+        hostnames: dict[str, "str | None"] = {}
+        if alive_ips and not getattr(args, "no_hostname_scan", False):
+            _vc.status(f"{scope}_p1_5_hostname",
+                       label="Phase 1.5: Hostname Resolution",
+                       status="running",
+                       step=f"{len(alive_ips)} hosts · PTR"
+                            + (" + nbtscan" if nbtscan_path else "")
+                            + (" + nmblookup" if (nmblookup_path and not nbtscan_path) else "")
+                            + (" + mDNS" if avahi_resolve_path else ""))
+            print(f"\n{Fore.CYAN}[*] {scope_label} Phase 1.5: resolving hostnames "
+                  f"({len(alive_ips)} host(s))...{Style.RESET_ALL}")
+            run_hostname_resolution(
+                alive_ips, output_mgr, hostnames,
+                nbtscan_path, nmblookup_path, avahi_resolve_path,
+            )
+            enriched = output_mgr.enrich_hostnames(hostnames)
+            if enriched:
+                _tprint(f"  {Fore.CYAN}[*] Enriched {enriched} Phase 1 finding(s) "
+                        f"with resolved hostnames{Style.RESET_ALL}")
+            for _ip, _hn in hostnames.items():
+                if _hn:
+                    _vc.target(ip=_ip, hostname=_hn, scope=scope,
+                               alive=True, source="hostname_resolution")
+            _vc.status(f"{scope}_p1_5_hostname",
+                       label="Phase 1.5: Hostname Resolution",
+                       status="complete",
+                       step=f"{sum(1 for h in hostnames.values() if h)}/{len(alive_ips)} resolved")
+        elif alive_ips:
+            for ip in alive_ips:
+                hostnames[ip] = None
+            _vc.status(f"{scope}_p1_5_hostname",
+                       label="Phase 1.5: Hostname Resolution",
+                       status="skipped")
+        else:
+            _vc.status(f"{scope}_p1_5_hostname",
+                       label="Phase 1.5: Hostname Resolution",
+                       status="skipped")
+
+        # Initialise result dict
+        all_results: dict = {}
+        if not _lazy:
+            for ip in dead_ips:
+                all_results[ip] = {
+                    "alive": False, "hostname": None, "scope": scope,
+                    "open_ports": {}, "web_services": [], "ssl_results": {},
+                }
+
+        # ── Detect source IP / interface for this scope ───────────────────
+        scope_source_ip    = None
+        scope_iface_name   = None
+        scope_source_host  = platform.node()
+        if alive_ips:
+            scope_source_ip  = get_source_ip_for(alive_ips[0])
+            if scope_source_ip:
+                raw_iface = get_interface_info(scope_source_ip)
+                scope_iface_name = raw_iface.split()[0] if raw_iface else None
+
+        # ── Phase 2: Concurrent port scans ───────────────────────────────
+        n_workers    = min(getattr(args, "port_scan_workers", _SCAN_CONCURRENCY), _SCAN_SEM.limit)
+        run_nuclei_flag = (
+            nuclei_path
+            and not getattr(args, "no_nuclei", False)
+            and alive_ips
+        )
+
+        print(f"\n{Fore.CYAN}[*] {scope_label} Phase 2: port scanning "
+              f"{alive_count} host(s) ({n_workers} workers)...{Style.RESET_ALL}")
+        _vc.status(f"{scope}_p2_portscan", label="Phase 2: Port Scan & Service Analysis",
+                   status="running" if alive_ips else "skipped",
+                   step=f"{alive_count} hosts · {n_workers} workers",
+                   active_tools=["nmap", "banners", "web", "sslscan", "testssl",
+                                 "gobuster", "wpscan", "webanalyze", "shcheck",
+                                 "snmp", "smb", "enum4linux", "adenum", "rdp",
+                                 "ipmi", "nfs", "smtp", "mysql", "sip",
+                                 "printer", "redis"] if alive_ips else None)
+
+        port_futures: dict = {}
+
+        _start_concurrency_monitor(_SCAN_SEM)
+        _start_oom_watchdog()
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                _nuclei_base       = getattr(args, "nuclei_timeout", 600)
+                _nuclei_batch_ips: list = []
+
+                # ── Submit one port-scan worker per alive host ────────────
+                for ip in alive_ips:
+                    port_futures[pool.submit(
+                        _port_scan_worker,
+                        ip,
+                        hostnames.get(ip),
+                        args.fast,
+                        output_mgr,
+                        nmap_path,
+                        args,
+                        sslscan_path,
+                        testssl_path,
+                        snmpwalk_path,
+                        smbmap_path,
+                        enum4linux_path,
+                        adenum_path,
+                        scope,
+                        cred_store,
+                        gobuster_path,
+                        wpscan_path,
+                        webanalyze_path,
+                        shcheck_path,
+                        wpscan_token,
+                        showmount_path,
+                        ipmitool_path,
+                        rustscan_path,
+                    )] = ip
+
+                # ── Phase 1c: Background rustscan rescue ──────────────────
+                _rescue_lock    = threading.Lock()
+                _rescue_pending: list[tuple] = []
+                _rescue_done    = threading.Event()
+
+                def _bg_rustscan_rescue():
+                    if not _still_dead:
+                        _rescue_done.set()
+                        return
+                    _eff_rs = rustscan_path or shutil.which("rustscan")
+                    _tprint(f"\n{Fore.CYAN}[*] {scope_label} Phase 1c: background "
+                            f"host rescue ({len(_still_dead)} non-responsive "
+                            f"host(s), {'rustscan' if _eff_rs else 'nmap -Pn'} "
+                            f"all 65535 ports)...{Style.RESET_ALL}")
+                    _vc.status(f"{scope}_p1c_rescue",
+                               label="Phase 1c: Host Rescue (parallel)",
+                               status="running",
+                               step=f"{len(_still_dead)} host(s) · "
+                                    f"{'rustscan' if _eff_rs else 'nmap'}")
+                    _rescued: list[str] = []
+                    for _r_ip in _still_dead:
+                        _r_ports: list[int] = []
+                        try:
+                            if _eff_rs:
+                                _rs_cmd = [_eff_rs, "-a", _r_ip, "--ulimit",
+                                           "5000", "--greppable", "-p", "1-65535"]
+                                _rs_timeout = 120 if scope == "ext" else 60
+                                _rs_p = subprocess.run(
+                                    _rs_cmd, capture_output=True,
+                                    timeout=_rs_timeout)
+                                _rs_txt = _rs_p.stdout.decode(
+                                    "utf-8", errors="replace")
+                                for _rl in _rs_txt.splitlines():
+                                    _rm = (re.search(r'Open\s+[\d.]+:(\d+)',
+                                                     _rl) or
+                                           re.search(r'Open\s+(\d+)', _rl))
+                                    if _rm:
+                                        _r_ports.append(int(_rm.group(1)))
+                            else:
+                                _pn_args = ("-n -Pn -sS -p- -T4 "
+                                            "--max-retries 2 "
+                                            "--max-rtt-timeout 3000ms "
+                                            "--host-timeout 300s")
+                                _pn_nm = nmap.PortScanner()
+                                _pn_nm.scan(hosts=_r_ip, arguments=_pn_args)
+                                if _r_ip in _pn_nm.all_hosts():
+                                    for _pr in _pn_nm[_r_ip].all_protocols():
+                                        for _pp in _pn_nm[_r_ip][_pr]:
+                                            if _pn_nm[_r_ip][_pr][_pp].get(
+                                                    "state", ""
+                                            ).startswith("open"):
+                                                _r_ports.append(int(_pp))
+                        except (subprocess.TimeoutExpired, OSError,
+                                ValueError, Exception):
+                            pass
+                        if _r_ports:
+                            alive_map[_r_ip] = True
+                            _rescued.append(_r_ip)
+                            _r_hn = None
+                            try:
+                                _r_hn_name, _, _ = socket.gethostbyaddr(_r_ip)
+                                _r_hn = _r_hn_name
+                            except Exception:
+                                pass
+                            hostnames[_r_ip] = _r_hn
+                            _tprint(f"    {Fore.GREEN}[+] {_r_ip} — ALIVE "
+                                    f"({len(_r_ports)} port(s), "
+                                    f"{'rustscan' if _eff_rs else 'nmap'} "
+                                    f"rescue){Style.RESET_ALL}")
+                            _vc.target(ip=_r_ip, hostname=_r_hn, scope=scope,
+                                       alive=True,
+                                       source="rustscan-rescue"
+                                              if _eff_rs else "nmap-pn-rescue")
+                            _f = pool.submit(
+                                _port_scan_worker,
+                                _r_ip, _r_hn, args.fast, output_mgr,
+                                nmap_path, args, sslscan_path, testssl_path,
+                                snmpwalk_path, smbmap_path, enum4linux_path,
+                                adenum_path, scope, cred_store, gobuster_path,
+                                wpscan_path, webanalyze_path, shcheck_path,
+                                wpscan_token, showmount_path, ipmitool_path,
+                                rustscan_path)
+                            with _rescue_lock:
+                                _rescue_pending.append((_f, _r_ip))
+                    if not _rescued:
+                        _tprint(f"    {Fore.YELLOW}[~] No additional hosts found "
+                                f"in rescue pass{Style.RESET_ALL}")
+                    _vc.status(f"{scope}_p1c_rescue",
+                               label="Phase 1c: Host Rescue (parallel)",
+                               status="complete",
+                               step=f"{len(_rescued)} rescued")
+                    _rescue_done.set()
+
+                _rescue_thread = threading.Thread(
+                    target=_bg_rustscan_rescue, daemon=True)
+                _rescue_thread.start()
+
+                # ── Collect port-scan results ─────────────────────────────
+                _pending = set(port_futures.keys())
+                _fut_to_ip = dict(port_futures)
+
+                while _pending or not _rescue_done.is_set():
+                    with _rescue_lock:
+                        for _rf, _rip in _rescue_pending:
+                            _pending.add(_rf)
+                            _fut_to_ip[_rf] = _rip
+                        _rescue_pending.clear()
+
+                    if not _pending:
+                        time.sleep(0.5)
+                        continue
+
+                    _done, _pending = wait(
+                        _pending, timeout=2.0,
+                        return_when=FIRST_COMPLETED)
+
+                    for future in _done:
+                        ip = _fut_to_ip[future]
+                        try:
+                            result_ip, host_result = future.result()
+                            host_result["scope"]        = scope
+                            host_result["source_ip"]    = scope_source_ip
+                            host_result["source_iface"] = scope_iface_name
+                            host_result["source_host"]  = scope_source_host
+                            all_results[result_ip] = host_result
+
+                            with _PRINT_LOCK:
+                                print_host_header(result_ip, True)
+                                for port, info in host_result[
+                                        "open_ports"].items():
+                                    fqdn = host_result.get(
+                                        "hostnames_by_port", {}
+                                    ).get(port)
+                                    print_port(
+                                        port, info, info.get("web"),
+                                        info.get("banner"))
+                                    if fqdn:
+                                        print(
+                                            f"           {Fore.CYAN}FQDN "
+                                            f"(port {port}): "
+                                            f"{fqdn}{Style.RESET_ALL}")
+                                for port, ssl_data in host_result.get(
+                                    "ssl_results", {}
+                                ).items():
+                                    print_ssl_results(
+                                        result_ip, port,
+                                        ssl_data.get("sslscan"),
+                                        ssl_data.get("testssl"))
+
+                            if run_nuclei_flag and host_result.get("open_ports"):
+                                _nuclei_batch_ips.append(result_ip)
+
+                        except Exception as exc:
+                            _tprint(
+                                f"{Fore.RED}  [!] Worker failed for {ip}: "
+                                f"{exc}{Style.RESET_ALL}")
+                            try:
+                                _w_tb  = traceback.format_exc()
+                                _w_msg = (
+                                    f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+                                    f"PORT SCAN WORKER CRASH — {ip}: "
+                                    f"{type(exc).__name__}: {exc}\n{_w_tb}\n")
+                                with output_mgr._log_lock:
+                                    with output_mgr.error_log.open(
+                                            "a", encoding="utf-8") as _ef:
+                                        _ef.write(_w_msg)
+                                    with output_mgr.log_file.open(
+                                            "a", encoding="utf-8") as _lf:
+                                        _lf.write(_w_msg)
+                            except Exception:
+                                pass
+                            all_results[ip] = {
+                                "alive": True, "hostname": hostnames.get(ip),
+                                "scope": scope, "source_ip": scope_source_ip,
+                                "source_iface": scope_iface_name,
+                                "source_host": scope_source_host,
+                                "open_ports": {}, "web_services": [],
+                                "ssl_results": {}, "hostnames_by_port": {},
+                                "web_files": {},
+                            }
+
+                # Ensure rescue thread is fully done before moving on
+                _rescue_thread.join(timeout=10)
+
+                # Final sweep — any futures added in the last rescue cycle
+                with _rescue_lock:
+                    for _rf, _rip in _rescue_pending:
+                        _pending.add(_rf)
+                        _fut_to_ip[_rf] = _rip
+                    _rescue_pending.clear()
+                for future in as_completed(_pending):
+                    ip = _fut_to_ip[future]
+                    try:
+                        result_ip, host_result = future.result()
+                        host_result["scope"]        = scope
+                        host_result["source_ip"]    = scope_source_ip
+                        host_result["source_iface"] = scope_iface_name
+                        host_result["source_host"]  = scope_source_host
+                        all_results[result_ip] = host_result
+                        if run_nuclei_flag and host_result.get("open_ports"):
+                            _nuclei_batch_ips.append(result_ip)
+                    except Exception:
+                        all_results.setdefault(ip, {
+                            "alive": True, "hostname": hostnames.get(ip),
+                            "scope": scope, "source_ip": scope_source_ip,
+                            "source_iface": scope_iface_name,
+                            "source_host": scope_source_host,
+                            "open_ports": {}, "web_services": [],
+                            "ssl_results": {}, "hostnames_by_port": {},
+                            "web_files": {},
+                        })
+
+                # ── Batch Nuclei scan ─────────────────────────────────────
+                if _nuclei_batch_ips:
+                    _tprint(
+                        f"\n{Fore.CYAN}[*] {scope_label} Nuclei IP scan "
+                        f"({len(_nuclei_batch_ips)} host(s))...{Style.RESET_ALL}"
+                    )
+                    _vc.status(f"{scope}_p2_nuclei", label="Phase 2: Nuclei IP Scan",
+                               status="running", step=f"{len(_nuclei_batch_ips)} hosts")
+                    nuclei_timeout = max(_nuclei_base, len(_nuclei_batch_ips) * 60)
+                    try:
+                        run_nuclei(
+                            _nuclei_batch_ips, scope, output_mgr, nuclei_path,
+                            timeout=nuclei_timeout, all_results=all_results,
+                        )
+                    except Exception as exc:
+                        _tprint(
+                            f"{Fore.RED}[!] Nuclei batch scan error: "
+                            f"{exc}{Style.RESET_ALL}"
+                        )
+                        try:
+                            with output_mgr._log_lock:
+                                with output_mgr.error_log.open("a", encoding="utf-8") as _ef:
+                                    _ef.write(
+                                        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+                                        f"NUCLEI SCAN ERROR: {type(exc).__name__}: {exc}\n"
+                                    )
+                        except Exception:
+                            pass
+                    _vc.status(f"{scope}_p2_nuclei", label="Phase 2: Nuclei IP Scan",
+                               status="complete")
+                    _tprint(
+                        f"{Fore.GREEN}[+] {scope_label} Nuclei IP scan "
+                        f"complete{Style.RESET_ALL}"
+                    )
+
+        _vc.status(f"{scope}_p2_portscan", label="Phase 2: Port Scan & Service Analysis",
+                   status="complete" if alive_ips else "skipped")
 
     # Recompute after rescue — rescued hosts are now in alive_map
     if _lazy:
