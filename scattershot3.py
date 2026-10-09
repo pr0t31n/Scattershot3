@@ -5343,6 +5343,9 @@ def _discover_chunk(
     nmap_args: "str | None" = None,
     supp_nmap_args: "str | None" = None,
     rustscan_path: "str | None" = None,
+    discovery_min_rate: "int | None" = None,
+    discovery_min_parallelism: "int | None" = None,
+    timing_template: "str | None" = None,
 ) -> "tuple[list[str], list[str]]":
     """
     Run host discovery on one /20 chunk using direct nmap subprocess.
@@ -5364,13 +5367,17 @@ def _discover_chunk(
     if nmap_args is None:
         _host_timeout = "30s" if scope == "ext" else "10s"
         _max_retries = "2" if scope == "ext" else "1"
+        _min_par = discovery_min_parallelism if discovery_min_parallelism else 20
+        _rate_flag = f" --min-rate {discovery_min_rate}" if discovery_min_rate else ""
+        _timing_flag = f" -T{timing_template}" if timing_template else ""
         nmap_args = (
             "-n -sn --reason "
             "-PE "
             "-PS21,22,23,25,53,80,110,111,135,139,143,179,389,443,445,"
             "465,587,636,993,995,1433,1723,2525,3306,3389,5432,5900,"
             "8080,8443,8888,9090,9443 "
-            f"--max-retries {_max_retries} --min-parallelism 20 "
+            f"--max-retries {_max_retries} --min-parallelism {_min_par}"
+            f"{_rate_flag}{_timing_flag} "
             f"--host-timeout {_host_timeout}"
         )
 
@@ -28680,6 +28687,9 @@ def scan_scope(
                     output_mgr, nmap_path, scope,
                     supp_nmap_args=_1b_nmap_args,
                     rustscan_path=rustscan_path,
+                    discovery_min_rate=getattr(args, "discovery_min_rate", None),
+                    discovery_min_parallelism=getattr(args, "discovery_min_parallelism", None),
+                    timing_template=getattr(args, "timing_template", None),
                 )
 
                 if _exclude:
