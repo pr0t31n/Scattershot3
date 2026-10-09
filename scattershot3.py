@@ -2962,7 +2962,10 @@ class OutputManager:
     def write_nmap_output(self, ip: str, scan_type: str, raw_output: str) -> Path:
         """Save raw nmap output. Per-IP scans go to hosts/<ip>/; discovery to tools/nmap_discovery/."""
         ts_safe = datetime.now().strftime("%Y%m%d_%H%M%S")
-        if "." in ip or ":" in ip:
+        if scan_type == "discovery":
+            fname = self._safe_filename([ip, scan_type, ts_safe], "txt")
+            out   = self.scope_tool_path("nmap_discovery") / fname
+        elif "." in ip or ":" in ip:
             out = self.host_path(ip) / f"{scan_type}_{ts_safe}.txt"
         else:
             fname = self._safe_filename([ip, scan_type, ts_safe], "txt")
@@ -5191,6 +5194,10 @@ def host_discovery_range(
             else:
                 range_label = "discovery"
             out_path = output_mgr.write_nmap_output(range_label, "discovery", raw)
+            ts_safe = datetime.now().strftime("%Y%m%d_%H%M%S")
+            oA_base = (output_mgr.scope_tool_path("nmap_discovery")
+                       / f"discovery_{range_label}_{ts_safe}")
+            output_mgr.write_nmap_oA_siblings(oA_base, raw)
             output_mgr.log_command(
                 "nmap", nmap_path, cmd_list, out_path,
                 extra={
