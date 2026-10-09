@@ -5077,6 +5077,9 @@ def host_discovery_range(
     raw_specs: "list[str] | None" = None,
     nmap_args: "str | None" = None,
     scope: "str | None" = None,
+    discovery_min_rate: "int | None" = None,
+    discovery_min_parallelism: "int | None" = None,
+    timing_template: "str | None" = None,
 ) -> dict[str, bool]:
     """
     Discover which hosts in *ips* are alive using a single nmap -sn run.
@@ -5123,13 +5126,18 @@ def host_discovery_range(
     if nmap_args is None:
         _host_timeout = "30s" if scope == "ext" else "10s"
         _max_retries  = "2"  if scope == "ext" else "1"
+        _min_par = discovery_min_parallelism if discovery_min_parallelism else 20
+        _rate_flag = f" --min-rate {discovery_min_rate}" if discovery_min_rate else ""
+        _timing_flag = f" -T{timing_template}" if timing_template else ""
         nmap_args = (
             "-n -sn --reason "
             "-PE "
             "-PS21,22,23,25,53,80,110,111,135,139,143,179,389,443,445,"
             "465,587,636,993,995,1433,1723,2525,3306,3389,5432,5900,"
             "8080,8443,8888,9090,9443 "
-            f"--max-retries {_max_retries} --min-parallelism 20 "
+            "-PU53,69,123,161,500,1194 "
+            f"--max-retries {_max_retries} --min-parallelism {_min_par}"
+            f"{_rate_flag}{_timing_flag} "
             f"--host-timeout {_host_timeout}"
         )
 
@@ -6005,6 +6013,47 @@ def _parse_nse_findings(
             affected=f"{ip}:{port}",
             output_file=output_file,
         )
+
+    # ── ssh-auth-methods: password authentication enabled ────────────────────
+    if ssh_auth_out and not re.search(r"\bnone\b", ssh_auth_out, re.IGNORECASE):
+        _ssh_methods = [m.strip().lower() for m in
+                        re.findall(r"(?:password|publickey|keyboard-interactive|gssapi-[\w-]+|hostbased)",
+                                   ssh_auth_out, re.IGNORECASE)]
+        _has_password = "password" in _ssh_methods or "keyboard-interactive" in _ssh_methods
+        _has_pubkey = "publickey" in _ssh_methods
+        if _has_password:
+            _pw_only = not _has_pubkey
+            _risk = "MEDIUM" if _pw_only else "LOW"
+            _title = ("SSH Password-Only Authentication (No Public Key)"
+                      if _pw_only else "SSH Password Authentication Enabled")
+            _desc_detail = (
+                "only password-based authentication methods (password and/or "
+                "keyboard-interactive) with no public key authentication available"
+                if _pw_only else
+                "password-based authentication methods alongside public key. "
+                "Password authentication is susceptible to brute-force attacks "
+                "and does not enforce multi-factor authentication"
+            )
+            _tprint(
+                f"  {Fore.YELLOW}[~] SSH password auth enabled on "
+                f"{ip}:{port} (methods: {', '.join(_ssh_methods)}){Style.RESET_ALL}"
+            )
+            output_mgr.log_finding(
+                title=_title,
+                ip=ip, port=port, command=cmd, hostname=hostname, risk=_risk,
+                description=(
+                    f"The SSH server on {ip}:{port} accepts {_desc_detail}. "
+                    f"Supported methods: {', '.join(_ssh_methods)}. "
+                    f"Disable PasswordAuthentication and "
+                    f"ChallengeResponseAuthentication in sshd_config and require "
+                    f"public key authentication exclusively. CIS Benchmark and "
+                    f"DISA STIG both mandate disabling password-based SSH login."
+                ),
+                output=ssh_auth_out,
+                sources="nmap-nse",
+                affected=f"{ip}:{port}",
+                output_file=output_file,
+            )
 
     # ── ssh2-enum-algos: weak/deprecated SSH cryptographic algorithms ─────────
     ssh_algos_out = scripts.get("ssh2-enum-algos", "")
@@ -9222,6 +9271,149 @@ def _port_scan_worker(
             except Exception as exc:
                 _tprint(f"{Fore.RED}  [!] ike-scan error {ip}:{port}: {exc}{Style.RESET_ALL}")
 
+        # ── NTP monlist / amplification probe ─────────────────────────
+        is_ntp = (svc_name in ("ntp", "ntpd") or port == 123)
+        if is_ntp and not getattr(args, "no_enum", False):
+            try:
+                _ntp_host_dir = output_mgr.host_path(ip)
+                probe_ntp_monlist(ip, output_dir=_ntp_host_dir,
+                                  output_mgr=output_mgr)
+            except Exception as exc:
+                _tprint(f"{Fore.RED}  [!] NTP monlist probe error {ip}:{port}: {exc}{Style.RESET_ALL}")
+
+        # ── DNS recursion + zone transfer (NSE) ──────────────────────
+        is_dns = (svc_name in ("domain", "dns", "dns-udp") or port == 53)
+        if is_dns and not getattr(args, "no_enum", False):
+            try:
+                _dns_host_dir = output_mgr.host_path(ip)
+                _dns_svc_dir = _dns_host_dir / "dns"
+                _dns_svc_dir.mkdir(parents=True, exist_ok=True)
+                _dns_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                _dns_xml = _dns_svc_dir / f"{ip.replace('.','_')}_dns_nse_{_dns_ts}.xml"
+                _dns_cmd = [
+                    nmap_path, "-n", "-Pn", "-sU", "-p", str(port),
+                    "--script", "dns-recursion,dns-zone-transfer,dns-nsid",
+                    "--script-timeout", "30s",
+                    "-oX", str(_dns_xml),
+                    ip,
+                ]
+                _tprint(f"  {Fore.CYAN}[*] DNS NSE probes: {ip}:{port}{Style.RESET_ALL}")
+                _dns_started = datetime.now().astimezone()
+                _dns_proc = subprocess.run(_dns_cmd, capture_output=True, text=True, timeout=120)
+                _dns_ended = datetime.now().astimezone()
+                output_mgr.log_command(
+                    "nmap-dns-nse", nmap_path, _dns_cmd, _dns_xml,
+                    stdout=_dns_proc.stdout, stderr=_dns_proc.stderr,
+                    started=_dns_started, ended=_dns_ended,
+                    exit_code=_dns_proc.returncode,
+                    extra={"target": f"{ip}:{port}", "scan_type": "dns_nse"},
+                )
+                _dns_out = _dns_proc.stdout or ""
+                if "dns-recursion" in _dns_out and "Recursion appears to be enabled" in _dns_out:
+                    _dns_risk = "HIGH" if scope == "ext" else "INFO"
+                    output_mgr.log_finding(
+                        title="DNS Recursion Enabled",
+                        ip=ip, port=port, command=" ".join(_dns_cmd),
+                        hostname=hostname, risk=_dns_risk,
+                        description=(
+                            f"The DNS server at {ip}:{port} permits recursive queries "
+                            f"from external sources. Open resolvers can be abused for "
+                            f"DNS amplification DDoS attacks (~28-54x amplification) "
+                            f"and cache poisoning. Restrict recursion to trusted clients."),
+                        output=_dns_out[:2000],
+                        sources="nmap-dns-recursion",
+                        affected=f"{ip}:{port}",
+                        output_file=str(_dns_xml.relative_to(output_mgr.scope_dir)),
+                    )
+                if "dns-zone-transfer" in _dns_out and ("Transfer" in _dns_out or "AXFR" in _dns_out):
+                    _xfr_lines = [l for l in _dns_out.splitlines() if "dns-zone-transfer" in l.lower() or l.strip().startswith("|")]
+                    if any("Records:" in l or "." in l for l in _xfr_lines):
+                        output_mgr.log_finding(
+                            title="DNS Zone Transfer (AXFR) Permitted",
+                            ip=ip, port=port, command=" ".join(_dns_cmd),
+                            hostname=hostname, risk="HIGH",
+                            description=(
+                                f"The DNS server at {ip}:{port} permits AXFR zone "
+                                f"transfers, exposing all DNS records in the zone. "
+                                f"This reveals internal hostnames, IP addresses, and "
+                                f"service infrastructure. Restrict AXFR to authorized "
+                                f"secondary nameservers only."),
+                            output="\n".join(_xfr_lines[:50]),
+                            sources="nmap-dns-zone-transfer",
+                            affected=f"{ip}:{port}",
+                            output_file=str(_dns_xml.relative_to(output_mgr.scope_dir)),
+                        )
+            except subprocess.TimeoutExpired:
+                _tprint(f"  {Fore.YELLOW}[~] DNS NSE timed out {ip}:{port}{Style.RESET_ALL}")
+            except Exception as exc:
+                _tprint(f"{Fore.RED}  [!] DNS NSE error {ip}:{port}: {exc}{Style.RESET_ALL}")
+
+        # ── TFTP enumeration ──────────────────────────────────────────
+        is_tftp = (svc_name in ("tftp", "tftpd") or port == 69)
+        if is_tftp and not getattr(args, "no_enum", False):
+            try:
+                _tftp_host_dir = output_mgr.host_path(ip)
+                _tftp_svc_dir = _tftp_host_dir / "services"
+                _tftp_svc_dir.mkdir(parents=True, exist_ok=True)
+                _tftp_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                _tftp_xml = _tftp_svc_dir / f"{ip.replace('.','_')}_tftp_{_tftp_ts}.xml"
+                _tftp_cmd = [
+                    nmap_path, "-n", "-Pn", "-sU", "-p", str(port),
+                    "--script", "tftp-enum",
+                    "--script-timeout", "30s",
+                    "-oX", str(_tftp_xml),
+                    ip,
+                ]
+                _tprint(f"  {Fore.CYAN}[*] TFTP enum: {ip}:{port}{Style.RESET_ALL}")
+                _tftp_started = datetime.now().astimezone()
+                _tftp_proc = subprocess.run(_tftp_cmd, capture_output=True, text=True, timeout=60)
+                _tftp_ended = datetime.now().astimezone()
+                output_mgr.log_command(
+                    "nmap-tftp-enum", nmap_path, _tftp_cmd, _tftp_xml,
+                    stdout=_tftp_proc.stdout, stderr=_tftp_proc.stderr,
+                    started=_tftp_started, ended=_tftp_ended,
+                    exit_code=_tftp_proc.returncode,
+                    extra={"target": f"{ip}:{port}", "scan_type": "tftp_enum"},
+                )
+                _tftp_out = _tftp_proc.stdout or ""
+                if "tftp-enum" in _tftp_out:
+                    _tftp_files = [l.strip() for l in _tftp_out.splitlines()
+                                    if l.strip().startswith("|") and "/" in l]
+                    if _tftp_files:
+                        output_mgr.log_finding(
+                            title="TFTP Service Accessible — Files Retrievable",
+                            ip=ip, port=port, command=" ".join(_tftp_cmd),
+                            hostname=hostname, risk="MEDIUM",
+                            description=(
+                                f"A TFTP service on {ip}:{port} responds to requests "
+                                f"and serves files without authentication. TFTP is an "
+                                f"unauthenticated, unencrypted file transfer protocol "
+                                f"often used for network device boot/config. Exposed "
+                                f"TFTP can leak device configs, firmware, or credentials."),
+                            output="\n".join(_tftp_files[:20]),
+                            sources="nmap-tftp-enum",
+                            affected=f"{ip}:{port}",
+                            output_file=str(_tftp_xml.relative_to(output_mgr.scope_dir)),
+                        )
+                    else:
+                        output_mgr.log_finding(
+                            title="TFTP Service Detected",
+                            ip=ip, port=port, command=" ".join(_tftp_cmd),
+                            hostname=hostname, risk="INFO",
+                            description=(
+                                f"A TFTP service was detected on {ip}:{port}. TFTP "
+                                f"provides unauthenticated, unencrypted file transfer "
+                                f"and should not be exposed on production networks."),
+                            output=_tftp_out[:1000],
+                            sources="nmap-tftp-enum",
+                            affected=f"{ip}:{port}",
+                            output_file=str(_tftp_xml.relative_to(output_mgr.scope_dir)),
+                        )
+            except subprocess.TimeoutExpired:
+                _tprint(f"  {Fore.YELLOW}[~] TFTP enum timed out {ip}:{port}{Style.RESET_ALL}")
+            except Exception as exc:
+                _tprint(f"{Fore.RED}  [!] TFTP enum error {ip}:{port}: {exc}{Style.RESET_ALL}")
+
         # ── Default webpage check ──────────────────────────────────────
         if is_web and not getattr(args, "no_web", False):
             try:
@@ -12228,6 +12420,9 @@ _ARGPARSE_DEFAULTS: dict = {
     "testssl_timeout":    300,
     "nuclei_timeout":     600,
     "wpscan_token":       None,
+    "discovery_min_rate":        None,
+    "discovery_min_parallelism": None,
+    "timing_template":           None,
 }
 
 # Canonical template written by --init-settings
@@ -12268,6 +12463,9 @@ _SETTINGS_TEMPLATE: dict = {
         "testssl_timeout":   300,
         "nuclei_timeout":    600,
         "wpscan_token":      "",
+        "discovery_min_rate":        0,
+        "discovery_min_parallelism": 20,
+        "timing_template":           "",
     },
 }
 
@@ -12494,6 +12692,18 @@ def apply_settings(args: argparse.Namespace, settings: dict) -> None:
         token = scan["wpscan_token"]
         if token and getattr(args, "wpscan_token", None) == _ARGPARSE_DEFAULTS["wpscan_token"]:
             args.wpscan_token = str(token)
+
+    # ── Discovery tuning ──────────────────────────────────────────────────
+    for key in ("discovery_min_rate", "discovery_min_parallelism"):
+        if key in scan:
+            val = int(scan[key]) if scan[key] else None
+            if val and getattr(args, key, None) == _ARGPARSE_DEFAULTS[key]:
+                setattr(args, key, val)
+
+    if "timing_template" in scan:
+        tt = scan["timing_template"]
+        if tt and getattr(args, "timing_template", None) == _ARGPARSE_DEFAULTS["timing_template"]:
+            args.timing_template = str(tt)
 
     # ── scope_output_dirs (Crucible v2 scope-separated output) ────────────
     sod = scan.get("scope_output_dirs")
@@ -12799,6 +13009,33 @@ Examples:
         "--searchsploit-timeout", metavar="SECS", dest="searchsploit_timeout",
         type=int, default=120,
         help="Per-file timeout for searchsploit --nmap (default: 120s).",
+    )
+    parser.add_argument(
+        "--discovery-min-rate", type=int, default=None, metavar="N",
+        dest="discovery_min_rate",
+        help=(
+            "Set nmap --min-rate for the -sn discovery scan. "
+            "Controls the minimum packet transmission rate (packets/sec). "
+            "Higher values speed up large scans but may overwhelm the network."
+        ),
+    )
+    parser.add_argument(
+        "--discovery-min-parallelism", type=int, default=None, metavar="N",
+        dest="discovery_min_parallelism",
+        help=(
+            "Set nmap --min-parallelism for the -sn discovery scan "
+            "(default: 20). Controls the minimum number of concurrent "
+            "probe groups nmap will use."
+        ),
+    )
+    parser.add_argument(
+        "--timing-template", default=None, metavar="0-5",
+        dest="timing_template",
+        help=(
+            "Nmap timing template for discovery scans (0=paranoid, 1=sneaky, "
+            "2=polite, 3=normal, 4=aggressive, 5=insane). Overrides the "
+            "default timing behavior."
+        ),
     )
     parser.add_argument(
         "--no-udp", action="store_true", dest="no_udp",
@@ -22874,20 +23111,62 @@ def run_printer_enum(
                 f"  {Fore.YELLOW}[!] JetDirect/PJL printer responds on "
                 f"{ip}:{port}{Style.RESET_ALL}"
             )
+
+            # PJL FSDIRLIST — check for filesystem access
+            _fs_access = False
+            _fs_listing = ""
+            try:
+                _fs_sock = socket.create_connection((ip, port), timeout=timeout)
+                _fs_sock.settimeout(timeout)
+                _fs_query = (
+                    b"\x1b%-12345X@PJL \r\n"
+                    b"@PJL FSDIRLIST NAME=\"0:\\\" ENTRY=1 COUNT=10\r\n"
+                    b"\x1b%-12345X"
+                )
+                _fs_sock.sendall(_fs_query)
+                _fs_resp = b""
+                for _ in range(5):
+                    try:
+                        _fs_chunk = _fs_sock.recv(4096)
+                        if not _fs_chunk:
+                            break
+                        _fs_resp += _fs_chunk
+                    except socket.timeout:
+                        break
+                _fs_sock.close()
+                _fs_text = _fs_resp.decode("utf-8", errors="replace")
+                if _fs_text.strip() and "FILEERROR" not in _fs_text.upper():
+                    _fs_access = True
+                    _fs_listing = _fs_text[:500]
+                    lines.append(f"FSDIRLIST response:\n{_fs_listing}")
+            except Exception:
+                pass
+
+            _fs_note = ""
+            if _fs_access:
+                _fs_note = (
+                    " PJL FSDIRLIST access is available, allowing filesystem "
+                    "enumeration and potential file download via FSDOWNLOAD."
+                )
+
+            _risk = "HIGH" if _fs_access else "MEDIUM"
             output_mgr.log_finding(
-                title=f"JetDirect / PJL Printer Accessible{'  — ' + model_info if model_info else ''}",
+                title=f"JetDirect / PJL Printer Accessible"
+                      f"{'  — Filesystem Access' if _fs_access else ''}"
+                      f"{'  — ' + model_info if model_info else ''}",
                 ip=ip, port=port,
                 command=f"Scattershot-PJL-Probe {ip}:{port}",
-                hostname=hostname, risk="MEDIUM",
+                hostname=hostname, risk=_risk,
                 description=(
                     f"Port {port}/TCP on {ip} responds to PJL queries, identifying a "
                     f"network-accessible printer{'  (' + model_info + ')' if model_info else ''}. "
                     f"Printers leak model and firmware details, may hold cached print jobs "
                     f"containing sensitive documents, and can be leveraged for SSRF, "
-                    f"credential interception (LDAP/SMTP settings), and lateral movement. "
+                    f"credential interception (LDAP/SMTP settings), and lateral movement."
+                    f"{_fs_note} "
                     f"Restrict port 9100 to authorised management hosts."
                 ),
-                output=text,
+                output=text + ("\n\nFSDIRLIST:\n" + _fs_listing if _fs_access else ""),
                 sources="pjl-probe",
                 affected=f"{ip}:{port}",
                 output_file=str(out_file),
@@ -22913,6 +23192,17 @@ def run_printer_enum(
     _tprint(f"  {Fore.GREEN}[+] PJL printer probe complete: {ip}:{port}{Style.RESET_ALL}")
 
 
+_REDIS_SENSITIVE_PATTERNS = re.compile(
+    r"(?:api[_-]?key|secret|password|passwd|token|bearer|access[_-]?token|"
+    r"id[_-]?token|refresh[_-]?token|credential|cred[_:\-]|auth[_:\-]|"
+    r"iam[_-]?attribute|serviceaccount|service[_-]account|service[_-]?key|"
+    r"session[_-]?id|oauth|openid|private[_-]?key|client[_-]?secret|"
+    r"tenant[_-]?secret|api[_-]?secret|jwt|signing[_-]?key|"
+    r"configvalue|secretvalue)",
+    re.IGNORECASE,
+)
+
+
 def run_redis_check(
     ip: str,
     port: int,
@@ -22922,12 +23212,15 @@ def run_redis_check(
     timeout: int = 10,
 ) -> None:
     """
-    Redis unauthenticated access detection.
+    Redis unauthenticated access detection + sensitive keyspace enumeration.
 
-    Sends the Redis INFO command and checks whether the server responds
-    with its server metadata without requiring authentication.  If
-    unauthenticated, also retrieves CONFIG GET maxmemory and DBSIZE to
-    assess data exposure scope.
+    Phase 1: PING — verify connectivity and confirm no auth required.
+    Phase 2: INFO server — extract version and server metadata.
+    Phase 3: DBSIZE — assess data exposure scope.
+    Phase 4: CONFIG GET — retrieve dir, maxmemory, bind for RCE risk.
+    Phase 5: Bounded SCAN — enumerate keys and pattern-match for sensitive
+             data (API keys, service account tokens, secrets, credentials).
+             For matching keys, TYPE + HSCAN/GET samples the value to confirm.
 
     Severity: CRITICAL (unauth access to persistent data store)
     """
@@ -22963,6 +23256,10 @@ def run_redis_check(
                     break
             return resp.decode("utf-8", errors="replace")
 
+        # PING — validate connectivity before probing
+        ping_resp = _redis_cmd("PING")
+        lines.append(f"PING: {ping_resp[:40]}")
+
         info_resp = _redis_cmd("INFO server")
         lines.append(f"INFO server response ({len(info_resp)} bytes):")
         lines.append(info_resp[:1000])
@@ -22994,29 +23291,136 @@ def run_redis_check(
             dbsize_m = re.search(r":(\d+)", dbsize_resp)
             dbsize = int(dbsize_m.group(1)) if dbsize_m else 0
 
+            # CONFIG GET — assess RCE exposure via dir/dbfilename manipulation
+            config_dir = ""
+            config_maxmem = ""
+            config_bind = ""
+            cfg_dir_resp = _redis_cmd("CONFIG GET dir")
+            lines.append(f"CONFIG GET dir: {cfg_dir_resp[:200]}")
+            _dir_m = re.search(r"\$\d+\r?\n(.+?)(?:\r?\n|$)", cfg_dir_resp)
+            if _dir_m and "dir" not in _dir_m.group(1):
+                config_dir = _dir_m.group(1).strip()
+            else:
+                _dir_lines = [l for l in cfg_dir_resp.splitlines()
+                              if l.strip() and l.strip() != "dir"
+                              and not l.startswith("*") and not l.startswith("$")]
+                if _dir_lines:
+                    config_dir = _dir_lines[-1].strip()
+
+            cfg_mem_resp = _redis_cmd("CONFIG GET maxmemory")
+            lines.append(f"CONFIG GET maxmemory: {cfg_mem_resp[:200]}")
+            _mem_lines = [l for l in cfg_mem_resp.splitlines()
+                          if l.strip() and l.strip() != "maxmemory"
+                          and not l.startswith("*") and not l.startswith("$")]
+            if _mem_lines:
+                config_maxmem = _mem_lines[-1].strip()
+
+            cfg_bind_resp = _redis_cmd("CONFIG GET bind")
+            lines.append(f"CONFIG GET bind: {cfg_bind_resp[:200]}")
+            _bind_lines = [l for l in cfg_bind_resp.splitlines()
+                           if l.strip() and l.strip() != "bind"
+                           and not l.startswith("*") and not l.startswith("$")]
+            if _bind_lines:
+                config_bind = _bind_lines[-1].strip()
+
+            # ── Bounded keyspace SCAN for sensitive data ─────────────
+            sensitive_keys = []
+            _scan_cursor = "0"
+            _scan_iters = 0
+            _MAX_SCAN_ITERS = 50
+            _MAX_SENSITIVE = 25
+            lines.append("\n" + "─" * 60)
+            lines.append("Keyspace SCAN for sensitive data patterns:")
+
+            while _scan_iters < _MAX_SCAN_ITERS and len(sensitive_keys) < _MAX_SENSITIVE:
+                scan_resp = _redis_cmd(f"SCAN {_scan_cursor} COUNT 100")
+                _scan_iters += 1
+                resp_parts = scan_resp.strip().split("\r\n")
+                new_cursor = None
+                _found_keys = []
+                for rp in resp_parts:
+                    if rp.startswith("*") or rp.startswith("$"):
+                        continue
+                    if new_cursor is None:
+                        new_cursor = rp.strip()
+                    elif rp.strip():
+                        _found_keys.append(rp.strip())
+                if new_cursor is None:
+                    break
+                for fk in _found_keys:
+                    if _REDIS_SENSITIVE_PATTERNS.search(fk):
+                        sensitive_keys.append(fk)
+                _scan_cursor = new_cursor
+                if _scan_cursor == "0":
+                    break
+
+            lines.append(f"SCAN iterations: {_scan_iters}")
+            lines.append(f"Sensitive keys found: {len(sensitive_keys)}")
+
+            # Sample sensitive keys — TYPE + value preview
+            sensitive_details = []
+            for _sk in sensitive_keys[:15]:
+                try:
+                    type_resp = _redis_cmd(f"TYPE {_sk}")
+                    key_type = "unknown"
+                    for tl in type_resp.strip().split("\r\n"):
+                        if tl.startswith("+"):
+                            key_type = tl[1:].strip()
+                            break
+                    sample = ""
+                    if key_type == "hash":
+                        sample = _redis_cmd(f"HSCAN {_sk} 0 COUNT 10")[:500]
+                    elif key_type == "string":
+                        sample = _redis_cmd(f"GET {_sk}", max_bytes=1024)[:500]
+                    elif key_type == "list":
+                        sample = _redis_cmd(f"LRANGE {_sk} 0 2")[:500]
+                    elif key_type == "set":
+                        sample = _redis_cmd(f"SRANDMEMBER {_sk} 3")[:500]
+                    sensitive_details.append({
+                        "key": _sk, "type": key_type, "sample": sample.strip(),
+                    })
+                    lines.append(f"\n  Key: {_sk}")
+                    lines.append(f"  Type: {key_type}")
+                    lines.append(f"  Sample: {sample.strip()[:300]}")
+                except Exception:
+                    pass
+
             sock.close()
+
+            # ── Emit findings ─────────────────────────────────────────
             _tprint(
                 f"  {Fore.RED}[CRITICAL] Redis unauthenticated access on "
                 f"{ip}:{port}{Style.RESET_ALL}"
             )
+
+            _rce_note = ""
+            if config_dir:
+                _rce_note = (
+                    f" CONFIG GET dir reveals working directory '{config_dir}' — "
+                    f"CONFIG SET dir + dbfilename is the standard Redis RCE vector "
+                    f"(SSH key injection, cron job, web shell)."
+                )
             output_mgr.log_finding(
                 title=f"Redis Unauthenticated Access{' v' + redis_ver if redis_ver else ''}",
                 ip=ip, port=port,
-                command=f"Scattershot-Redis-Check",
+                command="Scattershot-Redis-Check",
                 hostname=hostname, risk="CRITICAL",
                 description=(
                     f"Redis at {ip}:{port} does not require authentication and responded "
-                    f"to INFO with full server metadata. "
+                    f"to PING and INFO with full server metadata. "
                     f"DB contains {dbsize} key(s). "
                     f"An unauthenticated attacker can read all stored data, overwrite "
                     f"keys, execute Lua scripts, write SSH authorized_keys via "
                     f"CONFIG SET dir/dbfilename, and in some configurations achieve "
-                    f"OS-level code execution. Set requirepass in redis.conf and bind "
-                    f"to localhost or a management VLAN."
+                    f"OS-level code execution.{_rce_note} Set requirepass in redis.conf "
+                    f"and bind to localhost or a management VLAN."
                 ),
                 output=(
                     f"Redis version: {redis_ver or 'unknown'}\n"
-                    f"DBSIZE: {dbsize}\n\n"
+                    f"DBSIZE: {dbsize}\n"
+                    f"CONFIG dir: {config_dir or '(denied/empty)'}\n"
+                    f"CONFIG maxmemory: {config_maxmem or '(denied/empty)'}\n"
+                    f"CONFIG bind: {config_bind or '(denied/empty)'}\n\n"
                     f"INFO server response (first 800 chars):\n"
                     f"{info_resp[:800]}"
                 ),
@@ -23024,6 +23428,61 @@ def run_redis_check(
                 affected=f"{ip}:{port}",
                 output_file=str(out_file),
             )
+
+            # Separate finding for sensitive keyspace data
+            if sensitive_keys:
+                _key_lines = []
+                for sd in sensitive_details[:10]:
+                    _key_lines.append(f"  {sd['key']} (type: {sd['type']})")
+                    if sd.get("sample"):
+                        _preview = sd["sample"][:200].replace("\r\n", " | ")
+                        _key_lines.append(f"    → {_preview}")
+
+                _tprint(
+                    f"  {Fore.RED}[!!!] Redis sensitive data in keyspace: "
+                    f"{len(sensitive_keys)} key(s) matching credential/token "
+                    f"patterns on {ip}:{port}{Style.RESET_ALL}"
+                )
+                output_mgr.log_finding(
+                    title="Redis: Sensitive Data Exposed in Keyspace",
+                    ip=ip, port=port,
+                    command="Scattershot-Redis-SCAN",
+                    hostname=hostname, risk="CRITICAL",
+                    description=(
+                        f"Unauthenticated bounded SCAN of the Redis keyspace on "
+                        f"{ip}:{port} discovered {len(sensitive_keys)} key(s) whose "
+                        f"names match patterns associated with credentials, API keys, "
+                        f"service accounts, OAuth/OIDC tokens, or other "
+                        f"authentication-sensitive data. An attacker with network "
+                        f"access can retrieve cached bearer tokens, service account "
+                        f"API keys, tenant secrets, and session credentials without "
+                        f"any authentication, enabling lateral movement and privilege "
+                        f"escalation through identity infrastructure. Require Redis "
+                        f"authentication, purge cached secrets, and rotate all "
+                        f"exposed credentials immediately."
+                    ),
+                    output="\n".join(_key_lines)[:3000],
+                    sources="redis-keyspace-scan",
+                    affected=f"{ip}:{port}",
+                    output_file=str(out_file),
+                )
+                output_mgr.log_action_item(
+                    "credential_reuse", "Isotope", f"{ip}:{port}",
+                    ip, port,
+                    title="Isotope: Extract and test Redis cached credentials",
+                    description=(
+                        f"Redis on {ip}:{port} exposes {len(sensitive_keys)} "
+                        f"sensitive key(s) without authentication, including "
+                        f"potential API keys, service account tokens, and cached "
+                        f"authentication data. Isotope should extract all credential "
+                        f"material and test for reuse across the environment, "
+                        f"including against any identified identity providers "
+                        f"(WSO2, OAuth endpoints, etc.)."
+                    ),
+                    hostname=hostname,
+                    source_finding="Redis: Sensitive Data Exposed in Keyspace",
+                    priority="CRITICAL",
+                )
         else:
             lines.append("Response unclear — may be filtered or protocol mismatch")
             sock.close()
@@ -23037,7 +23496,7 @@ def run_redis_check(
     out_file.write_text("\n".join(lines), encoding="utf-8")
     output_mgr.log_command(
         "redis-check", "Scattershot-Redis-Check",
-        f"socket connect {ip}:{port} Redis INFO server + DBSIZE",
+        f"socket connect {ip}:{port} Redis PING+INFO+DBSIZE+CONFIG+SCAN",
         out_file,
         extra={"target": f"{ip}:{port}"},
     )
@@ -23745,6 +24204,157 @@ def run_vnc_check(
                         f"  {Fore.RED}[!!] VNC NO AUTH on {ip}:{port} "
                         f"({rfb_version}){Style.RESET_ALL}"
                     )
+
+                    # ── Automated framebuffer screenshot ──────────────────
+                    _vnc_screenshot = ""
+                    # Native RFB capture (zero external deps)
+                    try:
+                        # Select security type 1 (None)
+                        sock.sendall(b"\x01")
+                        _sr = b""
+                        while len(_sr) < 4:
+                            _ch = sock.recv(4 - len(_sr))
+                            if not _ch:
+                                break
+                            _sr += _ch
+                        if len(_sr) == 4 and struct.unpack("!I", _sr)[0] == 0:
+                            # ClientInit — shared flag = 1
+                            sock.sendall(b"\x01")
+                            _sinit = b""
+                            while len(_sinit) < 24:
+                                _ch = sock.recv(24 - len(_sinit))
+                                if not _ch:
+                                    break
+                                _sinit += _ch
+                            if len(_sinit) >= 24:
+                                _fb_w = struct.unpack("!H", _sinit[0:2])[0]
+                                _fb_h = struct.unpack("!H", _sinit[2:4])[0]
+                                _name_len = struct.unpack("!I", _sinit[20:24])[0]
+                                if 0 < _name_len < 1024:
+                                    _nd = b""
+                                    while len(_nd) < _name_len:
+                                        _ch = sock.recv(min(4096, _name_len - len(_nd)))
+                                        if not _ch:
+                                            break
+                                        _nd += _ch
+                                    lines.append(f"Desktop: {_nd.decode('utf-8', errors='replace')}")
+                                lines.append(f"Framebuffer: {_fb_w}x{_fb_h}")
+
+                                if 0 < _fb_w <= 4096 and 0 < _fb_h <= 4096:
+                                    # SetPixelFormat — 32bpp, depth 24, little-endian, true-color, RGB shifts 16/8/0
+                                    _spf = struct.pack("!B3x BBBB HHH BBB 3x",
+                                                       0,  # msg type
+                                                       32, 24, 0, 1,
+                                                       255, 255, 255,
+                                                       16, 8, 0)
+                                    sock.sendall(_spf)
+                                    # SetEncodings — raw (0) only
+                                    sock.sendall(struct.pack("!BxHi", 2, 1, 0))
+                                    # FramebufferUpdateRequest — full screen
+                                    sock.sendall(struct.pack("!BBHHHH", 3, 0, 0, 0, _fb_w, _fb_h))
+
+                                    _fu_hdr = b""
+                                    while len(_fu_hdr) < 4:
+                                        _ch = sock.recv(4 - len(_fu_hdr))
+                                        if not _ch:
+                                            break
+                                        _fu_hdr += _ch
+
+                                    if len(_fu_hdr) == 4 and _fu_hdr[0] == 0:
+                                        _n_rects = struct.unpack("!H", _fu_hdr[2:4])[0]
+                                        _pixels = bytearray(_fb_w * _fb_h * 4)
+                                        _shot_ok = True
+                                        for _ in range(_n_rects):
+                                            _rh = b""
+                                            while len(_rh) < 12:
+                                                _ch = sock.recv(12 - len(_rh))
+                                                if not _ch:
+                                                    _shot_ok = False
+                                                    break
+                                                _rh += _ch
+                                            if not _shot_ok or len(_rh) < 12:
+                                                _shot_ok = False
+                                                break
+                                            _rx, _ry, _rw, _rhv, _renc = struct.unpack("!HHHHi", _rh)
+                                            if _renc != 0:
+                                                _shot_ok = False
+                                                break
+                                            _rb = _rw * _rhv * 4
+                                            _rd = b""
+                                            while len(_rd) < _rb:
+                                                _ch = sock.recv(min(65536, _rb - len(_rd)))
+                                                if not _ch:
+                                                    _shot_ok = False
+                                                    break
+                                                _rd += _ch
+                                            if len(_rd) < _rb:
+                                                _shot_ok = False
+                                                break
+                                            for _row in range(_rhv):
+                                                _so = _row * _rw * 4
+                                                _do = ((_ry + _row) * _fb_w + _rx) * 4
+                                                if _do + _rw * 4 <= len(_pixels):
+                                                    _pixels[_do:_do + _rw * 4] = _rd[_so:_so + _rw * 4]
+
+                                        if _shot_ok:
+                                            import zlib as _zlib_vnc
+                                            # Build PNG from raw BGRA pixels
+                                            _raw_rows = bytearray()
+                                            for _py in range(_fb_h):
+                                                _raw_rows.append(0)  # filter byte
+                                                for _px in range(_fb_w):
+                                                    _off = (_py * _fb_w + _px) * 4
+                                                    _raw_rows.append(_pixels[_off + 2])  # R
+                                                    _raw_rows.append(_pixels[_off + 1])  # G
+                                                    _raw_rows.append(_pixels[_off])      # B
+
+                                            def _png_chunk(_ct, _d):
+                                                return (struct.pack("!I", len(_d)) + _ct + _d
+                                                        + struct.pack("!I", _zlib_vnc.crc32(_ct + _d) & 0xFFFFFFFF))
+
+                                            _ihdr = struct.pack("!IIBBBBB", _fb_w, _fb_h, 8, 2, 0, 0, 0)
+                                            _png = (b"\x89PNG\r\n\x1a\n"
+                                                    + _png_chunk(b"IHDR", _ihdr)
+                                                    + _png_chunk(b"IDAT", _zlib_vnc.compress(bytes(_raw_rows), 6))
+                                                    + _png_chunk(b"IEND", b""))
+                                            _snap_file = out_dir / f"{safe_ip}_{port}_vnc_screenshot_{ts_safe}.png"
+                                            _snap_file.write_bytes(_png)
+                                            _vnc_screenshot = str(_snap_file)
+                                            lines.append(f"Screenshot captured: {_snap_file.name} ({_fb_w}x{_fb_h})")
+                                            _tprint(
+                                                f"  {Fore.GREEN}[+] VNC screenshot: "
+                                                f"{_snap_file.name}{Style.RESET_ALL}")
+                                        else:
+                                            lines.append("Framebuffer read incomplete — native screenshot skipped")
+                    except Exception as _native_exc:
+                        lines.append(f"Native RFB screenshot error: {_native_exc}")
+
+                    # Fallback: vncsnapshot (if native failed and tool is available)
+                    if not _vnc_screenshot:
+                        _vnc_snap_bin = shutil.which("vncsnapshot")
+                        if _vnc_snap_bin:
+                            _snap_file = out_dir / f"{safe_ip}_{port}_vnc_screenshot_{ts_safe}.jpg"
+                            try:
+                                _snap_result = subprocess.run(
+                                    [_vnc_snap_bin, "-quality", "80",
+                                     f"{ip}::{port}", str(_snap_file)],
+                                    capture_output=True, text=True, timeout=20,
+                                )
+                                if _snap_file.exists() and _snap_file.stat().st_size > 0:
+                                    _vnc_screenshot = str(_snap_file)
+                                    lines.append(f"Screenshot captured (vncsnapshot): {_snap_file.name}")
+                                    _tprint(
+                                        f"  {Fore.GREEN}[+] VNC screenshot (vncsnapshot): "
+                                        f"{_snap_file.name}{Style.RESET_ALL}")
+                            except (subprocess.TimeoutExpired, Exception):
+                                pass
+
+                    _screenshot_note = ""
+                    if _vnc_screenshot:
+                        _screenshot_note = (
+                            f" An automated screenshot was captured as evidence "
+                            f"({Path(_vnc_screenshot).name})."
+                        )
                     output_mgr.log_finding(
                         title="VNC: No Authentication Required",
                         ip=ip, port=port,
@@ -23753,10 +24363,11 @@ def run_vnc_check(
                         description=(
                             f"VNC on {ip}:{port} ({rfb_version}) offers security type 1 "
                             f"(None), meaning any client can connect without credentials. "
-                            f"An attacker gains full remote desktop control. Require VNC "
-                            f"password authentication or switch to SSH tunnelled VNC."
+                            f"An attacker gains full remote desktop control.{_screenshot_note} "
+                            f"Require VNC password authentication or switch to SSH tunnelled VNC."
                         ),
-                        output=f"RFB version: {rfb_version}\nSecurity types: {sec_types}",
+                        output=f"RFB version: {rfb_version}\nSecurity types: {sec_types}"
+                               + (f"\nScreenshot: {Path(_vnc_screenshot).name}" if _vnc_screenshot else ""),
                         sources="vnc-handshake",
                         affected=f"{ip}:{port}",
                         output_file=str(out_file),
@@ -24156,6 +24767,36 @@ def run_k8s_check(
                     except Exception:
                         pass
 
+                    # Probe /api/v1/pods for pod count
+                    _pods_text = ""
+                    try:
+                        _pods_resp = _HTTP_SESSION.get(
+                            f"{base_url}/api/v1/pods?limit=1",
+                            timeout=timeout, verify=False,
+                        )
+                        lines.append(f"/api/v1/pods status: {_pods_resp.status_code}")
+                        if _pods_resp.status_code == 200:
+                            _pods_json = _pods_resp.json()
+                            _pod_remain = _pods_json.get("metadata", {}).get("remainingItemCount", "?")
+                            _pods_text = f"\nPods accessible: yes (remainingItemCount: {_pod_remain})"
+                    except Exception:
+                        pass
+
+                    # Probe /api/v1/secrets — count only, never dump contents
+                    _secrets_text = ""
+                    try:
+                        _sec_resp = _HTTP_SESSION.get(
+                            f"{base_url}/api/v1/secrets?limit=1",
+                            timeout=timeout, verify=False,
+                        )
+                        lines.append(f"/api/v1/secrets status: {_sec_resp.status_code}")
+                        if _sec_resp.status_code == 200:
+                            _sec_json = _sec_resp.json()
+                            _sec_remain = _sec_json.get("metadata", {}).get("remainingItemCount", "?")
+                            _secrets_text = f"\nSecrets accessible: yes (remainingItemCount: {_sec_remain})"
+                    except Exception:
+                        pass
+
                     output_mgr.log_finding(
                         title="Kubernetes API: Unauthenticated Access",
                         ip=ip, port=port,
@@ -24167,7 +24808,7 @@ def run_k8s_check(
                             f"read secrets, and achieve cluster-wide compromise. "
                             f"Enable RBAC and restrict API access."
                         ),
-                        output=f"Version: {k8s_version}{ns_text}",
+                        output=f"Version: {k8s_version}{ns_text}{_pods_text}{_secrets_text}",
                         sources="k8s-api-probe",
                         affected=f"{ip}:{port}",
                         output_file=str(out_file),
@@ -24604,6 +25245,32 @@ def run_elasticsearch_check(
             except Exception:
                 pass
 
+            # Node details for infrastructure context
+            _node_details = ""
+            try:
+                _nodes_resp = _HTTP_SESSION.get(
+                    f"{base_url}/_nodes/stats/os,jvm", timeout=timeout, verify=False,
+                )
+                if _nodes_resp.status_code == 200:
+                    _nj = _nodes_resp.json()
+                    _n_total = _nj.get("_nodes", {}).get("total", "?")
+                    _node_details = f"\nNodes detail: {_n_total} node(s) responding"
+                    lines.append(f"/_nodes/stats: {_n_total} node(s)")
+            except Exception:
+                pass
+
+            # Data sampling — count docs without returning actual data
+            _doc_count = "?"
+            try:
+                _count_resp = _HTTP_SESSION.get(
+                    f"{base_url}/_count", timeout=timeout, verify=False,
+                )
+                if _count_resp.status_code == 200:
+                    _doc_count = _count_resp.json().get("count", "?")
+                    lines.append(f"Total documents: {_doc_count}")
+            except Exception:
+                pass
+
             output_mgr.log_finding(
                 title="Elasticsearch: Unauthenticated Access",
                 ip=ip, port=port,
@@ -24613,16 +25280,19 @@ def run_elasticsearch_check(
                     f"Elasticsearch on {ip}:{port} (v{es_version}) allows "
                     f"unauthenticated access. Cluster: {cluster_name}, "
                     f"nodes: {node_count}, status: {cluster_status}, "
-                    f"indices: {idx_count}. An attacker can read/modify/delete "
-                    f"all indexed data. Enable X-Pack Security or SearchGuard "
-                    f"with TLS and role-based access control."
+                    f"indices: {idx_count}, documents: {_doc_count}. "
+                    f"An attacker can read/modify/delete all indexed data. "
+                    f"Enable X-Pack Security or SearchGuard with TLS and "
+                    f"role-based access control."
                 ),
                 output=(
                     f"Cluster: {cluster_name}\n"
                     f"Version: {es_version}\n"
                     f"Nodes: {node_count}\n"
                     f"Status: {cluster_status}\n"
-                    f"Indices: {idx_count}"
+                    f"Indices: {idx_count}\n"
+                    f"Documents: {_doc_count}"
+                    f"{_node_details}"
                 ),
                 sources="elasticsearch-probe",
                 affected=f"{ip}:{port}",
@@ -24890,24 +25560,83 @@ def run_amqp_check(
             sock.settimeout(timeout)
             sock.sendall(b"AMQP\x00\x00\x09\x01")
             resp = sock.recv(1024)
-            sock.close()
             lines.append(f"AMQP response ({len(resp)} bytes): {resp[:64].hex()}")
 
-            output_mgr.log_finding(
-                title="AMQP Service Detected",
-                ip=ip, port=port,
-                command="Scattershot-AMQP-Probe",
-                hostname=hostname, risk="INFO",
-                description=(
-                    f"AMQP (0-9-1) service detected on {ip}:{port}. Verify "
-                    f"authentication is enforced and TLS is enabled for message "
-                    f"broker connections."
-                ),
-                output=f"Response: {resp[:64].hex()}",
-                sources="amqp-probe",
-                affected=f"{ip}:{port}",
-                output_file=str(out_file),
-            )
+            # Check if server sent Connection.Start (method 10,10)
+            # and if PLAIN is in the mechanisms list — then try guest/guest
+            _amqp_default_creds = False
+            if len(resp) > 11 and resp[0] == 0x01:
+                try:
+                    _mechanisms = resp.decode("ascii", errors="replace")
+                    if "PLAIN" in _mechanisms:
+                        lines.append("SASL PLAIN available — trying guest/guest")
+                        # Build Connection.Start-Ok with PLAIN auth: \x00guest\x00guest
+                        _sasl_resp = b"\x00guest\x00guest"
+                        # Minimal Connection.Start-Ok frame:
+                        # type=1 (method), channel=0, class=10, method=11
+                        _props = b"\x00\x00\x00\x00"  # empty client-properties table
+                        _mech = b"\x05PLAIN"  # short string "PLAIN"
+                        _locale = b"\x05en_US"  # short string "en_US"
+                        _sasl_len = len(_sasl_resp)
+                        _payload = (
+                            b"\x00\x0a\x00\x0b"  # class 10, method 11
+                            + _props
+                            + _mech
+                            + _sasl_len.to_bytes(4, "big") + _sasl_resp
+                            + _locale
+                        )
+                        _frame = (
+                            b"\x01\x00\x00"
+                            + len(_payload).to_bytes(4, "big")
+                            + _payload + b"\xce"
+                        )
+                        sock.sendall(_frame)
+                        _auth_resp = sock.recv(1024)
+                        lines.append(f"Start-Ok response ({len(_auth_resp)} bytes): "
+                                     f"{_auth_resp[:32].hex()}")
+                        # Connection.Tune (class=10, method=30) means auth succeeded
+                        if len(_auth_resp) > 11 and _auth_resp[7:11] == b"\x00\x0a\x00\x1e":
+                            _amqp_default_creds = True
+                            lines.append("guest/guest PLAIN auth SUCCEEDED")
+                except Exception:
+                    pass
+
+            sock.close()
+
+            if _amqp_default_creds:
+                output_mgr.log_finding(
+                    title="AMQP: Default Credentials (guest/guest)",
+                    ip=ip, port=port,
+                    command="Scattershot-AMQP-PLAIN-Auth",
+                    hostname=hostname, risk="CRITICAL",
+                    description=(
+                        f"AMQP broker on {ip}:{port} accepted PLAIN authentication "
+                        f"with the default credentials guest/guest. An attacker can "
+                        f"connect as guest, publish and consume messages, and "
+                        f"potentially access sensitive data flowing through the broker. "
+                        f"Change the guest password and restrict access."
+                    ),
+                    output=f"SASL mechanism: PLAIN\nCredentials: guest/guest\nAuth: SUCCESS",
+                    sources="amqp-default-creds",
+                    affected=f"{ip}:{port}",
+                    output_file=str(out_file),
+                )
+            else:
+                output_mgr.log_finding(
+                    title="AMQP Service Detected",
+                    ip=ip, port=port,
+                    command="Scattershot-AMQP-Probe",
+                    hostname=hostname, risk="INFO",
+                    description=(
+                        f"AMQP (0-9-1) service detected on {ip}:{port}. Verify "
+                        f"authentication is enforced and TLS is enabled for message "
+                        f"broker connections."
+                    ),
+                    output=f"Response: {resp[:64].hex()}",
+                    sources="amqp-probe",
+                    affected=f"{ip}:{port}",
+                    output_file=str(out_file),
+                )
 
     except Exception as exc:
         lines.append(f"Error: {exc}")
@@ -25311,6 +26040,64 @@ def run_jenkins_unauth_check(
             except Exception:
                 pass
 
+        # Check /api/json — JSON API access
+        api_resp = _HTTP_SESSION.get(
+            f"{base_url}/api/json", timeout=timeout, verify=False,
+            headers={"Host": hostname or ip},
+        )
+        lines.append(f"/api/json status: {api_resp.status_code}")
+        if api_resp.status_code == 200:
+            _api_data = {}
+            try:
+                _api_data = api_resp.json()
+            except Exception:
+                pass
+            _j_mode = _api_data.get("mode", "?")
+            _j_jobs = len(_api_data.get("jobs", []))
+            _j_desc = _api_data.get("description", "")
+            output_mgr.log_finding(
+                title="Jenkins: Unauthenticated API Access",
+                ip=ip, port=port,
+                command=f"HTTP GET {base_url}/api/json",
+                hostname=hostname, risk="HIGH",
+                description=(
+                    f"The Jenkins JSON API at {base_url}/api/json is accessible "
+                    f"without authentication. Mode: {_j_mode}, visible jobs: {_j_jobs}. "
+                    f"An attacker can enumerate jobs, builds, and users. "
+                    f"Require authentication for all Jenkins endpoints."
+                ),
+                output=f"Status: {api_resp.status_code}\nMode: {_j_mode}\nJobs: {_j_jobs}",
+                sources="jenkins-unauth",
+                affected=f"{base_url}/api/json",
+                output_file=str(out_file),
+            )
+
+        # Check /credentials/
+        creds_resp = _HTTP_SESSION.get(
+            f"{base_url}/credentials/", timeout=timeout, verify=False,
+            headers={"Host": hostname or ip},
+        )
+        lines.append(f"/credentials/ status: {creds_resp.status_code}")
+        if (creds_resp.status_code == 200
+                and "credential" in creds_resp.text.lower()
+                and "login" not in creds_resp.text.lower()[:500]):
+            output_mgr.log_finding(
+                title="Jenkins: Credential Store Accessible",
+                ip=ip, port=port,
+                command=f"HTTP GET {base_url}/credentials/",
+                hostname=hostname, risk="CRITICAL",
+                description=(
+                    f"The Jenkins credential store at {base_url}/credentials/ is "
+                    f"accessible without authentication. Stored credentials (SSH keys, "
+                    f"API tokens, passwords) may be extractable. Require authentication "
+                    f"and restrict credential access to admin accounts."
+                ),
+                output=f"Status: {creds_resp.status_code}",
+                sources="jenkins-unauth",
+                affected=f"{base_url}/credentials/",
+                output_file=str(out_file),
+            )
+
         # Check /manage
         manage_resp = _HTTP_SESSION.get(
             f"{base_url}/manage", timeout=timeout, verify=False,
@@ -25442,6 +26229,11 @@ def probe_kerberoast(dc_ip: str, domain: str, *, output_dir: "Path",
     return {"ok": False, "reason": "no kerberoastable accounts"}
 
 
+# Enterprise UDP ports that should always be checked regardless of --top-ports.
+# These are common in corporate environments but some (e.g. 1194/OpenVPN) rank
+# far below nmap's default top-20 UDP frequency list.
+_ENTERPRISE_UDP_PORTS = [53, 67, 69, 123, 161, 162, 500, 514, 1194]
+
 # ── UDP supplementary port scan ────────────────────────────────────────────
 def run_udp_scan(
     ip: str,
@@ -25451,7 +26243,7 @@ def run_udp_scan(
     scope: str = "int",
     top_ports: int = 20,
 ) -> "tuple[dict[int, dict], dict[int, dict], str | None]":
-    """Run nmap UDP top-ports scan.
+    """Run nmap UDP top-ports scan plus targeted enterprise UDP ports.
 
     Returns ``(confirmed, unconfirmed, xml_path)`` — two dicts keyed by
     port plus the path to the raw nmap UDP XML output.
@@ -25542,6 +26334,66 @@ def run_udp_scan(
     except Exception as exc:
         _tprint(f"  {Fore.RED}[!] UDP scan error for {ip}: {exc}{Style.RESET_ALL}")
         _vc.log(f"UDP scan error for {ip}: {exc}", "ERROR")
+
+    # ── Supplemental scan: enterprise UDP ports not covered by --top-ports ──
+    _already_scanned = set(confirmed.keys()) | set(unconfirmed.keys())
+    _extra_ports = [p for p in _ENTERPRISE_UDP_PORTS if p not in _already_scanned]
+    if _extra_ports:
+        _extra_str = ",".join(str(p) for p in _extra_ports)
+        _tprint(f"  {Fore.CYAN}[*] UDP enterprise ports ({_extra_str}): {ip}{Style.RESET_ALL}")
+        ts2 = datetime.now().strftime("%Y%m%d_%H%M%S")
+        xml2 = udp_dir / f"{safe_ip}_udp_enterprise_{ts2}.xml"
+        cmd2 = [
+            nmap_path, "-n", "-Pn", "-sU", "-sV",
+            "-p", _extra_str,
+            "-T4", "--version-intensity", "2",
+            "--max-retries", "2", "--host-timeout", "3m",
+            "-oX", str(xml2),
+            ip,
+        ]
+        try:
+            proc2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=300)
+            output_mgr.log_command(
+                "nmap-udp-enterprise", nmap_path, cmd2, xml2,
+                stdout=proc2.stdout, stderr=proc2.stderr,
+                started=None, ended=None, exit_code=proc2.returncode,
+                extra={"target": ip, "scan_type": "udp_enterprise",
+                       "ports": _extra_str},
+            )
+            if xml2.exists():
+                import xml.etree.ElementTree as _ET2
+                try:
+                    tree2 = _ET2.parse(str(xml2))
+                    for host_el2 in tree2.getroot().findall(".//host"):
+                        for port_el2 in host_el2.findall(".//port"):
+                            if port_el2.get("protocol", "") != "udp":
+                                continue
+                            portid2 = int(port_el2.get("portid", 0))
+                            state_el2 = port_el2.find("state")
+                            state2 = state_el2.get("state", "") if state_el2 is not None else ""
+                            if state2 not in ("open", "open|filtered"):
+                                continue
+                            svc_el2 = port_el2.find("service")
+                            pi2 = {
+                                "state": state2,
+                                "name": svc_el2.get("name", "") if svc_el2 is not None else "",
+                                "product": svc_el2.get("product", "") if svc_el2 is not None else "",
+                                "version": svc_el2.get("version", "") if svc_el2 is not None else "",
+                                "proto": "udp",
+                            }
+                            if state2 == "open":
+                                confirmed[portid2] = pi2
+                            else:
+                                unconfirmed[portid2] = pi2
+                except Exception:
+                    pass
+            _extra_found = [p for p in _extra_ports if p in confirmed or p in unconfirmed]
+            if _extra_found:
+                _tprint(f"  {Fore.GREEN}[+] Enterprise UDP: found {', '.join(str(p) for p in _extra_found)} on {ip}{Style.RESET_ALL}")
+        except subprocess.TimeoutExpired:
+            _tprint(f"  {Fore.YELLOW}[~] Enterprise UDP scan timed out for {ip}{Style.RESET_ALL}")
+        except Exception as exc:
+            _tprint(f"  {Fore.RED}[!] Enterprise UDP scan error for {ip}: {exc}{Style.RESET_ALL}")
 
     _udp_xml = str(xml_path) if xml_path and xml_path.exists() else None
     return confirmed, unconfirmed, _udp_xml
@@ -27537,14 +28389,21 @@ def scan_scope(
 
     _1b_timeout  = "30s" if scope == "ext" else "10s"
     _1b_retries  = "2"  if scope == "ext" else "1"
+    _1b_min_par = getattr(args, "discovery_min_parallelism", None) or 20
+    _1b_rate = getattr(args, "discovery_min_rate", None)
+    _1b_timing = getattr(args, "timing_template", None)
+    _1b_rate_flag = f" --min-rate {_1b_rate}" if _1b_rate else ""
+    _1b_timing_flag = f" -T{_1b_timing}" if _1b_timing else ""
     _1b_nmap_args = (
         "-n -sn --reason "
         "-PS21,22,23,25,53,80,110,111,135,139,143,179,389,443,445,"
         "465,587,636,993,995,1433,1723,2525,3306,3389,5432,5900,"
         "8080,8443,8888,9090,9443 "
+        "-PU53,69,123,161,500,1194 "
         "-PA80,443 "
         "-PR "
-        f"--max-retries {_1b_retries} --min-parallelism 20 "
+        f"--max-retries {_1b_retries} --min-parallelism {_1b_min_par}"
+        f"{_1b_rate_flag}{_1b_timing_flag} "
         f"--host-timeout {_1b_timeout}"
     )
 
@@ -27889,6 +28748,9 @@ def scan_scope(
             nmap_path=nmap_path,
             raw_specs=raw_specs,
             scope=scope,
+            discovery_min_rate=getattr(args, "discovery_min_rate", None),
+            discovery_min_parallelism=getattr(args, "discovery_min_parallelism", None),
+            timing_template=getattr(args, "timing_template", None),
         )
         # In lazy mode, exclude local IPs from alive results
         if _lazy and _exclude:
@@ -29404,6 +30266,12 @@ def main():
                   f"and --route-gateway explicitly, then re-run."
                   f"{Style.RESET_ALL}")
             sys.exit(2)
+        if route_setup_result.get("success", False):
+            _n_added = len(route_setup_result.get("routes_added", []))
+            _n_skip = len(route_setup_result.get("routes_skipped", []))
+            _n_fail = len(route_setup_result.get("routes_failed", []))
+            _vc.log(f"Route setup complete: {_n_added} added, "
+                    f"{_n_skip} skipped, {_n_fail} failed")
     elif not internal_ips and not (_lazy_targets and raw_internal):
         pass  # no internal targets — nothing to route
     else:
