@@ -5970,7 +5970,7 @@ def _parse_nse_findings(
             f"  {Fore.YELLOW}[!] NFS exports on {ip}:{port} ({_nfs_note}){Style.RESET_ALL}"
         )
         output_mgr.log_finding(
-            title=f"NFS Export Points Enumerated — {_nfs_note}",
+            title=f"Enumeration: NFS Export Points — {_nfs_note}",
             ip=ip, port=port, command=cmd, hostname=hostname, risk=_nfs_risk,
             description=(
                 "The NFS server exposes mount points accessible over the network. "
@@ -5989,7 +5989,7 @@ def _parse_nse_findings(
     nfs_ls_out = scripts.get("nfs-ls", "")
     if nfs_ls_out and nfs_ls_out.strip():
         output_mgr.log_finding(
-            title="NFS Directory Listing Accessible",
+            title="Enumeration: NFS Directory Listing Accessible",
             ip=ip, port=port, command=cmd, hostname=hostname, risk="MEDIUM",
             description="NFS exports allow unauthenticated directory listing.",
             output=nfs_ls_out,
@@ -7132,7 +7132,7 @@ def probe_uncertain_and_nonstandard_ports(
                             "<title>directory listing" in _body_lo or
                             "parent directory</a>" in _body_lo):
                         output_mgr.log_finding(
-                            title="Directory Listing Enabled",
+                            title="Enumeration: Directory Listing Enabled",
                             ip=ip, port=_port, hostname=hostname,
                             command=_r["cmd"], risk="MEDIUM",
                             description=(
@@ -7498,7 +7498,7 @@ def probe_uncertain_and_nonstandard_ports(
                         _smtp_reply = _smtp_sock.recv(1024).decode("utf-8", errors="replace")
                         if _smtp_reply.startswith(("250", "252")):
                             output_mgr.log_finding(
-                                title=f"SMTP {_smtp_label} User Enumeration Enabled",
+                                title=f"Enumeration: SMTP {_smtp_label} User Enumeration Enabled",
                                 ip=ip, port=_port, hostname=hostname,
                                 command=f"echo '{_smtp_label} root' | nc {ip} {_port}",
                                 risk="MEDIUM",
@@ -9402,7 +9402,7 @@ def _port_scan_worker(
                     _xfr_lines = [l for l in _dns_out.splitlines() if "dns-zone-transfer" in l.lower() or l.strip().startswith("|")]
                     if any("Records:" in l or "." in l for l in _xfr_lines):
                         output_mgr.log_finding(
-                            title="DNS Zone Transfer (AXFR) Permitted",
+                            title="Enumeration: DNS Zone Transfer (AXFR) Permitted",
                             ip=ip, port=port, command=" ".join(_dns_cmd),
                             hostname=hostname, risk="HIGH",
                             description=(
@@ -10046,7 +10046,7 @@ def probe_dns_axfr(domain: str, ns_host: str, *,
             record_count = sum(1 for line in res.stdout.splitlines()
                                 if line and not line.startswith(";"))
             output_mgr.log_finding(
-                title=f"DNS Zone Transfer (AXFR) Permitted — {domain}",
+                title=f"Enumeration: DNS Zone Transfer (AXFR) Permitted — {domain}",
                 ip=ns_host, port=53, command=" ".join(cmd),
                 hostname=domain, risk="HIGH",
                 description=(
@@ -10310,7 +10310,7 @@ def probe_ldap_null_bind(ip: str, port: int, *, output_dir: "Path",
             body += f"\n\n── Anonymous Enumeration ──\n{_enum_body[:6000]}"
 
             output_mgr.log_finding(
-                title=f"LDAP: Anonymous Enumeration — {len(_enum_users)} Users, {len(_enum_groups)} Groups Discovered",
+                title=f"Enumeration: LDAP Anonymous Enumeration — {len(_enum_users)} Users, {len(_enum_groups)} Groups Discovered",
                 ip=ip, port=port,
                 command=f"ldap3 anonymous enumeration {ip}:{port}",
                 hostname="", risk="MEDIUM",
@@ -10409,7 +10409,7 @@ def probe_asrep_roast(dc_ip: str, domain: str, users: list[str], *,
                 m = re.match(r"\$krb5asrep\$\d+\$([^@]+)@", h)
                 if m: users_with_no_preauth.append(m.group(1))
             output_mgr.log_finding(
-                title=f"AS-REP Roastable Users on {domain} ({len(hashes)} hashes captured)",
+                title=f"Enumeration: AS-REP Roastable Users on {domain} ({len(hashes)} hashes captured)",
                 ip=dc_ip, port=88, command=" ".join(cmd),
                 hostname=domain, risk="HIGH",
                 description=(
@@ -13022,6 +13022,14 @@ Examples:
         help=(
             "Skip SMB null-session, RPC null-session, FTP anonymous-login, "
             "enum4linux, ADenum, and smbmap checks"
+        ),
+    )
+    parser.add_argument(
+        "--email-file", metavar="FILE", dest="email_file",
+        help=(
+            "File with email addresses (one per line) for O365 account "
+            "enumeration. If not provided, SS3 looks for OSift output "
+            "in the project tree."
         ),
     )
     parser.add_argument(
@@ -18044,7 +18052,7 @@ def run_smb_share_deep_enum(
 
     # Enrichment finding: share directory summary
     output_mgr.log_finding(
-        title=f"SMB Share Enumerated: \\\\{ip}\\{share}",
+        title=f"Enumeration: SMB Share: \\\\{ip}\\{share}",
         ip=ip, port=port,
         command=f"smbclient //{ip}/{share} -c 'recurse; ls'",
         hostname=hostname,
@@ -19721,7 +19729,7 @@ def run_wpscan(
             f"({len(users)} user(s)) on {ip}:{port}{Style.RESET_ALL}"
         )
         output_mgr.log_finding(
-            title="WordPress User Enumeration",
+            title="Enumeration: WordPress User Enumeration",
             ip=ip, port=port, hostname=hostname,
             risk="MEDIUM",
             command=" ".join(cmd),
@@ -21513,7 +21521,7 @@ def run_smtp_checks(
             f"  {Fore.YELLOW}[!] SMTP user enum on {ip}:{port}: {users_str}{Style.RESET_ALL}"
         )
         output_mgr.log_finding(
-            title="SMTP User Enumeration Possible via VRFY",
+            title="Enumeration: SMTP User Enumeration via VRFY",
             ip=ip, port=port,
             command="Scattershot-SMTP-VRFY",
             hostname=hostname, risk="MEDIUM",
@@ -21535,7 +21543,7 @@ def run_smtp_checks(
             f"  {Fore.YELLOW}[!] SMTP EXPN enum on {ip}:{port}: {expn_str}{Style.RESET_ALL}"
         )
         output_mgr.log_finding(
-            title="SMTP Mailing List Enumeration via EXPN",
+            title="Enumeration: SMTP Mailing List via EXPN",
             ip=ip, port=port,
             command="Scattershot-SMTP-EXPN",
             hostname=hostname, risk="MEDIUM",
@@ -22516,7 +22524,7 @@ def run_sip_enum(
             f"{', '.join(enum_hits)}{Style.RESET_ALL}"
         )
         output_mgr.log_finding(
-            title="SIP Extension / User Enumeration",
+            title="Enumeration: SIP Extension / User Enumeration",
             ip=ip, port=port,
             command="Scattershot-SIP-Enum",
             hostname=hostname, risk="MEDIUM",
@@ -23024,7 +23032,7 @@ def run_nfs_enum(
 
                     # Log an enrichment finding with the directory tree summary
                     output_mgr.log_finding(
-                        title=f"NFS Export Enumerated: {_export_path}",
+                        title=f"Enumeration: NFS Export Enumerated: {_export_path}",
                         ip=ip, port=port,
                         command=f"nfs-rpc-enum {ip}:{_nfs_port}{_export_path}",
                         hostname=hostname,
@@ -25139,7 +25147,7 @@ def run_rsync_check(
 
         if modules:
             output_mgr.log_finding(
-                title="Rsync: Anonymous Module Access",
+                title="Enumeration: Rsync Anonymous Module Access",
                 ip=ip, port=port,
                 command=f"rsync module listing {ip}:{port}",
                 hostname=hostname, risk="HIGH",
@@ -25161,7 +25169,7 @@ def run_rsync_check(
                     recommended_tool="Manual",
                     target=f"{ip}:{port}",
                     ip=ip, port=port,
-                    title="Enumerate Rsync Module Contents",
+                    title="Enumeration: Rsync Module Contents",
                     description=(
                         "Download and inspect files from anonymous rsync modules.\n"
                         "Next steps:\n"
@@ -27237,7 +27245,7 @@ def run_ldapdomaindump(
                         for u in users[:30]
                     ]
                     output_mgr.log_finding(
-                        title="LDAP Domain Users Enumerated",
+                        title="Enumeration: LDAP Domain Users",
                         ip=dc_ip, port=389, hostname=hostname,
                         command=" ".join(str(c) for c in cmd), risk="MEDIUM",
                         description=f"ldapdomaindump enumerated {len(users)} domain accounts from {dc_ip}.",
@@ -27252,7 +27260,7 @@ def run_ldapdomaindump(
                                for u in users if admin_kw.search(json.dumps(u))]
                     if flagged:
                         output_mgr.log_finding(
-                            title="Privileged Domain Accounts Identified",
+                            title="Enumeration: Privileged Domain Accounts Identified",
                             ip=dc_ip, port=389, hostname=hostname,
                             command=" ".join(str(c) for c in cmd), risk="HIGH",
                             description=f"Accounts matching admin/service patterns: {', '.join(flagged[:20])}",
@@ -27274,7 +27282,7 @@ def run_ldapdomaindump(
             except Exception:
                 _lddd_raw_rel = None
             output_mgr.log_finding(
-                title="Domain Accounts with Password Not Required",
+                title="Enumeration: Domain Accounts with Password Not Required",
                 ip=dc_ip, port=389, hostname=hostname,
                 command=" ".join(str(c) for c in cmd), risk="HIGH",
                 description="LDAP dump revealed PASSWD_NOTREQD accounts.",
@@ -27331,7 +27339,7 @@ def run_kerbrute(
         if valid_users:
             _tprint(f"  {Fore.RED}[!] kerbrute: {len(valid_users)} valid user(s){Style.RESET_ALL}")
             output_mgr.log_finding(
-                title="Valid Kerberos Usernames Enumerated",
+                title="Enumeration: Valid Kerberos Usernames",
                 ip=dc_ip, port=88, hostname=hostname,
                 command=" ".join(cmd), risk="MEDIUM",
                 description=f"kerbrute confirmed {len(valid_users)} domain account(s).",
@@ -27378,7 +27386,7 @@ def run_bloodhound_python(
             _tprint(f"  {Fore.GREEN}[+] bloodhound-python: collection complete — "
                     f"{len(zip_files)} zip, {len(json_files)} JSON{Style.RESET_ALL}")
             output_mgr.log_finding(
-                title="BloodHound AD Graph Data Collected",
+                title="Enumeration: BloodHound AD Graph Data Collected",
                 ip=dc_ip, port=389, hostname=hostname,
                 command=" ".join(str(c) for c in cmd), risk="INFO",
                 description=(
@@ -28499,6 +28507,149 @@ def run_zap_dast(
                 zap__kill_proc_tree(proc)
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 14: O365 Account Enumeration (external scope only)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_MULTI_PART_TLDS = frozenset({
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "net.uk",
+    "com.au", "org.au", "net.au", "edu.au", "gov.au",
+    "co.nz", "org.nz", "net.nz", "co.za", "org.za",
+    "co.in", "org.in", "net.in", "co.jp", "or.jp",
+    "co.kr", "or.kr", "com.br", "org.br", "com.mx",
+    "co.il", "org.il", "com.cn", "org.cn", "com.tw",
+    "com.sg", "com.hk", "co.th", "com.ar", "com.co",
+    "com.tr", "com.de", "com.es", "com.fr", "com.it",
+    "com.pl", "com.ru", "com.ua",
+})
+
+
+def _extract_parent_domain(fqdn: str) -> str:
+    fqdn = fqdn.rstrip(".").lower().strip()
+    parts = fqdn.split(".")
+    if len(parts) <= 2:
+        return fqdn
+    suffix_2 = ".".join(parts[-2:])
+    if suffix_2 in _MULTI_PART_TLDS and len(parts) >= 3:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+def _derive_ext_domains(
+    hostnames: "dict[str, str | None]",
+    all_results: dict,
+) -> "set[str]":
+    domains: set = set()
+    for _ip, _hn in hostnames.items():
+        if _hn and "." in _hn:
+            d = _extract_parent_domain(_hn)
+            if d and "." in d:
+                domains.add(d)
+    for _ip, _hr in all_results.items():
+        for _port, _fqdn in _hr.get("hostnames_by_port", {}).items():
+            if _fqdn and "." in str(_fqdn):
+                d = _extract_parent_domain(str(_fqdn))
+                if d and "." in d:
+                    domains.add(d)
+    _priv = {"localhost", "localdomain", "local", "arpa", "in-addr.arpa",
+             "ip6.arpa", "example.com", "invalid"}
+    return {d for d in domains if d not in _priv and not d.endswith(".local")}
+
+
+def _detect_o365(domain: str, timeout: int = 10) -> bool:
+    try:
+        mx_proc = subprocess.run(
+            ["dig", "+short", "MX", domain],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if re.search(r'protection\.outlook\.com|mail\.protection\.outlook',
+                      mx_proc.stdout, re.I):
+            return True
+    except Exception:
+        pass
+    try:
+        import urllib.request as _ur3
+        resp = _ur3.urlopen(
+            f"https://login.microsoftonline.com/{domain}/"
+            f".well-known/openid-configuration",
+            timeout=8,
+        )
+        data = json.loads(resp.read().decode())
+        if data.get("issuer"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _find_osift_emails(project_dir: str) -> "list[str]":
+    p = Path(project_dir)
+    candidates = list(p.parent.glob("osift/*/findings.json"))
+    candidates += list(p.parent.glob("osift/*/findings_vantage.json"))
+    emails: set = set()
+    for f in candidates:
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            items = data if isinstance(data, list) else data.get("findings", [])
+            for item in items:
+                if item.get("type_") == "email_identified" or \
+                   item.get("type_") == "primary_email":
+                    detail = item.get("detail", "")
+                    for m in re.findall(r'[\w.+-]+@[\w.-]+\.\w{2,}', detail):
+                        emails.add(m.lower())
+                if item.get("data") and isinstance(item["data"], list):
+                    for val in item["data"]:
+                        if isinstance(val, str) and "@" in val:
+                            for m in re.findall(r'[\w.+-]+@[\w.-]+\.\w{2,}', val):
+                                emails.add(m.lower())
+        except Exception:
+            pass
+    return sorted(emails)
+
+
+def run_o365_enum(
+    domain: str,
+    emails: "list[str]",
+    output_mgr: "OutputManager",
+    o365spray_path: str,
+    timeout: int = 600,
+) -> "list[str]":
+    enum_dir = output_mgr.scope_tool_path("o365spray")
+    email_file = enum_dir / "emails.txt"
+    email_file.write_text("\n".join(emails) + "\n", encoding="utf-8")
+    results_file = enum_dir / f"o365enum_{domain.replace('.', '_')}.txt"
+
+    cmd = [
+        o365spray_path, "--enum",
+        "-U", str(email_file),
+        "--domain", domain,
+        "--output", str(enum_dir),
+    ]
+    _tprint(f"  {Fore.CYAN}[>] o365spray --enum {domain} "
+            f"({len(emails)} email(s)){Style.RESET_ALL}")
+    output_mgr.log_command("o365spray", o365spray_path, cmd, results_file)
+
+    valid_accounts: list = []
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout,
+        )
+        raw = proc.stdout + (proc.stderr or "")
+        results_file.write_text(raw, encoding="utf-8")
+
+        for line in raw.splitlines():
+            m = re.search(r'\[VALID\]\s+(\S+@\S+)', line, re.I)
+            if m:
+                valid_accounts.append(m.group(1).strip())
+    except subprocess.TimeoutExpired:
+        _tprint(f"  {Fore.YELLOW}[~] o365spray timed out after {timeout}s"
+                f"{Style.RESET_ALL}")
+    except Exception as exc:
+        _tprint(f"  {Fore.RED}[!] o365spray error: {exc}{Style.RESET_ALL}")
+
+    return valid_accounts
+
+
 def scan_scope(
     scope: str,
     targets: list,
@@ -28534,6 +28685,7 @@ def scan_scope(
     msdat_path:      "str | None" = None,
     enumdb_path:     "str | None" = None,
     zap_path:        "str | None" = None,
+    o365spray_path:  "str | None" = None,
     target_count:    int = 0,
     exclude_ips:     "set | None" = None,
 ) -> dict:
@@ -29756,6 +29908,121 @@ def scan_scope(
         _vc.status(f"{scope}_p13_webapp", label="Phase 13: Web App Attack",
                    status="skipped", step="no tools available")
 
+    # ── Phase 14: O365 Account Enumeration (external scope only) ─────────
+    if scope == "ext" and alive_ips:
+        _ext_domains = _derive_ext_domains(hostnames, all_results)
+        _o365_domains: list = []
+        for _ed in sorted(_ext_domains):
+            if _detect_o365(_ed):
+                _o365_domains.append(_ed)
+
+        if _o365_domains:
+            print(f"\n{Fore.CYAN}[*] {scope_label} Phase 14: O365 Account "
+                  f"Enumeration ({len(_o365_domains)} domain(s))..."
+                  f"{Style.RESET_ALL}")
+            _vc.status(f"{scope}_p14_o365", label="Phase 14: O365 Enumeration",
+                       status="running")
+
+            for _o365d in _o365_domains:
+                output_mgr.log_finding(
+                    title="Enumeration: O365 Tenant Detected",
+                    ip="", port=0, hostname=_o365d,
+                    risk="INFO",
+                    command=f"dig +short MX {_o365d}",
+                    description=(
+                        f"The domain '{_o365d}' uses Microsoft 365 / Azure AD "
+                        f"for email and authentication. MX records point to "
+                        f"*.protection.outlook.com or the OpenID configuration "
+                        f"endpoint confirms an Azure AD tenant. This enables "
+                        f"O365 account enumeration and credential spray attacks."
+                    ),
+                    output=f"O365 tenant confirmed for {_o365d}",
+                    affected=_o365d,
+                    sources="o365-detection",
+                    remediation=(
+                        "Implement conditional access policies, enforce MFA, "
+                        "and configure Azure AD Smart Lockout to mitigate "
+                        "enumeration and credential spray attacks."
+                    ),
+                )
+
+                _o365_emails: list = []
+                _email_file_arg = getattr(args, "email_file", None)
+                if _email_file_arg and Path(_email_file_arg).exists():
+                    _ef_lines = Path(_email_file_arg).read_text(
+                        encoding="utf-8").splitlines()
+                    _o365_emails = [
+                        e.strip() for e in _ef_lines
+                        if e.strip() and e.strip().endswith(f"@{_o365d}")
+                    ]
+                if not _o365_emails:
+                    _o365_emails = _find_osift_emails(args.project)
+                    _o365_emails = [
+                        e for e in _o365_emails
+                        if e.endswith(f"@{_o365d}")
+                    ]
+
+                if _o365_emails and o365spray_path:
+                    _valid = run_o365_enum(
+                        _o365d, _o365_emails, output_mgr, o365spray_path,
+                    )
+                    if _valid:
+                        _sample = ", ".join(_valid[:10])
+                        _extra = (f" (+{len(_valid)-10} more)"
+                                  if len(_valid) > 10 else "")
+                        output_mgr.log_finding(
+                            title="Enumeration: O365 Account Validation",
+                            ip="", port=0, hostname=_o365d,
+                            risk="MEDIUM",
+                            command=f"o365spray --enum -d {_o365d}",
+                            description=(
+                                f"o365spray confirmed {len(_valid)} valid O365 "
+                                f"account(s) for {_o365d}. Valid accounts can be "
+                                f"targeted with password spray attacks, phishing "
+                                f"campaigns, and social engineering. Account "
+                                f"enumeration is possible because the Azure AD "
+                                f"authentication endpoint returns different "
+                                f"responses for valid and invalid accounts."
+                            ),
+                            output=(
+                                f"Valid accounts ({len(_valid)}):\n"
+                                f"{_sample}{_extra}"
+                            ),
+                            affected=_o365d,
+                            sources="o365spray",
+                            remediation=(
+                                "Implement conditional access policies, enforce "
+                                "MFA on all accounts, and configure Azure AD "
+                                "Smart Lockout. Consider disabling legacy "
+                                "authentication protocols that bypass MFA. "
+                                "Monitor Azure AD sign-in logs for enumeration "
+                                "patterns."
+                            ),
+                        )
+                        _tprint(
+                            f"  {Fore.RED}[!] {len(_valid)} valid O365 "
+                            f"account(s) confirmed for {_o365d}"
+                            f"{Style.RESET_ALL}")
+                    else:
+                        _tprint(
+                            f"  {Fore.GREEN}[+] No valid accounts confirmed "
+                            f"for {_o365d}{Style.RESET_ALL}")
+                elif not _o365_emails:
+                    _tprint(
+                        f"  {Fore.YELLOW}[~] No emails found for {_o365d} — "
+                        f"skipping enum (use --email-file or run OSift first)"
+                        f"{Style.RESET_ALL}")
+                elif not o365spray_path:
+                    _tprint(
+                        f"  {Fore.YELLOW}[~] o365spray not installed — "
+                        f"skipping enum for {_o365d}{Style.RESET_ALL}")
+
+            _vc.status(f"{scope}_p14_o365", label="Phase 14: O365 Enumeration",
+                       status="complete")
+        else:
+            _vc.status(f"{scope}_p14_o365", label="Phase 14: O365 Enumeration",
+                       status="skipped", step="no O365 domains detected")
+
     # ── Write final output files (AFTER all Nuclei passes are complete) ──────
     # results.json, correlated.json, and the findings summary are written here
     # so they include findings from both the IP-pass and web-URL Nuclei passes.
@@ -30321,6 +30588,11 @@ def main():
             "  |  snap install zaproxy --classic",
         )
 
+    o365spray_path: "str | None" = check_tool_generic(
+        "o365spray", lambda: shutil.which("o365spray"),
+        "pip install o365spray",
+    )
+
     odat_path:   "str | None" = check_tool_generic(
         "odat", find_odat,
         "git clone https://github.com/quentinhardy/odat /opt/odat  &&  pip install impacket colorlog",
@@ -30850,6 +31122,7 @@ def main():
                              msdat_path=msdat_path,
                              enumdb_path=enumdb_path,
                              zap_path=zap_path,
+                             o365spray_path=o365spray_path,
                              target_count=_ext_count,
                              exclude_ips=_local_in_scope)
         combined_results["ext"] = results
