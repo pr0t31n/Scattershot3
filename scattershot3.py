@@ -19098,6 +19098,7 @@ def run_shcheck(
     _DEPRECATED_HEADERS = frozenset({
         "Expect-CT",         # Chrome removed support in 2023
         "Public-Key-Pins",   # HPKP — deprecated in all browsers
+        "X-XSS-Protection",  # All browsers removed support; use CSP instead
     })
     cmd_str = " ".join(str(c) for c in _used_cmd)
 
@@ -20409,21 +20410,28 @@ def find_responder() -> "str | None":
     return shutil.which("responder")
 
 
-def _server_shares_segment_with_targets(target_ips: "list[str]") -> bool:
+def _server_shares_segment_with_targets(
+    target_ips: "list[str]",
+    raw_specs: "list[str] | None" = None,
+) -> bool:
     """
     Return True if this machine's network interfaces share a subnet with at
-    least one of *target_ips*.
+    least one of *target_ips*, OR if any local interface IP falls within a
+    target CIDR from *raw_specs*.
 
-    Uses 'ip -o -4 addr list' to enumerate local interface prefixes, then
-    checks whether any target IP falls within one of those networks.  This
-    ensures Responder is only launched when it can actually reach the targets
-    on the same L2 segment — avoiding situations where the server is on a
-    different subnet and Responder would poison nobody relevant.
+    Uses 'ip -o -4 addr list' to enumerate local interface prefixes, then:
+      1. Checks whether any target IP falls within a local interface subnet.
+      2. Checks whether any local interface IP falls within a target CIDR.
+    The second check catches broad target ranges (e.g. 192.168.0.0/16) where
+    the sampled target IPs may not land in the server's specific /24.
     """
-    if not target_ips or platform.system() != "Linux":
+    if platform.system() != "Linux":
+        return False
+    if not target_ips and not raw_specs:
         return False
     import ipaddress as _ipaddress
     local_nets: list = []
+    local_addrs: list = []
     try:
         proc = _run(
             ["ip", "-o", "-4", "addr", "list"],
@@ -20433,13 +20441,16 @@ def _server_shares_segment_with_targets(target_ips: "list[str]") -> bool:
             m = re.search(r'inet\s+(\d{1,3}(?:\.\d{1,3}){3}/\d+)', line)
             if m:
                 try:
-                    local_nets.append(_ipaddress.ip_interface(m.group(1)).network)
+                    iface = _ipaddress.ip_interface(m.group(1))
+                    local_nets.append(iface.network)
+                    local_addrs.append(iface.ip)
                 except ValueError:
                     pass
     except Exception:
         return False
     if not local_nets:
         return False
+    # Check 1: any target IP inside a local interface subnet
     for tip in target_ips:
         try:
             addr = _ipaddress.ip_address(tip.strip())
@@ -20448,6 +20459,19 @@ def _server_shares_segment_with_targets(target_ips: "list[str]") -> bool:
                     return True
         except ValueError:
             pass
+    # Check 2: any local interface IP inside a target CIDR
+    if raw_specs:
+        for spec in raw_specs:
+            spec = spec.strip()
+            if not spec or "/" not in spec:
+                continue
+            try:
+                target_net = _ipaddress.ip_network(spec, strict=False)
+                for la in local_addrs:
+                    if la in target_net:
+                        return True
+            except ValueError:
+                pass
     return False
 
 
@@ -30713,7 +30737,7 @@ def main():
             and platform.system() == "Linux"
             and not getattr(args, "no_responder", False)):
         _responder_sample = internal_ips or _expand_sample_ips(raw_internal, 10)
-        if not _server_shares_segment_with_targets(_responder_sample):
+        if not _server_shares_segment_with_targets(_responder_sample, raw_specs=raw_internal):
             print(
                 f"{Fore.YELLOW}[~] Responder: server is not on the same network "
                 f"segment as any internal target — skipping{Style.RESET_ALL}"
