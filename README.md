@@ -16,6 +16,7 @@ Scattershot3 takes a list of IPs, ranges, or CIDRs, classifies them as internal 
 - **Credential chaining** — A shared `CredentialStore` passes discovered credentials forward across phases (banner grabs → Hydra → database attacks → AD tools).
 - **Flexible target input** — Inline args, `--targets-file`, JSON settings file, CIDR, hyphen ranges (`192.168.1.1-20`), and individual IPs all work together.
 - **Rich output** — `findings.json`, `findings.csv`, `findings.xlsx` (multi-sheet, styled), `correlated.json` (IP→port→tool correlation), `software_inventory.json`, and a top-level `summary.json`.
+- **Passive seed** — A concurrent tcpdump thread runs alongside Phase 1 discovery, capturing broadcast traffic (SSDP, mDNS, LLMNR, LLDP, ARP). The pcap is handed to Trawler in hunt mode (with the testing server excluded) to discover hosts and services that don't respond to active probes. Discovered IPs and Trawler findings are merged into the scan queue.
 - **Cross-platform** — Linux, macOS, Windows. Route setup and Responder are Linux-only; all other phases run everywhere.
 
 ---
@@ -145,6 +146,8 @@ python3 scattershot3.py --settings scattershot3_settings.json
 | `--domain DOMAIN` | Windows domain hint for AD tools |
 | `--wpscan-token TOKEN` | WPScan API token |
 | `--targets-file FILE` | Newline-separated targets file (`#` comments supported) |
+| `--passive-seed-duration N` | Seconds of concurrent tcpdump capture for Trawler passive analysis (default: 300, 0 = disabled) |
+| `--no-passive-seed` | Disable the passive seed capture entirely |
 
 ---
 
@@ -173,7 +176,8 @@ The settings file (`--settings`) allows engagement metadata and scan defaults to
     "no_nuclei":          false,
     "no_responder":       false,
     "port_scan_workers":  10,
-    "wpscan_token":       "YOUR_TOKEN_HERE"
+    "wpscan_token":       "YOUR_TOKEN_HERE",
+    "passive_seed_duration": 300
   }
 }
 ```

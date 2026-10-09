@@ -12496,6 +12496,7 @@ _ARGPARSE_DEFAULTS: dict = {
     "discovery_min_rate":        None,
     "discovery_min_parallelism": None,
     "timing_template":           None,
+    "passive_seed_duration":     300,
 }
 
 # Canonical template written by --init-settings
@@ -12539,6 +12540,7 @@ _SETTINGS_TEMPLATE: dict = {
         "discovery_min_rate":        0,
         "discovery_min_parallelism": 20,
         "timing_template":           "",
+        "passive_seed_duration":     300,
     },
 }
 
@@ -12777,6 +12779,12 @@ def apply_settings(args: argparse.Namespace, settings: dict) -> None:
         tt = scan["timing_template"]
         if tt and getattr(args, "timing_template", None) == _ARGPARSE_DEFAULTS["timing_template"]:
             args.timing_template = str(tt)
+
+    # ── Passive seed ──────────────────────────────────────────────────────
+    if "passive_seed_duration" in scan:
+        psd = int(scan["passive_seed_duration"]) if scan["passive_seed_duration"] else 0
+        if getattr(args, "passive_seed_duration", None) == _ARGPARSE_DEFAULTS["passive_seed_duration"]:
+            args.passive_seed_duration = psd
 
     # ── scope_output_dirs (Crucible v2 scope-separated output) ────────────
     sod = scan.get("scope_output_dirs")
@@ -13117,6 +13125,22 @@ Examples:
             "2=polite, 3=normal, 4=aggressive, 5=insane). Overrides the "
             "default timing behavior."
         ),
+    )
+    parser.add_argument(
+        "--passive-seed-duration", type=int, default=300, metavar="SECS",
+        dest="passive_seed_duration",
+        help=(
+            "Duration in seconds for the passive recon tcpdump capture "
+            "(default: 300 — 5 minutes).  The capture runs concurrently with "
+            "Phase 1 discovery; a longer window catches more broadcast cycles "
+            "(SSDP ~30-60s, mDNS, LLMNR, ARP).  Trawler analyses the pcap in "
+            "hunt mode with --ignore for the testing server.  Set via settings "
+            "file key scan.passive_seed_duration or Crucible engagement settings."
+        ),
+    )
+    parser.add_argument(
+        "--no-passive-seed", action="store_true", dest="no_passive_seed",
+        help="Disable passive-seed tcpdump capture entirely.",
     )
     parser.add_argument(
         "--no-udp", action="store_true", dest="no_udp",
@@ -30301,6 +30325,171 @@ def resolve_target_sources(args: argparse.Namespace) -> list[str]:
     return merged
 
 
+# ── Passive Seed — concurrent tcpdump → Trawler analysis ─────────────────────
+# Runs a short tcpdump capture concurrently with Phase 1 discovery.  After
+# capture completes, hands the pcap to Trawler in hunt mode (with the testing
+# server excluded via --ignore).  Discovered hosts and services supplement the
+# scan queue: any IP found by Trawler that is not already in the target list
+# gets added as a supplemental target.
+
+_PASSIVE_SEED_LOCK = threading.Lock()
+_passive_seed_results: dict = {}
+
+
+def _passive_seed_thread(
+    duration: int,
+    iface: str,
+    server_ip: str,
+    project_dir: "Path",
+    trawler_path: "str | None",
+):
+    global _passive_seed_results
+    seed_dir = project_dir / "passive_seed"
+    seed_dir.mkdir(parents=True, exist_ok=True)
+    pcap_path = seed_dir / "passive_seed.pcap"
+    ts_start = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
+    tcpdump_path = shutil.which("tcpdump")
+    if not tcpdump_path:
+        _vc.log("[passive-seed] tcpdump not found — skipping", "WARN")
+        return
+
+    if not trawler_path:
+        _vc.log("[passive-seed] Trawler not found — skipping", "WARN")
+        return
+
+    _vc.log(f"[passive-seed] starting {duration}s capture on {iface} "
+            f"(excluding {server_ip})")
+    _vc.status("passive_seed", label="Passive Seed",
+               status="running", step=f"tcpdump {duration}s on {iface}")
+
+    cmd = [
+        tcpdump_path, "-i", iface, "-w", str(pcap_path),
+        "-c", "0",
+        "not", "host", server_ip,
+    ]
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+        proc.wait(timeout=duration)
+    except subprocess.TimeoutExpired:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+    except Exception as exc:
+        _vc.log(f"[passive-seed] tcpdump failed: {exc}", "ERROR")
+        _vc.status("passive_seed", label="Passive Seed", status="error",
+                   step=str(exc))
+        return
+
+    if not pcap_path.exists() or pcap_path.stat().st_size == 0:
+        _vc.log("[passive-seed] capture empty — skipping analysis", "WARN")
+        _vc.status("passive_seed", label="Passive Seed", status="complete",
+                   step="no packets captured")
+        return
+
+    _vc.log(f"[passive-seed] capture complete — "
+            f"{pcap_path.stat().st_size:,} bytes")
+    _vc.status("passive_seed", label="Passive Seed",
+               status="running", step="Trawler analysis")
+
+    trawler_out = seed_dir / "trawler"
+    trawler_out.mkdir(parents=True, exist_ok=True)
+    trawler_cmd = [
+        sys.executable, trawler_path,
+        "--pcap", str(pcap_path),
+        "--hunt",
+        "--ignore", server_ip,
+        "--output-dir", str(trawler_out),
+        "--client", "passive_seed",
+    ]
+    try:
+        result = subprocess.run(
+            trawler_cmd, capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode != 0:
+            _vc.log(f"[passive-seed] Trawler exited {result.returncode}: "
+                    f"{result.stderr[:500]}", "WARN")
+    except subprocess.TimeoutExpired:
+        _vc.log("[passive-seed] Trawler timed out", "WARN")
+    except Exception as exc:
+        _vc.log(f"[passive-seed] Trawler failed: {exc}", "ERROR")
+        _vc.status("passive_seed", label="Passive Seed", status="error",
+                   step=str(exc))
+        return
+
+    discovered_ips: list[str] = []
+    discovered_services: dict[str, list[str]] = {}
+    findings_path = trawler_out / "findings.json"
+    targets_path = trawler_out / "targets.json"
+    traffic_path = trawler_out / "traffic.json"
+
+    if targets_path.exists():
+        try:
+            targets = json.loads(targets_path.read_text(encoding="utf-8"))
+            for t in targets:
+                ip = t.get("ip", "")
+                if ip and ip != server_ip:
+                    discovered_ips.append(ip)
+        except Exception:
+            pass
+
+    if traffic_path.exists():
+        try:
+            traffic = json.loads(traffic_path.read_text(encoding="utf-8"))
+            for ip, data in traffic.items():
+                if ip == server_ip:
+                    continue
+                services = []
+                for peer_list_key in ("external_peers", "internal_peers"):
+                    for peer in data.get(peer_list_key, []):
+                        for p in peer.get("tcp_ports", []):
+                            services.append(f"tcp/{p}")
+                        for p in peer.get("udp_ports", []):
+                            services.append(f"udp/{p}")
+                if services:
+                    discovered_services[ip] = list(set(services))
+        except Exception:
+            pass
+
+    finding_count = 0
+    if findings_path.exists():
+        try:
+            findings = json.loads(findings_path.read_text(encoding="utf-8"))
+            finding_count = len(findings)
+        except Exception:
+            pass
+
+    with _PASSIVE_SEED_LOCK:
+        _passive_seed_results = {
+            "discovered_ips": discovered_ips,
+            "discovered_services": discovered_services,
+            "finding_count": finding_count,
+            "pcap_path": str(pcap_path),
+            "trawler_output": str(trawler_out),
+        }
+
+    n_ips = len(discovered_ips)
+    n_svc = sum(len(v) for v in discovered_services.values())
+    _vc.log(f"[passive-seed] complete — {n_ips} IPs, {n_svc} services, "
+            f"{finding_count} findings")
+    _vc.status("passive_seed", label="Passive Seed", status="complete",
+               step=f"{n_ips} IPs · {n_svc} services · {finding_count} findings")
+
+
+def _get_passive_seed_supplemental_ips(existing_ips: "set[str]") -> list[str]:
+    with _PASSIVE_SEED_LOCK:
+        results = _passive_seed_results
+    if not results:
+        return []
+    return [ip for ip in results.get("discovered_ips", [])
+            if ip not in existing_ips]
+
+
 def main():
     args = parse_args()
     print_banner()
@@ -31030,6 +31219,43 @@ def main():
                     f"interface — skipping{Style.RESET_ALL}"
                 )
 
+    # ── Passive Seed — concurrent tcpdump → Trawler analysis ──────────
+    _ps_thread: "threading.Thread | None" = None
+    _ps_duration = getattr(args, "passive_seed_duration", 300) or 0
+    _no_ps = getattr(args, "no_passive_seed", False)
+    if (_has_internal and _ps_duration > 0 and not _no_ps
+            and platform.system() in ("Linux", "Darwin")):
+        _ps_sample = internal_ips or _expand_sample_ips(raw_internal, 10)
+        _ps_server_ip = get_source_ip_for(_ps_sample[0]) if _ps_sample else None
+        _ps_iface = _detect_responder_interface(_ps_sample) if _ps_sample else None
+        _ps_trawler = str(Path("/opt/pr0t31n/Trawler/trawler.py"))
+        if not Path(_ps_trawler).exists():
+            _ps_trawler = shutil.which("trawler") or shutil.which("trawler.py")
+        if _ps_iface and _ps_server_ip and _ps_trawler:
+            _ps_thread = threading.Thread(
+                target=_passive_seed_thread,
+                args=(_ps_duration, _ps_iface, _ps_server_ip,
+                      project_root_early, _ps_trawler),
+                daemon=True,
+                name="passive-seed",
+            )
+            _ps_thread.start()
+            print(
+                f"{Fore.CYAN}[*] Passive seed: {_ps_duration}s tcpdump on "
+                f"{_ps_iface} (excluding {_ps_server_ip}){Style.RESET_ALL}"
+            )
+        else:
+            if not _ps_iface:
+                print(f"{Fore.YELLOW}[~] Passive seed: no interface detected — skipping{Style.RESET_ALL}")
+            elif not _ps_server_ip:
+                print(f"{Fore.YELLOW}[~] Passive seed: no server IP detected — skipping{Style.RESET_ALL}")
+            elif not _ps_trawler:
+                print(f"{Fore.YELLOW}[~] Passive seed: Trawler not found — skipping{Style.RESET_ALL}")
+    elif _no_ps:
+        print(f"{Fore.YELLOW}[~] Passive seed disabled (--no-passive-seed){Style.RESET_ALL}")
+    elif _ps_duration == 0:
+        print(f"{Fore.YELLOW}[~] Passive seed disabled (duration=0){Style.RESET_ALL}")
+
     def _run_scope_int():
         if not internal_ips and not (_lazy_targets and raw_internal):
             print(f"\n{Fore.CYAN}[~] No INT targets — skipping internal pass.{Style.RESET_ALL}")
@@ -31219,6 +31445,67 @@ def main():
                     pass
             else:
                 print(f"{Fore.CYAN}[*] Responder: no credentials captured.{Style.RESET_ALL}")
+
+    # ── Collect passive seed results ─────────────────────────────────
+    if _ps_thread is not None:
+        _ps_thread.join(timeout=_ps_duration + 60)
+        with _PASSIVE_SEED_LOCK:
+            _psr = dict(_passive_seed_results)
+        if _psr:
+            _psr_ips = _psr.get("discovered_ips", [])
+            _psr_svcs = _psr.get("discovered_services", {})
+            _psr_fc = _psr.get("finding_count", 0)
+            _psr_trawler_out = _psr.get("trawler_output", "")
+            print(
+                f"\n{Fore.CYAN}[*] Passive seed: {len(_psr_ips)} IP(s), "
+                f"{sum(len(v) for v in _psr_svcs.values())} service(s), "
+                f"{_psr_fc} finding(s){Style.RESET_ALL}"
+            )
+            if _psr_fc and _psr_trawler_out:
+                _pr_findings_path = Path(_psr_trawler_out) / "findings.json"
+                if _pr_findings_path.exists():
+                    _int_dir = project_root_early / "int"
+                    if _int_dir.exists():
+                        _int_findings = _int_dir / "findings.json"
+                        try:
+                            _existing = json.loads(
+                                _int_findings.read_text(encoding="utf-8")
+                            ) if _int_findings.exists() else []
+                            if not isinstance(_existing, list):
+                                _existing = []
+                            _existing_keys = {
+                                (f.get("title", ""), f.get("ip", ""),
+                                 str(f.get("port", 0)))
+                                for f in _existing
+                            }
+                            _trawler_findings = json.loads(
+                                _pr_findings_path.read_text(encoding="utf-8"))
+                            if not isinstance(_trawler_findings, list):
+                                _trawler_findings = []
+                            _merged_count = 0
+                            for f in _trawler_findings:
+                                key = (f.get("title", ""), f.get("ip", ""),
+                                       str(f.get("port", 0)))
+                                if key not in _existing_keys:
+                                    f["source_tools"] = ["trawler"]
+                                    f.setdefault("scope", "int")
+                                    _existing.append(f)
+                                    _existing_keys.add(key)
+                                    _merged_count += 1
+                            if _merged_count:
+                                _int_findings.write_text(
+                                    json.dumps(_existing, indent=2,
+                                               default=str) + "\n",
+                                    encoding="utf-8",
+                                )
+                                _vc.log(f"[passive-seed] merged {_merged_count} "
+                                        f"finding(s) into int/findings.json")
+                        except Exception as _merge_exc:
+                            _vc.error(f"[passive-seed] findings merge failed: "
+                                      f"{_merge_exc}")
+        else:
+            print(f"{Fore.CYAN}[*] Passive seed: no results (capture may "
+                  f"have been empty).{Style.RESET_ALL}")
 
     # ── Cross-scope summary.json ──────────────────────────────────────
     # Written to the project root (one level above int/ and ext/).
