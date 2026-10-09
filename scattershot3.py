@@ -560,6 +560,21 @@ def _write_project_meta(project_dir: Path, tool: str, client_short: str,
         pass
 
 
+try:
+    import sys as _s_pp
+    if "/opt/pr0t31n/shared" not in _s_pp.path:
+        _s_pp.path.insert(0, "/opt/pr0t31n/shared")
+    import pr0t31n_pause as _pp
+except ImportError:
+    _pp = None
+
+
+def _check_pause():
+    """If a pause was requested, checkpoint + exit with EXIT_PAUSED."""
+    if _pause is not None and _pause.check_and_pause():
+        sys.exit(_pp.EXIT_PAUSED)
+
+
 def _u_augment_findings_path(findings_json_path, *, tool: str,
                              scope=None, phase: str = "") -> int:
     """Read findings.json, fill missing universal-required fields (id/tool/
@@ -1375,6 +1390,7 @@ class ProgressManager:
 # Module-level singleton console; ProgressManager is created in main()
 _vc: VantageConsole = VantageConsole()
 _pm: "ProgressManager | None" = None
+_pause: "_pp.PauseManager | None" = None  # type: ignore[name-defined]
 
 # Crash-log state — set at main() start so signal handlers can find log files
 _CRASH_PROJECT_ROOT: "Path | None" = None
@@ -1406,12 +1422,14 @@ def _write_crash_log(reason: str) -> None:
 def _handle_sigterm(signum, frame):
     reason = (
         "Process terminated by SIGTERM — killed externally "
-        "(Vantage stop, systemd, kill command, or OOM reaper)"
+        "(Crucible stop, Vantage stop, systemd, kill command, or OOM reaper)"
     )
     try:
         _vc.log(f"SIGTERM received — {reason}", "ERROR")
     except Exception:
         pass
+    if _pause is not None:
+        _pause.write_stop_reason("killed_crucible", reason, initiated_by="external")
     _write_crash_log(reason)
     sys.exit(1)
 
@@ -30530,7 +30548,7 @@ def main():
     check_privileges()
 
     # ── Vantage ProgressManager ────────────────────────────────────────────
-    global _pm, _CRASH_PROJECT_ROOT
+    global _pm, _pause, _CRASH_PROJECT_ROOT
     _early_proj_root = Path(args.project).resolve()
     _early_proj_root.mkdir(parents=True, exist_ok=True)
     _CRASH_PROJECT_ROOT = _early_proj_root
@@ -30546,6 +30564,14 @@ def main():
             f"phase(s) already complete: {_pm.get_state()['completed_phases']}",
             "INFO",
         )
+
+    if _pp is not None:
+        _pause = _pp.PauseManager(_early_proj_root, "scattershot3")
+        _pause.start_watcher(
+            checkpoint_callback=lambda: _pm.save_runtime_state({"paused": True}),
+            grace_period=60,
+        )
+        _pause.log_run_type(bool(_pm.get_state().get("completed_phases")))
 
     # ── Tool discovery (done once, shared across both scope passes) ───
     _vc.status("init_tools", label="INIT: Tool Discovery", status="running",
@@ -30984,6 +31010,8 @@ def main():
     _vc.status("init_tools", label="INIT: Tool Discovery", status="complete",
                tools=_init_tool_results)
 
+    _check_pause()
+
     # ── Plugin / database updates ─────────────────────────────────────
     # Use each tool's native update mechanism to refresh scripts and
     # vulnerability databases before scanning begins.
@@ -31119,6 +31147,8 @@ def main():
     _pm.set_phase_status("init_updates", "complete", label="INIT: Plugin Updates")
     _vc.status("init_updates", label="INIT: Plugin Updates", status="complete",
                tools=_update_results)
+
+    _check_pause()
 
     # ── Nessus action item — emit the full scope immediately ────────
     # Gives the operator a one-click prompt to launch a parallel Nessus
@@ -31354,6 +31384,8 @@ def main():
         combined_results["ext"] = results
         _pm.set_phase_status("scope_ext", "complete", label="Scan: External")
         _vc.status("scope_ext", label="Scan: External", status="complete")
+
+    _check_pause()
 
     try:
         with ThreadPoolExecutor(max_workers=2) as scope_pool:
@@ -31751,6 +31783,9 @@ def main():
     except Exception:
         pass
 
+    if _pause is not None:
+        _pause.write_stop_reason("completed", "all_phases_done")
+
     # ── Final project-level overview ──────────────────────────────────
     print(f"\n{Fore.CYAN}{'═'*60}{Style.RESET_ALL}")
     print(f"{Fore.CYAN}[*] Scan complete: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{Style.RESET_ALL}")
@@ -32127,11 +32162,18 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
+        if _pause is not None:
+            _pause.write_stop_reason("killed_user", "KeyboardInterrupt / Ctrl-C",
+                                     initiated_by="user")
         _write_crash_log("Scan interrupted by user (KeyboardInterrupt / Ctrl-C)")
         print(f"\n{Fore.YELLOW}[!] Scan interrupted by user.{Style.RESET_ALL}")
         sys.exit(0)
     except Exception as _fatal_exc:
         _fatal_tb = traceback.format_exc()
+        if _pause is not None:
+            _pause.write_stop_reason("crashed",
+                                     f"{type(_fatal_exc).__name__}: {_fatal_exc}",
+                                     initiated_by="system")
         _write_crash_log(
             f"Unhandled exception crashed the scan — "
             f"{type(_fatal_exc).__name__}: {_fatal_exc}\n{_fatal_tb}"
