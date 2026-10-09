@@ -8963,6 +8963,42 @@ def _port_scan_worker(
                 except Exception as exc:
                     _tprint(f"{Fore.RED}  [!] libSSH check error {ip}:{port}: {exc}{Style.RESET_ALL}")
 
+        # ── Dredge: SSH on Windows endpoint ───────────────────────────
+        if _is_ssh and out.get("banner"):
+            _ssh_ban_lo = (out["banner"].get("banner") or "").lower()
+            _is_win_ssh = ("openssh_for_windows" in _ssh_ban_lo
+                           or "win32-openssh" in _ssh_ban_lo
+                           or "windows" in (info.get("extrainfo") or "").lower())
+            if _is_win_ssh:
+                try:
+                    output_mgr.log_action_item(
+                        "endpoint_audit", "Dredge", f"{ip}:{port}",
+                        ip, port,
+                        title="Dredge: Windows endpoint audit via SSH",
+                        description=(
+                            f"SSH on {ip}:{port} is running on a Windows host "
+                            f"(banner: {out['banner'].get('banner', '')[:80]}). "
+                            f"Dredge can SCP its PowerShell collection script to "
+                            f"the target, execute it via SSH, retrieve the endpoint "
+                            f"security assessment results, and clean up.\n"
+                            f"Access method: SSH\n"
+                            f"Port: {port}\n"
+                            f"Credentials: required (use discovered credentials "
+                            f"or supply via Crucible)"
+                        ),
+                        hostname=hostname,
+                        source_finding="SSH on Windows Endpoint",
+                        priority="MEDIUM",
+                        metadata={
+                            "access_method": "ssh",
+                            "ssh_port": port,
+                            "ssh_banner": out["banner"].get("banner", "")[:200],
+                            "credentials": None,
+                        },
+                    )
+                except Exception:
+                    pass
+
         # ── SMTP open relay + user enumeration ─────────────────────────
         is_smtp = (svc_name in ("smtp", "smtps", "submission") or port in (25, 465, 587))
         if is_smtp and not getattr(args, "no_enum", False):
@@ -9069,6 +9105,36 @@ def _port_scan_worker(
                               scope=scope, timeout=getattr(args, "banner_timeout", 10))
             except Exception as exc:
                 _tprint(f"{Fore.RED}  [!] RDP security audit error {ip}:{port}: {exc}{Style.RESET_ALL}")
+            try:
+                output_mgr.log_action_item(
+                    "endpoint_audit", "Manual", f"{ip}:{port}",
+                    ip, port,
+                    title="Dredge: Windows endpoint audit (manual — RDP access)",
+                    description=(
+                        f"RDP is available on {ip}:{port}. If valid credentials "
+                        f"are obtained, connect via RDP and manually run the "
+                        f"Dredge PowerShell collection script on the target:\n"
+                        f"  1. Copy dredge_collect.ps1 to the target\n"
+                        f"  2. Open PowerShell as Administrator\n"
+                        f"  3. .\\dredge_collect.bat\n"
+                        f"  4. Retrieve the output JSON file\n"
+                        f"  5. Delete dredge_collect.ps1 and the output JSON\n"
+                        f"  6. Import the JSON into Crucible for analysis\n\n"
+                        f"If WinRM is also available on this host, prefer the "
+                        f"automated WinRM delivery method instead."
+                    ),
+                    hostname=hostname,
+                    source_finding="RDP Service Detected",
+                    priority="LOW",
+                    metadata={
+                        "access_method": "rdp",
+                        "rdp_port": port,
+                        "credentials": None,
+                        "manual": True,
+                    },
+                )
+            except Exception:
+                pass
 
         # ── IPMI hash dumping ──────────────────────────────────────────
         is_ipmi = (svc_name in ("ipmi", "asf-rmcp", "asf-rmcp+") or port == 623)
@@ -17402,6 +17468,37 @@ def run_smb_null_session(
                     hostname=hostname, output_mgr=output_mgr, scope=scope,
                     output_file=str(out_path),
                 )
+                if re.search(r"(WRITE|ADMIN!!!)", raw, re.IGNORECASE):
+                    try:
+                        _smb_admin = "ADMIN!!!" in raw
+                        output_mgr.log_action_item(
+                            "endpoint_audit", "Dredge", f"{ip}:{port}",
+                            ip, port,
+                            title="Dredge: Windows endpoint audit via SMB",
+                            description=(
+                                f"SMB on {ip}:{port} permits "
+                                f"{'administrative (ADMIN!!!)' if _smb_admin else 'write'} "
+                                f"access via null session. Dredge can push its "
+                                f"PowerShell collection script to a writable share, "
+                                f"execute it via WinRM/psexec/smbexec, retrieve the "
+                                f"results, and clean up.\n"
+                                f"Access method: SMB (null session, "
+                                f"{'admin' if _smb_admin else 'write'} access)\n"
+                                f"Port: {port}\n"
+                                f"Credentials: anonymous (null session)"
+                            ),
+                            hostname=hostname,
+                            source_finding="SMB Null Session Permitted",
+                            priority="HIGH" if _smb_admin else "MEDIUM",
+                            metadata={
+                                "access_method": "smb",
+                                "smb_port": port,
+                                "smb_access": "admin" if _smb_admin else "write",
+                                "credentials": {"username": "", "password": "", "auth": "null_session"},
+                            },
+                        )
+                    except Exception:
+                        pass
             else:
                 _tprint(f"  {Fore.GREEN}[+] SMB null session denied: {ip}:{port}{Style.RESET_ALL}")
         except Exception as exc:
@@ -18066,6 +18163,43 @@ def run_smbmap_with_creds(
             output_file=str(out_path),
             password=password,
         )
+
+        if re.search(r"(WRITE|ADMIN!!!)", raw, re.IGNORECASE):
+            try:
+                _cred_admin = "ADMIN!!!" in raw
+                output_mgr.log_action_item(
+                    "endpoint_audit", "Dredge", f"{ip}:{port}",
+                    ip, port,
+                    title="Dredge: Windows endpoint audit via SMB (authenticated)",
+                    description=(
+                        f"SMB on {ip}:{port} permits "
+                        f"{'administrative (ADMIN!!!)' if _cred_admin else 'write'} "
+                        f"access with credentials ({domain + chr(92) if domain else ''}"
+                        f"{username}). Dredge can push its PowerShell collection "
+                        f"script to a writable share, execute it via "
+                        f"psexec/smbexec/WinRM, retrieve the results, and clean up.\n"
+                        f"Access method: SMB (authenticated, "
+                        f"{'admin' if _cred_admin else 'write'} access)\n"
+                        f"Port: {port}\n"
+                        f"Credentials: {domain + chr(92) if domain else ''}{username}"
+                    ),
+                    hostname=hostname,
+                    source_finding="SMB Share Access with Credentials",
+                    priority="HIGH" if _cred_admin else "MEDIUM",
+                    metadata={
+                        "access_method": "smb",
+                        "smb_port": port,
+                        "smb_access": "admin" if _cred_admin else "write",
+                        "credentials": {
+                            "username": username,
+                            "password": password,
+                            "domain": domain,
+                            "auth": "credentials",
+                        },
+                    },
+                )
+            except Exception:
+                pass
 
         _tprint(f"  {Fore.GREEN}[+] smbmap complete: {ip}:{port} "
                 f"→ {out_path}{Style.RESET_ALL}")
@@ -24511,6 +24645,31 @@ def run_winrm_check(
                     source_finding="WinRM: No Authentication Required",
                     priority="CRITICAL",
                 )
+                output_mgr.log_action_item(
+                    "endpoint_audit", "Dredge", f"{ip}:{port}",
+                    ip, port,
+                    title="Dredge: Windows endpoint audit via WinRM (unauthenticated)",
+                    description=(
+                        f"WinRM on {ip}:{port} accepts unauthenticated requests. "
+                        f"Dredge can push its PowerShell collection script, execute "
+                        f"it, retrieve the results, and clean up — all without "
+                        f"credentials.\n"
+                        f"Access method: WinRM (unauthenticated)\n"
+                        f"Delivery: Invoke-Command -ComputerName {ip} "
+                        f"-ScriptBlock {{...}}\n"
+                        f"Port: {port}  •  Scheme: {scheme}"
+                    ),
+                    hostname=hostname,
+                    source_finding="WinRM: No Authentication Required",
+                    priority="HIGH",
+                    metadata={
+                        "access_method": "winrm",
+                        "winrm_port": port,
+                        "winrm_scheme": scheme,
+                        "winrm_auth": "none",
+                        "credentials": None,
+                    },
+                )
             except Exception:
                 pass
         elif status == 401:
@@ -24530,6 +24689,35 @@ def run_winrm_check(
                 affected=f"{ip}:{port}",
                 output_file=str(out_file),
             )
+            try:
+                output_mgr.log_action_item(
+                    "endpoint_audit", "Dredge", f"{ip}:{port}",
+                    ip, port,
+                    title="Dredge: Windows endpoint audit via WinRM",
+                    description=(
+                        f"WinRM is active on {ip}:{port} with authentication "
+                        f"(methods: {', '.join(auth_methods) or 'unknown'}). "
+                        f"If valid credentials are obtained, Dredge can push its "
+                        f"PowerShell collection script via WinRM, execute it "
+                        f"remotely, retrieve the endpoint security assessment "
+                        f"results, and clean up.\n"
+                        f"Access method: WinRM (authenticated)\n"
+                        f"Port: {port}  •  Scheme: {scheme}\n"
+                        f"Auth methods: {', '.join(auth_methods) or 'unknown'}"
+                    ),
+                    hostname=hostname,
+                    source_finding="WinRM Service Exposed",
+                    priority="MEDIUM",
+                    metadata={
+                        "access_method": "winrm",
+                        "winrm_port": port,
+                        "winrm_scheme": scheme,
+                        "winrm_auth": ", ".join(auth_methods) or "unknown",
+                        "credentials": None,
+                    },
+                )
+            except Exception:
+                pass
 
         if port == 5985 and scheme == "http":
             output_mgr.log_finding(
