@@ -2583,6 +2583,10 @@ class OutputManager:
         metasploit: bool = False,
         exploit_details: "list[dict] | None" = None,
         confidence: str | None = None,
+        remediation: str | None = None,
+        owasp: str | None = None,
+        owasp_url: str | None = None,
+        nist: str | None = None,
     ):
         """
         Record a security finding to both findings.json and findings.csv.
@@ -2646,6 +2650,10 @@ class OutputManager:
             # ipv4_in_header, TLS_misses_extension_23). Empty for findings
             # whose source tool doesn't run an independent confirmation.
             "confidence":     confidence or "",
+            "remediation":    remediation or "",
+            "owasp":          owasp or "",
+            "owasp_url":      owasp_url or "",
+            "nist":           nist or "",
         }
         csv_entry = dict(entry)
         csv_entry["title"] = ascii_title
@@ -30969,12 +30977,22 @@ def main():
                 and not dry
                 and route_setup_result.get("attempts")
                 and any(a.get("added") for a in route_setup_result["attempts"])):
-            print(f"{Fore.RED}[!] Aborting scan: internal-route setup could "
-                  f"not confirm reachability on any candidate interface. "
-                  f"Fix the routing configuration or pass --route-interface "
-                  f"and --route-gateway explicitly, then re-run."
-                  f"{Style.RESET_ALL}")
-            sys.exit(2)
+            if external_ips or raw_external:
+                print(f"{Fore.YELLOW}[!] Internal route setup failed — "
+                      f"dropping {_int_count} internal target(s) and "
+                      f"continuing with {_ext_count} external target(s)."
+                      f"{Style.RESET_ALL}")
+                internal_ips = []
+                raw_internal = []
+                _int_count = 0
+            else:
+                print(f"{Fore.RED}[!] Aborting scan: internal-route setup "
+                      f"could not confirm reachability on any candidate "
+                      f"interface and no external targets exist. Fix the "
+                      f"routing configuration or pass --route-interface "
+                      f"and --route-gateway explicitly, then re-run."
+                      f"{Style.RESET_ALL}")
+                sys.exit(2)
         if route_setup_result.get("success", False):
             _n_added = len(route_setup_result.get("routes_added", []))
             _n_skip = len(route_setup_result.get("routes_skipped", []))
