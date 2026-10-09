@@ -26664,9 +26664,14 @@ def run_udp_scan(
                                 unconfirmed[portid2] = pi2
                 except Exception:
                     pass
-            _extra_found = [p for p in _extra_ports if p in confirmed or p in unconfirmed]
-            if _extra_found:
-                _tprint(f"  {Fore.GREEN}[+] Enterprise UDP: found {', '.join(str(p) for p in _extra_found)} on {ip}{Style.RESET_ALL}")
+            _extra_confirmed = [p for p in _extra_ports if p in confirmed]
+            _extra_unconfirmed = [p for p in _extra_ports if p in unconfirmed]
+            if _extra_confirmed:
+                _tprint(f"  {Fore.GREEN}[+] Enterprise UDP: {len(_extra_confirmed)} confirmed open on {ip}: "
+                        f"{', '.join(str(p) for p in _extra_confirmed)}{Style.RESET_ALL}")
+            if _extra_unconfirmed:
+                _tprint(f"  {Fore.YELLOW}[~] Enterprise UDP: {len(_extra_unconfirmed)} unconfirmed (open|filtered) on {ip}: "
+                        f"{', '.join(str(p) for p in _extra_unconfirmed)}{Style.RESET_ALL}")
         except subprocess.TimeoutExpired:
             _tprint(f"  {Fore.YELLOW}[~] Enterprise UDP scan timed out for {ip}{Style.RESET_ALL}")
         except Exception as exc:
