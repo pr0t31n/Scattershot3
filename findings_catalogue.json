@@ -17984,6 +17984,129 @@
       ],
       "description": "The SSH server accepts only password-based authentication methods (password and/or keyboard-interactive) with no public key authentication available. This is a significant security weakness \u2014 the server cannot accept key-based authentication at all, making brute-force the only barrier to unauthorized access.",
       "impact": "Without public key authentication, the SSH server relies entirely on password strength for security. An attacker can mount online brute-force or credential-stuffing attacks with no cryptographic barrier. The absence of public key support also prevents deployment of certificate-based or hardware-token SSH authentication. This configuration violates CIS Benchmark and DISA STIG requirements for SSH hardening."
+    },
+    {
+      "id": "SS3-213",
+      "title": "Discovery: O365 Tenant Detected",
+      "aliases": [
+        "Enumeration: O365 Tenant Detected"
+      ],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "description": "The target domain uses Microsoft 365 / Azure AD for email and authentication. MX records point to *.protection.outlook.com or the OpenID configuration endpoint confirms an Azure AD tenant.",
+      "impact": "Confirms the organization uses Microsoft 365, enabling targeted O365 account enumeration, credential spray, and phishing attacks against the tenant.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": null,
+      "cvss_vector": "",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "DE.CM-01"
+      ],
+      "nist_800_53": [
+        "SC-7"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1589.002",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Identity Information: Email Addresses"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Implement conditional access policies, enforce MFA, and configure Azure AD Smart Lockout to mitigate enumeration and credential spray attacks.",
+      "remediation_component": "Authentication",
+      "remediation_category": "Access Control",
+      "remediation_effort": "Moderate",
+      "validation_tools": [
+        "o365spray",
+        "dig"
+      ]
+    },
+    {
+      "id": "SS3-214",
+      "title": "Enumeration: O365 Account Enumeration",
+      "aliases": [
+        "Enumeration: O365 Account Validation"
+      ],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "MEDIUM",
+      "description": "Valid O365 user accounts were confirmed via Azure AD authentication endpoint enumeration. The endpoint returns different responses for valid and invalid accounts, allowing an attacker to confirm which email addresses correspond to active accounts.",
+      "impact": "Confirmed valid accounts can be targeted with password spray attacks, credential stuffing, phishing campaigns, and social engineering. This significantly reduces the attacker's search space for credential-based attacks.",
+      "cwe": [
+        "CWE-204"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 5.3,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "DE.CM-01"
+      ],
+      "nist_800_53": [
+        "AC-2",
+        "IA-5"
+      ],
+      "nist_800_171": [
+        "3.5.1"
+      ],
+      "pci_dss_4": [
+        "8.2.1"
+      ],
+      "iso_27001": [
+        "A.9.2.1"
+      ],
+      "iso_27002": [
+        "5.16"
+      ],
+      "soc2": [
+        "CC6.1"
+      ],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1589.002",
+          "tactic": "Reconnaissance",
+          "name": "Gather Victim Identity Information: Email Addresses"
+        },
+        {
+          "technique": "T1110.003",
+          "tactic": "Credential Access",
+          "name": "Brute Force: Password Spraying"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [
+        "auxiliary/gather/office365userenum"
+      ],
+      "kev": false,
+      "remediation_brief": "Implement conditional access policies, enforce MFA on all accounts, configure Azure AD Smart Lockout, and disable legacy authentication protocols that bypass MFA. Monitor Azure AD sign-in logs for enumeration patterns.",
+      "remediation_component": "Authentication",
+      "remediation_category": "Access Control",
+      "remediation_effort": "Moderate",
+      "validation_tools": [
+        "o365spray"
+      ]
     }
   ]
 }

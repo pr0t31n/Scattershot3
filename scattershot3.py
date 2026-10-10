@@ -28637,6 +28637,42 @@ def _detect_o365(domain: str, timeout: int = 10) -> bool:
     return False
 
 
+_O365_COMMON_PREFIXES = [
+    "admin", "administrator", "info", "it", "helpdesk", "support",
+    "hr", "finance", "accounting", "sales", "marketing", "security",
+    "noreply", "postmaster", "webmaster", "abuse", "contact",
+    "reception", "office", "operations", "ceo", "cfo", "cto", "ciso",
+]
+
+
+def _o365_enum_builtin(
+    domain: str,
+    emails: "list[str]",
+    timeout: int = 8,
+) -> "list[str]":
+    """Enumerate valid O365 accounts via Azure AD GetCredentialType API.
+
+    No external tool required. Returns list of confirmed-valid addresses.
+    """
+    import urllib.request as _ur
+    valid: list = []
+    url = "https://login.microsoftonline.com/common/GetCredentialType"
+    for email in emails:
+        try:
+            body = json.dumps({"Username": email}).encode()
+            req = _ur.Request(url, data=body,
+                              headers={"Content-Type": "application/json"})
+            resp = _ur.urlopen(req, timeout=timeout)
+            data = json.loads(resp.read().decode())
+            if_exists = data.get("IfExistsResult", -1)
+            # 0 = exists, 1 = does not exist, 5/6 = exists (different tenant)
+            if if_exists in (0, 5, 6):
+                valid.append(email)
+        except Exception:
+            pass
+    return valid
+
+
 def _find_osift_emails(project_dir: str) -> "list[str]":
     p = Path(project_dir)
     candidates = list(p.parent.glob("osift/*/findings.json"))
@@ -29980,7 +30016,7 @@ def scan_scope(
 
             for _o365d in _o365_domains:
                 output_mgr.log_finding(
-                    title="Enumeration: O365 Tenant Detected",
+                    title="Discovery: O365 Tenant Detected",
                     ip="", port=0, hostname=_o365d,
                     risk="INFO",
                     command=f"dig +short MX {_o365d}",
@@ -30016,61 +30052,74 @@ def scan_scope(
                         e for e in _o365_emails
                         if e.endswith(f"@{_o365d}")
                     ]
+                if not _o365_emails:
+                    _o365_emails = [
+                        f"{p}@{_o365d}" for p in _O365_COMMON_PREFIXES
+                    ]
 
-                if _o365_emails and o365spray_path:
+                _valid: list = []
+                _enum_source = ""
+                if o365spray_path:
                     _valid = run_o365_enum(
                         _o365d, _o365_emails, output_mgr, o365spray_path,
                     )
-                    if _valid:
-                        _sample = ", ".join(_valid[:10])
-                        _extra = (f" (+{len(_valid)-10} more)"
-                                  if len(_valid) > 10 else "")
-                        output_mgr.log_finding(
-                            title="Enumeration: O365 Account Validation",
-                            ip="", port=0, hostname=_o365d,
-                            risk="MEDIUM",
-                            command=f"o365spray --enum -d {_o365d}",
-                            description=(
-                                f"o365spray confirmed {len(_valid)} valid O365 "
-                                f"account(s) for {_o365d}. Valid accounts can be "
-                                f"targeted with password spray attacks, phishing "
-                                f"campaigns, and social engineering. Account "
-                                f"enumeration is possible because the Azure AD "
-                                f"authentication endpoint returns different "
-                                f"responses for valid and invalid accounts."
-                            ),
-                            output=(
-                                f"Valid accounts ({len(_valid)}):\n"
-                                f"{_sample}{_extra}"
-                            ),
-                            affected=_o365d,
-                            sources="o365spray",
-                            remediation=(
-                                "Implement conditional access policies, enforce "
-                                "MFA on all accounts, and configure Azure AD "
-                                "Smart Lockout. Consider disabling legacy "
-                                "authentication protocols that bypass MFA. "
-                                "Monitor Azure AD sign-in logs for enumeration "
-                                "patterns."
-                            ),
-                        )
-                        _tprint(
-                            f"  {Fore.RED}[!] {len(_valid)} valid O365 "
-                            f"account(s) confirmed for {_o365d}"
-                            f"{Style.RESET_ALL}")
-                    else:
-                        _tprint(
-                            f"  {Fore.GREEN}[+] No valid accounts confirmed "
-                            f"for {_o365d}{Style.RESET_ALL}")
-                elif not _o365_emails:
-                    _tprint(
-                        f"  {Fore.YELLOW}[~] No emails found for {_o365d} — "
-                        f"skipping enum (use --email-file or run OSift first)"
-                        f"{Style.RESET_ALL}")
-                elif not o365spray_path:
+                    _enum_source = "o365spray"
+                else:
                     _tprint(
                         f"  {Fore.YELLOW}[~] o365spray not installed — "
-                        f"skipping enum for {_o365d}{Style.RESET_ALL}")
+                        f"using built-in GetCredentialType enum for "
+                        f"{_o365d}{Style.RESET_ALL}")
+                    _valid = _o365_enum_builtin(_o365d, _o365_emails)
+                    _enum_source = "GetCredentialType API"
+
+                if _valid:
+                    _sample = ", ".join(_valid[:10])
+                    _extra = (f" (+{len(_valid)-10} more)"
+                              if len(_valid) > 10 else "")
+                    _enum_cmd = (
+                        f"o365spray --enum -d {_o365d}"
+                        if _enum_source == "o365spray"
+                        else f"POST login.microsoftonline.com"
+                             f"/common/GetCredentialType"
+                    )
+                    output_mgr.log_finding(
+                        title="Enumeration: O365 Account Enumeration",
+                        ip="", port=0, hostname=_o365d,
+                        risk="MEDIUM",
+                        command=_enum_cmd,
+                        description=(
+                            f"{_enum_source} confirmed {len(_valid)} valid "
+                            f"O365 account(s) for {_o365d}. Valid accounts "
+                            f"can be targeted with password spray attacks, "
+                            f"phishing campaigns, and social engineering. "
+                            f"Account enumeration is possible because the "
+                            f"Azure AD authentication endpoint returns "
+                            f"different responses for valid and invalid "
+                            f"accounts."
+                        ),
+                        output=(
+                            f"Valid accounts ({len(_valid)}):\n"
+                            f"{_sample}{_extra}"
+                        ),
+                        affected=_o365d,
+                        sources=_enum_source,
+                        remediation=(
+                            "Implement conditional access policies, enforce "
+                            "MFA on all accounts, and configure Azure AD "
+                            "Smart Lockout. Consider disabling legacy "
+                            "authentication protocols that bypass MFA. "
+                            "Monitor Azure AD sign-in logs for enumeration "
+                            "patterns."
+                        ),
+                    )
+                    _tprint(
+                        f"  {Fore.RED}[!] {len(_valid)} valid O365 "
+                        f"account(s) confirmed for {_o365d}"
+                        f"{Style.RESET_ALL}")
+                else:
+                    _tprint(
+                        f"  {Fore.GREEN}[+] No valid accounts confirmed "
+                        f"for {_o365d}{Style.RESET_ALL}")
 
             _vc.status(f"{scope}_p14_o365", label="Phase 14: O365 Enumeration",
                        status="complete")
