@@ -76,6 +76,24 @@ def run(cmd, check=True, capture=False, env=None):
         kwargs["env"] = env
     return subprocess.run(cmd, **kwargs)
 
+
+def _pip_installed(pkg_spec):
+    import importlib.util
+    name = pkg_spec.split(">=")[0].split("==")[0].split("[")[0].split("<")[0].strip()
+    _IMPORT_MAP = {
+        "python-nmap": "nmap", "dnspython": "dns", "pysnmp": "pysnmp",
+        "webdriver-manager": "webdriver_manager", "ssh-audit": "ssh_audit",
+        "beautifulsoup4": "bs4", "pyyaml": "yaml", "Pillow": "PIL",
+        "python-whois": "whois", "pyOpenSSL": "OpenSSL",
+        "charset-normalizer": "charset_normalizer",
+    }
+    mod = _IMPORT_MAP.get(name, name.replace("-", "_"))
+    try:
+        return importlib.util.find_spec(mod) is not None
+    except (ModuleNotFoundError, ValueError):
+        return False
+
+
 # ---------------------------------------------------------------------------
 # brew helper — NEVER run as root
 # ---------------------------------------------------------------------------
@@ -282,19 +300,13 @@ PIP_PACKAGES = [
 
 def install_pip():
     banner("Phase: pip packages")
-    base = [p for p in PIP_PACKAGES if not p.startswith("bloodhound")]
-    run([sys.executable, "-m", "pip", "install", "--break-system-packages"] + base, check=False)
-    fragile = [p for p in PIP_PACKAGES if p.startswith("bloodhound")]
-    for pkg in fragile:
-        if pkg.startswith("bloodhound"):
-            try:
-                __import__("bloodhound")
-                info("bloodhound already installed — skipping")
-                continue
-            except ImportError:
-                pass
-        info(f"Installing {pkg} separately …")
-        run([sys.executable, "-m", "pip", "install", "--break-system-packages", pkg], check=False)
+    pip = [sys.executable, "-m", "pip"]
+    for pkg in PIP_PACKAGES:
+        if _pip_installed(pkg):
+            info(f"  ✓ {pkg} already installed")
+            continue
+        info(f"pip install {pkg} …")
+        run(pip + ["install", "--break-system-packages", pkg], check=False)
 
 # ---------------------------------------------------------------------------
 # Go tools
@@ -618,8 +630,12 @@ def install_odat():
         return
     git_clone_or_update("https://github.com/quentinhardy/odat.git", "/opt/odat")
     info("Installing odat Python dependencies …")
-    run([sys.executable, "-m", "pip", "install", "--break-system-packages",
-         "impacket", "colorlog", "cx_Oracle"], check=False)
+    for dep in ["impacket", "colorlog", "cx_Oracle"]:
+        if _pip_installed(dep):
+            info(f"  ✓ {dep} already installed")
+        else:
+            run([sys.executable, "-m", "pip", "install", "--break-system-packages",
+                 dep], check=False)
     odat_py = "/opt/odat/odat.py"
     if os.path.isfile(odat_py):
         os.chmod(odat_py, 0o755)
@@ -638,8 +654,12 @@ def install_msdat():
         return
     git_clone_or_update("https://github.com/quentinhardy/msdat.git", "/opt/msdat")
     info("Installing msdat Python dependencies …")
-    run([sys.executable, "-m", "pip", "install", "--break-system-packages",
-         "impacket", "colorlog"], check=False)
+    for dep in ["impacket", "colorlog"]:
+        if _pip_installed(dep):
+            info(f"  ✓ {dep} already installed")
+        else:
+            run([sys.executable, "-m", "pip", "install", "--break-system-packages",
+                 dep], check=False)
     msdat_py = "/opt/msdat/msdat.py"
     if os.path.isfile(msdat_py):
         os.chmod(msdat_py, 0o755)
@@ -654,8 +674,12 @@ def install_xsstrike():
         return
     git_clone_or_update("https://github.com/s0md3v/XSStrike.git", "/opt/XSStrike")
     info("Installing XSStrike Python dependencies …")
-    run([sys.executable, "-m", "pip", "install", "--break-system-packages",
-         "requests", "bs4", "fuzzywuzzy"], check=False)
+    for dep in ["requests", "beautifulsoup4", "fuzzywuzzy"]:
+        if _pip_installed(dep):
+            info(f"  ✓ {dep} already installed")
+        else:
+            run([sys.executable, "-m", "pip", "install", "--break-system-packages",
+                 dep], check=False)
 
 
 def install_enumdb():
@@ -709,8 +733,12 @@ def install_git():
     def _adenum():
         git_clone_or_update("https://github.com/SecuProject/ADenum.git", "/opt/ADenum")
         info("Installing ADenum Python dependencies …")
-        run([sys.executable, "-m", "pip", "install", "--break-system-packages",
-             "ldap3", "impacket", "gssapi"], check=False)
+        for dep in ["ldap3", "impacket", "gssapi"]:
+            if _pip_installed(dep):
+                info(f"  ✓ {dep} already installed")
+            else:
+                run([sys.executable, "-m", "pip", "install", "--break-system-packages",
+                     dep], check=False)
     _safe(_adenum, "ADenum")
 
     _safe(lambda: git_clone_or_update("https://github.com/lgandx/Responder.git", "/opt/Responder"), "Responder")
