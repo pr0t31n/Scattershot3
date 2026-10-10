@@ -8982,6 +8982,28 @@ def _port_scan_worker(
                                      hostname=hostname, scope=scope)
             except Exception as exc:
                 _tprint(f"{Fore.RED}  [!] RPC null session error {ip}:{port}: {exc}{Style.RESET_ALL}")
+            if svc_name in ("rpcbind",) or port == 111:
+                try:
+                    output_mgr.log_action_item(
+                        "rpc_enum", "Manual (rpcinfo / nfs)", f"{ip}:{port}",
+                        ip, port,
+                        title="RPC: Enumerate Exported Services",
+                        description=(
+                            f"RPC portmapper detected on {ip}:{port}. Enumerate "
+                            f"registered RPC services to identify NFS exports, "
+                            f"mountd, statd, and other exploitable services.\n"
+                            f"Next steps:\n"
+                            f"  1. rpcinfo -p {ip}\n"
+                            f"  2. showmount -e {ip}\n"
+                            f"  3. nmap -sV -p 111 --script=rpcinfo,nfs-ls,nfs-showmount {ip}\n"
+                            f"  4. If NFS exports found: mount -t nfs {ip}:/<share> /mnt/nfs"
+                        ),
+                        hostname=hostname,
+                        source_finding="RPC: Null Session Permitted",
+                        priority="MEDIUM",
+                    )
+                except Exception:
+                    pass
 
         # ── libSSH auth bypass check ───────────────────────────────────
         # Banner was already grabbed above; pass it through for version check.
@@ -9379,6 +9401,80 @@ def _port_scan_worker(
                                   output_mgr=output_mgr)
             except Exception as exc:
                 _tprint(f"{Fore.RED}  [!] NTP monlist probe error {ip}:{port}: {exc}{Style.RESET_ALL}")
+            try:
+                output_mgr.log_action_item(
+                    "ntp_enum", "Manual (ntpq)", f"{ip}:123",
+                    ip, 123,
+                    title="NTP: Version and Mode 6 Disclosure Check",
+                    description=(
+                        f"NTP service detected on {ip}:123. Check for version "
+                        f"disclosure and mode 6 query access which leak server "
+                        f"configuration, OS information, and peer topology.\n"
+                        f"Next steps:\n"
+                        f"  1. ntpq -c readvar {ip}   (version + OS disclosure)\n"
+                        f"  2. ntpq -c peers {ip}     (upstream peer topology)\n"
+                        f"  3. ntpq -c associations {ip}  (mode 6 config query)\n"
+                        f"  4. nmap -sU -p 123 --script ntp-info,ntp-monlist {ip}"
+                    ),
+                    hostname=hostname,
+                    source_finding="NTP: Monlist Amplification (CVE-2013-5211)",
+                    priority="LOW",
+                )
+            except Exception:
+                pass
+
+        # ── LDAP null-bind + anonymous enumeration ─────────────────
+        is_ldap = (svc_name in ("ldap", "ldaps", "ldapssl") or port in (389, 636, 3268, 3269))
+        if is_ldap and not getattr(args, "no_enum", False):
+            try:
+                _ldap_host_dir = output_mgr.host_path(ip)
+                probe_ldap_null_bind(ip, port, output_dir=_ldap_host_dir,
+                                     output_mgr=output_mgr)
+            except Exception as exc:
+                _tprint(f"{Fore.RED}  [!] LDAP null-bind probe error {ip}:{port}: {exc}{Style.RESET_ALL}")
+            if port == 389:
+                try:
+                    output_mgr.log_action_item(
+                        "ldap_cleartext", "Manual (Wireshark / ldapsearch)",
+                        f"{ip}:{port}", ip, port,
+                        title="LDAP: Cleartext Transport Check",
+                        description=(
+                            f"LDAP service on {ip}:389 (unencrypted port). Verify "
+                            f"whether STARTTLS is enforced or if credentials transmit "
+                            f"in cleartext.\n"
+                            f"Next steps:\n"
+                            f"  1. ldapsearch -x -H ldap://{ip} -s base   (test cleartext bind)\n"
+                            f"  2. ldapsearch -x -ZZ -H ldap://{ip} -s base   (test STARTTLS)\n"
+                            f"  3. If STARTTLS fails: finding 'LDAP: Cleartext Authentication Permitted'"
+                        ),
+                        hostname=hostname,
+                        source_finding="LDAP: Anonymous Bind (rootDSE Exposed)",
+                        priority="MEDIUM",
+                    )
+                except Exception:
+                    pass
+            try:
+                output_mgr.log_action_item(
+                    "ldap_channel_binding", "Manual (ldapsearch / CrackMapExec)",
+                    f"{ip}:{port}", ip, port,
+                    title="LDAP: Channel Binding and Signing Assessment",
+                    description=(
+                        f"LDAP service on {ip}:{port}. Test whether LDAP signing "
+                        f"and channel binding (EPA) are enforced — both are required "
+                        f"to prevent NTLM relay attacks against LDAP.\n"
+                        f"Next steps:\n"
+                        f"  1. crackmapexec ldap {ip} -u '' -p '' -M ldap-checker\n"
+                        f"  2. ntlmrelayx.py -t ldap://{ip} --delegate-access   (test relay)\n"
+                        f"  3. ldapdomaindump {ip}   (enumerate if signing not required)\n"
+                        f"  4. Check GPO: 'Domain controller: LDAP server signing requirements'\n"
+                        f"  5. Check GPO: 'Domain controller: LDAP server channel binding token requirements'"
+                    ),
+                    hostname=hostname,
+                    source_finding="LDAP: Anonymous Bind (rootDSE Exposed)",
+                    priority="HIGH",
+                )
+            except Exception:
+                pass
 
         # ── DNS recursion + zone transfer (NSE) ──────────────────────
         is_dns = (svc_name in ("domain", "dns", "dns-udp") or port == 53)
@@ -10128,7 +10224,7 @@ def probe_ntp_monlist(ip: str, *, output_dir: "Path", output_mgr) -> dict:
         addr_lines = [l for l in addr_lines if re.match(r"^\s*\d+\.\d+\.\d+\.\d+", l)]
         if addr_lines and len(addr_lines) > 5:
             output_mgr.log_finding(
-                title=f"NTP monlist Permitted — DDoS Amplification Vector (CVE-2013-5211)",
+                title="NTP: Monlist Amplification (CVE-2013-5211)",
                 ip=ip, port=123, command=" ".join(monlist_cmd),
                 hostname="", risk="HIGH",
                 description=(
@@ -10336,7 +10432,7 @@ def probe_ldap_null_bind(ip: str, port: int, *, output_dir: "Path",
             body += f"\n\n── Anonymous Enumeration ──\n{_enum_body[:6000]}"
 
             output_mgr.log_finding(
-                title=f"Enumeration: LDAP Anonymous Enumeration — {len(_enum_users)} Users, {len(_enum_groups)} Groups Discovered",
+                title=f"LDAP: Anonymous Enumeration — {len(_enum_users)} Users, {len(_enum_groups)} Groups Discovered",
                 ip=ip, port=port,
                 command=f"ldap3 anonymous enumeration {ip}:{port}",
                 hostname="", risk="MEDIUM",
@@ -10363,7 +10459,7 @@ def probe_ldap_null_bind(ip: str, port: int, *, output_dir: "Path",
                                        info_dump, re.IGNORECASE))
         _risk = "HIGH" if leaks_ncs and leaks_forest else "MEDIUM"
         output_mgr.log_finding(
-            title=f"LDAP Anonymous Bind Permitted (rootDSE exposed)",
+            title="LDAP: Anonymous Bind (rootDSE Exposed)",
             ip=ip, port=port,
             command=f"ldap3 anonymous bind + rootDSE search against {ip}:{port}",
             hostname="", risk=_risk,
@@ -17659,7 +17755,7 @@ def run_rpc_null_session(
             except Exception:
                 _rpc_rel = None
             output_mgr.log_finding(
-                title="RPC Null Session Permitted",
+                title="RPC: Null Session Permitted",
                 ip=ip, port=port,
                 command=cmd,
                 hostname=hostname,
@@ -27300,7 +27396,7 @@ def run_ldapdomaindump(
                         for u in users[:30]
                     ]
                     output_mgr.log_finding(
-                        title="Enumeration: LDAP Domain Users",
+                        title="LDAP: Domain User Enumeration",
                         ip=dc_ip, port=389, hostname=hostname,
                         command=" ".join(str(c) for c in cmd), risk="MEDIUM",
                         description=f"ldapdomaindump enumerated {len(users)} domain accounts from {dc_ip}.",
@@ -31982,6 +32078,81 @@ _SWEEP_MANUAL_RULES: list[tuple[list[str], str, str, str, str]] = [
      "  1. showmount -e {ip}\n"
      "  2. mount -t nfs {ip}:/<export> /mnt/nfs",
      "MEDIUM"),
+    (["rdp", "nla not enforced", "nla not supported", "no tls or nla",
+      "null encryption", "weak encryption", "native encryption"],
+     "Manual (xfreerdp / Crowbar)",
+     "RDP: Verify Authentication Downgrade and MitM",
+     "RDP on {ip}:{port} has weak or missing encryption/NLA.\n"
+     "Next steps:\n"
+     "  1. xfreerdp /v:{ip} /sec:nla   (test if NLA truly enforced)\n"
+     "  2. xfreerdp /v:{ip} /sec:rdp   (test legacy RDP encryption)\n"
+     "  3. seth.py {ip}   (RDP MitM credential capture)\n"
+     "  4. crowbar -b rdp -s {ip}/32 -u admin -C passwords.txt",
+     "HIGH"),
+    (["smtp open.*relay", "open mail relay"],
+     "Manual (swaks / telnet)",
+     "SMTP: Verify Open Relay for Spoofing",
+     "SMTP on {ip}:{port} may permit unauthenticated mail relay.\n"
+     "Next steps:\n"
+     "  1. swaks --to test@external.com --from spoof@target.com --server {ip}\n"
+     "  2. telnet {ip} {port} → EHLO test → MAIL FROM:<spoof@target.com>\n"
+     "  3. If relay confirmed: test SPF/DKIM/DMARC for target domain",
+     "HIGH"),
+    (["telnet", "cleartext protocol"],
+     "Manual (telnet / Wireshark)",
+     "Insecure Protocol: Verify Telnet Credential Capture",
+     "Telnet service on {ip}:{port} transmits credentials in cleartext.\n"
+     "Next steps:\n"
+     "  1. telnet {ip} {port}   (test login prompt)\n"
+     "  2. Wireshark capture → filter: telnet   (verify cleartext creds)\n"
+     "  3. hydra -l admin -P passwords.txt telnet://{ip}",
+     "HIGH"),
+    (["java rmi", "rmi registry"],
+     "Manual (Metasploit / BaRMIe)",
+     "Java RMI: Enumerate Remote Objects and Test Deserialization",
+     "Java RMI registry exposed on {ip}:{port}.\n"
+     "Next steps:\n"
+     "  1. msfconsole → use auxiliary/scanner/misc/java_rmi_server\n"
+     "  2. BaRMIe -enum {ip} {port}\n"
+     "  3. ysoserial exploit testing if deserialization gadgets found",
+     "HIGH"),
+    (["mongodb", "unauthenticated"],
+     "Manual (mongosh / Metasploit)",
+     "Unauthenticated Access: Enumerate MongoDB Data",
+     "MongoDB on {ip}:{port} allows unauthenticated access.\n"
+     "Next steps:\n"
+     "  1. mongosh --host {ip} --port {port}\n"
+     "  2. show dbs → use <db> → show collections\n"
+     "  3. db.getCollection('users').find().limit(10)",
+     "CRITICAL"),
+    (["docker", "unauthenticated", "docker api"],
+     "Manual (docker / curl)",
+     "Unauthenticated Access: Enumerate Docker Containers",
+     "Docker API exposed on {ip}:{port} without authentication.\n"
+     "Next steps:\n"
+     "  1. curl http://{ip}:{port}/containers/json\n"
+     "  2. curl http://{ip}:{port}/images/json\n"
+     "  3. docker -H tcp://{ip}:{port} ps\n"
+     "  4. Test container escape: docker -H tcp://{ip}:{port} run -v /:/host -it alpine chroot /host",
+     "CRITICAL"),
+    (["cassandra", "unauthenticated", "cql access"],
+     "Manual (cqlsh)",
+     "Unauthenticated Access: Enumerate Cassandra Keyspaces",
+     "Cassandra on {ip}:{port} allows unauthenticated CQL access.\n"
+     "Next steps:\n"
+     "  1. cqlsh {ip} {port}\n"
+     "  2. DESCRIBE KEYSPACES;\n"
+     "  3. SELECT * FROM system.local;",
+     "HIGH"),
+    (["couchdb", "unauthenticated"],
+     "Manual (curl)",
+     "Unauthenticated Access: Enumerate CouchDB Databases",
+     "CouchDB on {ip}:{port} allows unauthenticated listing.\n"
+     "Next steps:\n"
+     "  1. curl http://{ip}:{port}/_all_dbs\n"
+     "  2. curl http://{ip}:{port}/_users/_all_docs\n"
+     "  3. curl http://{ip}:{port}/_config   (admin party check)",
+     "HIGH"),
 ]
 
 
