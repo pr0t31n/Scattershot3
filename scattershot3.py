@@ -30728,7 +30728,7 @@ def main():
         _pause = _pp.PauseManager(_early_proj_root, "scattershot3")
         _pause.start_watcher(
             checkpoint_callback=lambda: _pm.save_runtime_state({"paused": True}),
-            grace_period=60,
+            grace_period=30,
         )
         _pause.log_run_type(bool(_pm.get_state().get("completed_phases")))
 
