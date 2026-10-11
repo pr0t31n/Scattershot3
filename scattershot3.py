@@ -15360,8 +15360,9 @@ def record_software(
         _sw_label = f"{_sw_label} {clean_ver}"
     _src = method.split()[0].lower()
     _sw_inv_rel = str(output_mgr.software_inventory.relative_to(output_mgr.root))
+    _sw_title_prefix = "Software Version Detected" if clean_ver else "Software Identified"
     output_mgr.log_finding(
-        title=f"Software Version Detected: {_sw_label}",
+        title=f"{_sw_title_prefix}: {_sw_label}",
         ip=ip,
         port=port,
         command=[],
