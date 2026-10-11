@@ -27,6 +27,7 @@ W  = "\033[0m"
 def banner(msg):  print(f"\n{B}{'='*60}{W}\n{C}  {msg}{W}\n{B}{'='*60}{W}")
 def info(msg):    print(f"{G}[+]{W} {msg}")
 def warn(msg):    print(f"{Y}[!]{W} {msg}")
+def note(msg):    print(f"{Y}[i]{W} {msg}")
 def error(msg):   print(f"{R}[x]{W} {msg}")
 def step(msg):    print(f"{B}[>]{W} {msg}")
 
@@ -105,7 +106,7 @@ def brew_install(pkg, cask=False):
                 brew_path = p
                 break
     if not brew_path:
-        warn(f"brew not found — skipping {pkg}")
+        note(f"brew not found — skipping {pkg}")
         return
 
     cmd = [brew_path, "install"]
@@ -115,7 +116,7 @@ def brew_install(pkg, cask=False):
     if is_root():
         sudo_user = get_sudo_user()
         if not sudo_user:
-            warn(f"Running as root with no SUDO_USER — cannot run brew safely. Skipping {pkg}.")
+            note(f"Running as root with no SUDO_USER — cannot run brew safely. Skipping {pkg}.")
             return
         cmd = ["sudo", "-u", sudo_user] + cmd
 
@@ -262,9 +263,9 @@ def install_system():
         brew_install("wpscanteam/tap/wpscan")
         install_nbtscan_from_source()
     elif OS == "windows":
-        warn("Windows: system package installation not supported. Install tools manually.")
+        note("Windows: system package installation not supported. Install tools manually.")
     else:
-        warn(f"Unknown OS '{OS}' — skipping system packages.")
+        note(f"Unknown OS '{OS}' — skipping system packages.")
 
 # ---------------------------------------------------------------------------
 # pip
@@ -335,8 +336,8 @@ def install_go():
     banner("Phase: go tools")
     go_bin = find_go()
     if not go_bin:
-        warn("go not found in PATH — skipping Go tool installation.")
-        warn("Install Go from https://go.dev/dl/ and re-run with --skip-apt --skip-pip --skip-git")
+        note("go not found in PATH — skipping Go tool installation.")
+        note("Install Go from https://go.dev/dl/ and re-run with --skip-apt --skip-pip --skip-git")
         return
 
     env = os.environ.copy()
@@ -594,7 +595,7 @@ def install_rustscan():
             return
 
     warn("rustscan installation failed via all fallbacks.")
-    warn("Manual install: https://github.com/bee-san/RustScan/releases")
+    note("Manual install: https://github.com/bee-san/RustScan/releases")
 
 
 def install_kerbrute():
@@ -615,7 +616,7 @@ def install_kerbrute():
         run([go_bin, "install", "github.com/ropnop/kerbrute@latest"],
             check=False, env=env)
     else:
-        warn("kerbrute not found and go not available — install manually: https://github.com/ropnop/kerbrute")
+        note("kerbrute not found and go not available — install manually: https://github.com/ropnop/kerbrute")
 
 
 def install_odat():
@@ -722,7 +723,7 @@ def _safe(fn, label):
         fn()
     except Exception as e:
         error(f"{label} failed: {e}")
-        warn(f"Continuing with remaining tools …")
+        note(f"Continuing with remaining tools …")
 
 
 def install_git():
@@ -787,7 +788,7 @@ def install_vulners_nse():
     banner("Phase: vulners.nse")
     dirs = _NMAP_SCRIPT_DIRS.get(OS, [])
     if not dirs:
-        warn(f"No known nmap scripts directory for OS '{OS}' — skipping vulners.nse")
+        note(f"No known nmap scripts directory for OS '{OS}' — skipping vulners.nse")
         return
 
     # Already installed?
@@ -804,8 +805,8 @@ def install_vulners_nse():
             target = os.path.join(d, "vulners.nse")
             break
     if not target:
-        warn(f"No writable nmap scripts dir found in {dirs} — skipping vulners.nse")
-        warn("    (Re-run install.py with sudo, or download manually.)")
+        note(f"No writable nmap scripts dir found in {dirs} — skipping vulners.nse")
+        note("    (Re-run install.py with sudo, or download manually.)")
         return
 
     info(f"Downloading vulners.nse → {target}")
@@ -843,7 +844,7 @@ def install_msfconsole():
         info("Installing metasploit via brew cask …")
         brew_install("metasploit", cask=True)
     else:
-        warn("msfconsole not found. Install manually: https://docs.metasploit.com/docs/using-metasploit/getting-started/nightly-installers.html")
+        note("msfconsole not found. Install manually: https://docs.metasploit.com/docs/using-metasploit/getting-started/nightly-installers.html")
 
 # ---------------------------------------------------------------------------
 # Symlinks
@@ -862,7 +863,7 @@ def symlink_force(src, dest):
         os.symlink(src, dest)
         info(f"Symlink: {dest} -> {src}")
     except PermissionError:
-        warn(f"Cannot create symlink {dest} — not root.")
+        note(f"Cannot create symlink {dest} — not root.")
     except Exception as e:
         warn(f"Symlink {dest} failed: {e}")
 
@@ -941,9 +942,9 @@ def print_summary(skips):
         print(f"  {p:10s} {status}")
     print()
     info("Run: scattershot3 --help   or   ss3 --help")
-    warn("chromedriver is managed automatically by webdriver-manager — do NOT install chromium-driver manually.")
-    warn("testssl.sh installed from git (/opt/testssl.sh) — apt version NOT installed (outdated).")
-    warn("gobuster installed via go install — apt version NOT installed (outdated).")
+    note("chromedriver is managed automatically by webdriver-manager — do NOT install chromium-driver manually.")
+    note("testssl.sh installed from git (/opt/testssl.sh) — apt version NOT installed (outdated).")
+    note("gobuster installed via go install — apt version NOT installed (outdated).")
 
 # ---------------------------------------------------------------------------
 # Main
@@ -970,22 +971,22 @@ def main():
     if not args.skip_system:
         install_system()
     else:
-        skips.add("system"); warn("Skipping system packages.")
+        skips.add("system"); note("Skipping system packages.")
 
     if not args.skip_pip:
         install_pip()
     else:
-        skips.add("pip"); warn("Skipping pip packages.")
+        skips.add("pip"); note("Skipping pip packages.")
 
     if not args.skip_go:
         install_go()
     else:
-        skips.add("go"); warn("Skipping go tools.")
+        skips.add("go"); note("Skipping go tools.")
 
     if not args.skip_git:
         install_git()
     else:
-        skips.add("git"); warn("Skipping git tools.")
+        skips.add("git"); note("Skipping git tools.")
 
     install_msfconsole()
     install_symlinks()
