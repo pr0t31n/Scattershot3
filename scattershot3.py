@@ -7580,19 +7580,32 @@ def probe_uncertain_and_nonstandard_ports(
                             for n in _cert_all_names
                         )
                         if not _wildcard_match:
+                            _cert_hn_is_ip = False
+                            try:
+                                ipaddress.ip_address(hostname)
+                                _cert_hn_is_ip = True
+                            except ValueError:
+                                pass
+                            _cert_mm_risk = "INFO" if _cert_hn_is_ip else "MEDIUM"
+                            _cert_mm_desc = (
+                                f"The TLS certificate at {ip}:{_port} does not "
+                                f"match the IP address '{hostname}'. This is expected "
+                                "when scanning by IP rather than FQDN, as certificates "
+                                "rarely include IP SANs. Verify with the actual hostname."
+                            ) if _cert_hn_is_ip else (
+                                f"The TLS certificate at {ip}:{_port} does not "
+                                f"match the expected hostname '{hostname}'. "
+                                f"Certificate names: {', '.join(sorted(_cert_all_names))}. "
+                                f"This may indicate a misconfigured service or "
+                                f"enable MITM attacks when certificate validation "
+                                f"is improperly handled."
+                            )
                             output_mgr.log_finding(
                                 title="TLS Certificate Hostname Mismatch",
                                 ip=ip, port=_port, hostname=hostname,
                                 command=f"openssl s_client -connect {ip}:{_port} -servername {hostname}",
-                                risk="MEDIUM",
-                                description=(
-                                    f"The TLS certificate at {ip}:{_port} does not "
-                                    f"match the expected hostname '{hostname}'. "
-                                    f"Certificate names: {', '.join(sorted(_cert_all_names))}. "
-                                    f"This may indicate a misconfigured service or "
-                                    f"enable MITM attacks when certificate validation "
-                                    f"is improperly handled."
-                                ),
+                                risk=_cert_mm_risk,
+                                description=_cert_mm_desc,
                                 output=(
                                     f"Expected: {hostname}\n"
                                     f"Certificate CN: {_cert_cn}\n"
@@ -11678,11 +11691,22 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                     }
                     _lucky13_risk = "MEDIUM" if output_mgr.scope == "ext" else "LOW"
                     _sweet32_risk = "MEDIUM" if output_mgr.scope == "ext" else "LOW"
+                    # LOGJAM: distinguish true LOGJAM (export ciphers / small DH)
+                    # from common-prime detection with adequate DH size
+                    _logjam_unconfirmed = False
+                    if name == "LOGJAM":
+                        _lj_lo = status_lo
+                        _lj_has_export = "export" in _lj_lo
+                        _lj_small_dh = bool(re.search(
+                            r'(?:512|768|1024)\s*(?:bit|b\b)', _lj_lo))
+                        if not _lj_has_export and not _lj_small_dh:
+                            _logjam_unconfirmed = True
                     # Confirmed-vulnerable risk by name
                     _confirmed_risk = (
                         "CRITICAL" if name in ("Heartbleed", "ROBOT", "DROWN", "POODLE")
                         else _lucky13_risk if name == "LUCKY13"
                         else _sweet32_risk if name == "SWEET32"
+                        else "INFO" if _logjam_unconfirmed
                         else "HIGH"
                     )
                     # Potential-only matches downgrade two notches to INFO
@@ -11691,6 +11715,8 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                     _emit_title = (
                         f"SSL/TLS Vulnerability (Potential): {name}"
                         if severity == "POTENTIAL"
+                        else f"SSL/TLS Vulnerability [UNCONFIRMED]: {name}"
+                        if _logjam_unconfirmed
                         else f"SSL/TLS Vulnerability: {name}"
                     )
                     _emit_desc = _TESTSSL_DESCS.get(
@@ -11698,6 +11724,14 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                         f"testssl detected {name} on this TLS endpoint. "
                         "Review the testssl output file for full details."
                     )
+                    if _logjam_unconfirmed:
+                        _emit_desc = (
+                            "[UNCONFIRMED] testssl flagged LOGJAM due to a common "
+                            "DH prime, but no export ciphers or small DH parameters "
+                            "were detected. True LOGJAM (CVE-2015-4000) requires "
+                            "DHE_EXPORT cipher suites or DH parameters <1024 bits. "
+                            "Verify manually whether export ciphers are offered."
+                        )
                     if severity == "POTENTIAL":
                         _emit_desc = (
                             f"[POTENTIAL — testssl reported 'potentially "
@@ -11996,7 +12030,13 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                             if _tsf_sev in ("OK", "INFO"):
                                 continue
                             _tsf_title = "SSL/TLS Certificate: Hostname Mismatch"
-                            _tsf_risk  = "MEDIUM"
+                            _tsf_hn_is_ip = False
+                            try:
+                                ipaddress.ip_address(hostname)
+                                _tsf_hn_is_ip = True
+                            except (ValueError, TypeError):
+                                pass
+                            _tsf_risk = "INFO" if _tsf_hn_is_ip else "MEDIUM"
                         elif _tsf_id == "cert_trust":
                             if _tsf_sev in ("OK", "INFO"):
                                 continue
@@ -12113,6 +12153,24 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                                 continue
                             _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id}"
                             _tsf_risk  = "MEDIUM" if output_mgr.scope == "ext" else "LOW"
+                        elif _tsf_id == "LOGJAM":
+                            if "not vulnerable" in _tsf_finding_lo:
+                                continue
+                            _lj_has_export = "export" in _tsf_finding_lo
+                            _lj_small_dh = bool(re.search(
+                                r'(?:512|768|1024)\s*(?:bit|b\b)', _tsf_finding_lo))
+                            if _lj_has_export or _lj_small_dh:
+                                _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id}"
+                                _tsf_risk  = "HIGH"
+                            else:
+                                _tsf_title = f"SSL/TLS Vulnerability [UNCONFIRMED]: {_tsf_id}"
+                                _tsf_risk  = "INFO"
+                                _tsf_finding = (
+                                    "[UNCONFIRMED] testssl flagged LOGJAM due to a "
+                                    "common DH prime, but no export ciphers or small "
+                                    "DH parameters were detected. Verify manually. "
+                                    "Original: " + _tsf_finding
+                                )
                         # ── Auto-validated checks (testssl IDs we re-confirm
                         # independently and assign risk based on impact) ───
                         elif _tsf_id == "insecure_redirect":
@@ -16604,6 +16662,41 @@ def _overlay_url_bar(img_path, url):
         pass
 
 
+def _register_screenshot(root: Path, png_path, url: str = "",
+                         ip: str = "", port: int = 0,
+                         hostname: str = "", scheme: str = "",
+                         title: str = "", description: str = ""):
+    """Copy a screenshot PNG into <root>/screenshots/ with a JSON sidecar.
+
+    The screenshots/ directory is the canonical location for the Intelligence
+    Screenshots tab — Crucible reads sidecars here instead of parsing findings.
+    """
+    try:
+        src = Path(png_path)
+        if not src.is_file():
+            return
+        ss_dir = root / "screenshots"
+        ss_dir.mkdir(parents=True, exist_ok=True)
+        dest = ss_dir / src.name
+        if dest.exists():
+            stem, suf = src.stem, src.suffix
+            for i in range(1, 999):
+                dest = ss_dir / f"{stem}_{i}{suf}"
+                if not dest.exists():
+                    break
+        shutil.copy2(str(src), str(dest))
+        sidecar = {
+            "url": url, "ip": ip, "port": int(port) if port else 0,
+            "hostname": hostname,
+            "scheme": scheme or ("https" if port == 443 else "http"),
+            "title": title, "description": description,
+            "timestamp": datetime.datetime.now().isoformat(),
+        }
+        dest.with_suffix(".json").write_text(json.dumps(sidecar, indent=2))
+    except Exception:
+        pass
+
+
 def take_web_screenshot(
     ip: str,
     port: int,
@@ -16687,6 +16780,11 @@ def take_web_screenshot(
         _tprint(
             f"  {Fore.GREEN}[+] Screenshot: {ip}:{port} → {out_path.name}{Style.RESET_ALL}"
         )
+        _register_screenshot(output_mgr.root, out_path, url=final_url,
+                             ip=ip, port=port, hostname=hostname or "",
+                             scheme=scheme,
+                             title="Web Screenshot",
+                             description=f"Web service screenshot at {scheme}://{host_part}:{port}")
         return str(out_path)
 
     except Exception as exc:
@@ -18857,6 +18955,11 @@ def check_tomcat_manager(
                             f"  {Fore.GREEN}[+] Tomcat screenshot: "
                             f"{url} → {shot_path.name}{Style.RESET_ALL}"
                         )
+                        _register_screenshot(output_mgr.root, shot_path, url=_tc_final_url,
+                                             ip=ip, port=port, hostname=hostname or "",
+                                             scheme=scheme,
+                                             title="Tomcat Manager Screenshot",
+                                             description=f"Apache Tomcat manager page at {url}")
                     finally:
                         try:
                             driver.quit()
@@ -24644,6 +24747,11 @@ def run_vnc_check(
                                             _tprint(
                                                 f"  {Fore.GREEN}[+] VNC screenshot: "
                                                 f"{_snap_file.name}{Style.RESET_ALL}")
+                                            if output_mgr:
+                                                _register_screenshot(output_mgr.root, _snap_file,
+                                                                     ip=ip, port=port, scheme="vnc",
+                                                                     title="VNC No-Auth Screenshot",
+                                                                     description="VNC framebuffer capture — no authentication required")
                                         else:
                                             lines.append("Framebuffer read incomplete — native screenshot skipped")
                     except Exception as _native_exc:
@@ -24666,6 +24774,11 @@ def run_vnc_check(
                                     _tprint(
                                         f"  {Fore.GREEN}[+] VNC screenshot (vncsnapshot): "
                                         f"{_snap_file.name}{Style.RESET_ALL}")
+                                    if output_mgr:
+                                        _register_screenshot(output_mgr.root, _snap_file,
+                                                             ip=ip, port=port, scheme="vnc",
+                                                             title="VNC No-Auth Screenshot",
+                                                             description="VNC framebuffer capture — no authentication required")
                             except (subprocess.TimeoutExpired, Exception):
                                 pass
 
@@ -27917,6 +28030,7 @@ def _verify_hydra_credential(
 _CSRF_INDICATORS = (
     "csrf", "xsrf", "antiforgery", "authenticity_token",
     "verification_token", "form_token", "form_key",
+    "viewstate", "eventvalidation",
 )
 
 
@@ -30118,6 +30232,17 @@ def scan_scope(
                        status="running")
 
             for _o365d in _o365_domains:
+                _o365_ev_dir = output_mgr.root / "o365"
+                _o365_ev_dir.mkdir(parents=True, exist_ok=True)
+                _o365_det_file = _o365_ev_dir / f"{_o365d}_detection.txt"
+                _o365_det_file.write_text(
+                    f"O365 Tenant Detection Evidence\n"
+                    f"Domain: {_o365d}\n"
+                    f"Method: DNS MX lookup + OpenID endpoint check\n"
+                    f"Result: O365 tenant confirmed\n",
+                    encoding="utf-8",
+                )
+                _o365_det_rel = str(_o365_det_file.relative_to(output_mgr.root))
                 output_mgr.log_finding(
                     title="Discovery: O365 Tenant Detected",
                     ip="", port=0, hostname=_o365d,
@@ -30131,6 +30256,7 @@ def scan_scope(
                         f"O365 account enumeration and credential spray attacks."
                     ),
                     output=f"O365 tenant confirmed for {_o365d}",
+                    output_file=_o365_det_rel,
                     affected=_o365d,
                     sources="o365-detection",
                     remediation=(
@@ -30185,6 +30311,16 @@ def scan_scope(
                         else f"POST login.microsoftonline.com"
                              f"/common/GetCredentialType"
                     )
+                    _enum_ev_file = _o365_ev_dir / f"{_o365d}_enum_results.txt"
+                    _enum_ev_file.write_text(
+                        f"O365 Account Enumeration Results\n"
+                        f"Domain: {_o365d}\n"
+                        f"Source: {_enum_source}\n"
+                        f"Valid accounts ({len(_valid)}):\n"
+                        + "\n".join(f"  {e}" for e in _valid) + "\n",
+                        encoding="utf-8",
+                    )
+                    _enum_ev_rel = str(_enum_ev_file.relative_to(output_mgr.root))
                     output_mgr.log_finding(
                         title="Enumeration: O365 Account Enumeration",
                         ip="", port=0, hostname=_o365d,
@@ -30204,6 +30340,7 @@ def scan_scope(
                             f"Valid accounts ({len(_valid)}):\n"
                             f"{_sample}{_extra}"
                         ),
+                        output_file=_enum_ev_rel,
                         affected=_o365d,
                         sources=_enum_source,
                         remediation=(
