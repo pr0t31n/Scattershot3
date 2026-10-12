@@ -161,6 +161,8 @@ APT_PACKAGES = [
     "python3-pip", "python3-dev",
     "git", "golang-go",
     "libsasl2-dev", "libldap2-dev", "libkrb5-dev", "libssl-dev",
+    "x11-utils",
+    "brutespray",
 ]
 DNF_PACKAGES = [
     "nmap", "sslscan",
@@ -176,6 +178,8 @@ DNF_PACKAGES = [
     "git", "golang",
     "openssl-devel", "cyrus-sasl-devel", "openldap-devel", "krb5-devel",
     "epel-release",
+    "xorg-x11-utils",
+    "brutespray",
 ]
 ZYPPER_PACKAGES = [
     "nmap", "sslscan",
@@ -188,6 +192,7 @@ ZYPPER_PACKAGES = [
     "python3-pip", "python3-devel",
     "git", "golang",
     "openssl-devel",
+    "xdpyinfo",
 ]
 BREW_PACKAGES = [
     "nmap", "sslscan", "hydra", "sqlmap",

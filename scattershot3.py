@@ -9268,6 +9268,15 @@ def _port_scan_worker(
             except Exception as exc:
                 _tprint(f"{Fore.RED}  [!] RMI check error {ip}:{port}: {exc}{Style.RESET_ALL}")
 
+        # ── X11 open display check ────────────────────────────────────
+        is_x11 = (svc_name in ("x11", "X11") or 6000 <= port <= 6063)
+        if is_x11 and not getattr(args, "no_enum", False):
+            try:
+                run_x11_check(ip, port, output_mgr, hostname=hostname,
+                              scope=scope, timeout=getattr(args, "banner_timeout", 10))
+            except Exception as exc:
+                _tprint(f"{Fore.RED}  [!] X11 check error {ip}:{port}: {exc}{Style.RESET_ALL}")
+
         # ── Memcached unauthenticated access ──────────────────────────
         is_memcached = (svc_name in ("memcached", "memcache") or port in (11211,))
         if is_memcached and not getattr(args, "no_enum", False):
@@ -12666,6 +12675,7 @@ _ARGPARSE_DEFAULTS: dict = {
     "no_banner":          False,
     "no_web":             False,
     "no_nuclei":          False,
+    "no_brute":           False,
     "port_scan_workers":  _SCAN_CONCURRENCY,
     "web_timeout":        4,
     "banner_timeout":     3.0,
@@ -12710,12 +12720,14 @@ _SETTINGS_TEMPLATE: dict = {
         "no_banner":         False,
         "no_web":            False,
         "no_nuclei":         False,
+        "no_brute":          False,
         "port_scan_workers": _SCAN_CONCURRENCY,
         "web_timeout":       4,
         "banner_timeout":    3.0,
         "sslscan_timeout":   60,
         "testssl_timeout":   300,
         "nuclei_timeout":    600,
+        "brutespray_timeout": 600,
         "wpscan_token":      "",
         "discovery_min_rate":        0,
         "discovery_min_parallelism": 20,
@@ -12810,7 +12822,7 @@ def load_settings(path: "str | Path") -> dict:
             engagement[field] = str(engagement[field])
 
     # ── Validate scan fields ──────────────────────────────────────────────────
-    bool_scan_keys  = ["fast", "no_ssl", "no_banner", "no_web", "no_nuclei"]
+    bool_scan_keys  = ["fast", "no_ssl", "no_banner", "no_web", "no_nuclei", "no_brute"]
     int_scan_keys   = ["port_scan_workers", "web_timeout",
                        "sslscan_timeout", "testssl_timeout", "nuclei_timeout"]
     float_scan_keys = ["banner_timeout"]
@@ -12927,7 +12939,7 @@ def apply_settings(args: argparse.Namespace, settings: dict) -> None:
 
     # ── Boolean flags ─────────────────────────────────────────────────────────
     # Only apply from settings when the CLI flag is still at its default (False).
-    for key in ("fast", "no_ssl", "no_banner", "no_web", "no_nuclei"):
+    for key in ("fast", "no_ssl", "no_banner", "no_web", "no_nuclei", "no_brute"):
         if key in scan and getattr(args, key, False) == _ARGPARSE_DEFAULTS[key]:
             setattr(args, key, bool(scan[key]))
 
@@ -13252,6 +13264,15 @@ Examples:
     parser.add_argument(
         "--no-searchsploit", action="store_true", dest="no_searchsploit",
         help="Skip searchsploit exploit-DB lookup against nmap XML output.",
+    )
+    parser.add_argument(
+        "--no-brute", action="store_true", dest="no_brute",
+        help="Skip Hydra brute force and BruteSpray default credential spray.",
+    )
+    parser.add_argument(
+        "--brutespray-timeout", metavar="SECS", dest="brutespray_timeout",
+        type=int, default=600,
+        help="Timeout for BruteSpray credential spray (default: 600s).",
     )
     parser.add_argument(
         "--no-shcheck", action="store_true", dest="no_shcheck",
@@ -25552,6 +25573,205 @@ def run_rmi_check(
     )
 
 
+# ── X11 open display check ────────────────────────────────────────────────
+def run_x11_check(
+    ip: str,
+    port: int,
+    output_mgr: "OutputManager",
+    hostname: "str | None" = None,
+    scope: str = "int",
+    timeout: int = 10,
+) -> None:
+    """Check for unauthenticated X11 display access (ports 6000-6063)."""
+    out_dir  = output_mgr.service_path(ip, "x11")
+    ts_safe  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_ip  = ip.replace(".", "_")
+    out_file = out_dir / f"{safe_ip}_{port}_x11_{ts_safe}.txt"
+
+    display_num = port - 6000
+    _tprint(f"  {Fore.CYAN}[*] X11 display check: {ip}:{port} (display :{display_num}){Style.RESET_ALL}")
+    lines = [
+        f"X11 Display Check: {ip}:{port} (display :{display_num})",
+        f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "─" * 60,
+    ]
+
+    vuln_found = False
+    xdpyinfo = shutil.which("xdpyinfo")
+
+    if xdpyinfo:
+        try:
+            result = subprocess.run(
+                [xdpyinfo, "-display", f"{ip}:{display_num}"],
+                capture_output=True, text=True, timeout=timeout,
+            )
+            if result.returncode == 0 and "number of extensions" in result.stdout.lower():
+                vuln_found = True
+                lines.append("VULNERABLE: X11 display accepts unauthenticated connections")
+                lines.append(result.stdout[:2000])
+                output_mgr.log_finding(
+                    title="Unauthenticated X11 Display Access",
+                    ip=ip, port=port,
+                    command=f"xdpyinfo -display {ip}:{display_num}",
+                    hostname=hostname, risk="HIGH",
+                    description=(
+                        f"The X11 display at {ip}:{port} (display :{display_num}) "
+                        f"accepts unauthenticated connections. An attacker can capture "
+                        f"screen contents, inject keystrokes, and monitor user activity. "
+                        f"X11 forwarding without authentication is a critical remote "
+                        f"access vulnerability. Restrict X11 to localhost or enforce "
+                        f"XAUTH / MIT-MAGIC-COOKIE authentication."
+                    ),
+                    output=result.stdout[:2000],
+                    sources="xdpyinfo",
+                    affected=f"{ip}:{port}",
+                    output_file=str(out_file),
+                )
+                _tprint(
+                    f"  {Fore.RED}[!!] X11 unauthenticated access on {ip}:{port}{Style.RESET_ALL}"
+                )
+                try:
+                    output_mgr.log_action_item(
+                        item_type="cross_tool",
+                        recommended_tool="Manual",
+                        target=f"{ip}:{port}",
+                        ip=ip, port=port,
+                        title="Exploit X11 Unauthenticated Access",
+                        description=(
+                            f"X11 display :{display_num} on {ip} accepts connections "
+                            f"without authentication.\n"
+                            f"Next steps:\n"
+                            f"  1. Capture screen: xwd -root -display {ip}:{display_num} -out screen.xwd\n"
+                            f"  2. Convert: convert screen.xwd screen.png\n"
+                            f"  3. Keylog: xspy -display {ip}:{display_num}\n"
+                            f"  4. List windows: xwininfo -root -tree -display {ip}:{display_num}\n"
+                            f"  5. Inject keys: xdotool --display {ip}:{display_num} key Return"
+                        ),
+                        hostname=hostname,
+                        source_finding="Unauthenticated X11 Display Access",
+                        priority="HIGH",
+                    )
+                except Exception:
+                    pass
+            elif result.returncode != 0 and "unable to open display" in (result.stderr or "").lower():
+                lines.append("X11 display rejected connection (authentication required or not X11)")
+            else:
+                lines.append(f"xdpyinfo returned exit code {result.returncode}")
+                if result.stderr:
+                    lines.append(f"stderr: {result.stderr[:500]}")
+        except subprocess.TimeoutExpired:
+            lines.append("xdpyinfo connection timed out")
+        except Exception as exc:
+            lines.append(f"xdpyinfo error: {exc}")
+    else:
+        # Fallback: raw X11 protocol handshake
+        try:
+            sock = socket.create_connection((ip, port), timeout=timeout)
+            sock.settimeout(timeout)
+            # X11 connection setup: byte-order 'B' (big-endian), pad, major=11, minor=0, no auth
+            sock.sendall(b"\x42\x00\x00\x0b\x00\x00\x00\x00\x00\x00\x00\x00")
+            resp = sock.recv(1024)
+            sock.close()
+            if resp and resp[0] == 1:  # Success byte
+                vuln_found = True
+                lines.append("VULNERABLE: X11 display accepted connection without authentication")
+                lines.append(f"Handshake response ({len(resp)} bytes): {resp[:64].hex()}")
+                output_mgr.log_finding(
+                    title="Unauthenticated X11 Display Access",
+                    ip=ip, port=port,
+                    command="X11-Protocol-Handshake",
+                    hostname=hostname, risk="HIGH",
+                    description=(
+                        f"The X11 display at {ip}:{port} (display :{display_num}) "
+                        f"accepts unauthenticated connections via raw protocol handshake. "
+                        f"An attacker can capture screen contents, inject keystrokes, and "
+                        f"monitor user activity. Restrict X11 to localhost or enforce "
+                        f"XAUTH / MIT-MAGIC-COOKIE authentication."
+                    ),
+                    output=f"X11 handshake response: {resp[:64].hex()}",
+                    sources="x11-handshake",
+                    affected=f"{ip}:{port}",
+                    output_file=str(out_file),
+                )
+                _tprint(
+                    f"  {Fore.RED}[!!] X11 unauthenticated access on {ip}:{port}{Style.RESET_ALL}"
+                )
+                try:
+                    output_mgr.log_action_item(
+                        item_type="cross_tool",
+                        recommended_tool="Manual",
+                        target=f"{ip}:{port}",
+                        ip=ip, port=port,
+                        title="Exploit X11 Unauthenticated Access",
+                        description=(
+                            f"X11 display :{display_num} on {ip} accepts connections "
+                            f"without authentication.\n"
+                            f"Next steps:\n"
+                            f"  1. Install xdpyinfo: apt install x11-utils\n"
+                            f"  2. xdpyinfo -display {ip}:{display_num}\n"
+                            f"  3. Capture screen: xwd -root -display {ip}:{display_num} -out screen.xwd\n"
+                            f"  4. Keylog: xspy -display {ip}:{display_num}"
+                        ),
+                        hostname=hostname,
+                        source_finding="Unauthenticated X11 Display Access",
+                        priority="HIGH",
+                    )
+                except Exception:
+                    pass
+            elif resp and resp[0] == 0:  # Failed — auth required
+                lines.append("X11 display requires authentication (connection rejected)")
+                output_mgr.log_finding(
+                    title="X11 Display Detected (Authentication Required)",
+                    ip=ip, port=port,
+                    command="X11-Protocol-Handshake",
+                    hostname=hostname, risk="INFO",
+                    description=(
+                        f"An X11 display server is running on {ip}:{port} (display "
+                        f":{display_num}) but requires authentication. This is "
+                        f"expected configuration. Verify XAUTH is enforced and "
+                        f"the service is not exposed to untrusted networks."
+                    ),
+                    output=f"X11 handshake response: connection rejected (auth required)",
+                    sources="x11-handshake",
+                    affected=f"{ip}:{port}",
+                    output_file=str(out_file),
+                )
+            elif resp and resp[0] == 2:  # Authenticate — server wants auth data
+                lines.append("X11 display demands authentication exchange")
+                output_mgr.log_finding(
+                    title="X11 Display Detected (Authentication Required)",
+                    ip=ip, port=port,
+                    command="X11-Protocol-Handshake",
+                    hostname=hostname, risk="INFO",
+                    description=(
+                        f"An X11 display server is running on {ip}:{port} (display "
+                        f":{display_num}) and requests an authentication exchange. "
+                        f"The service requires credentials to connect."
+                    ),
+                    output=f"X11 handshake response: authentication required ({resp[:32].hex()})",
+                    sources="x11-handshake",
+                    affected=f"{ip}:{port}",
+                    output_file=str(out_file),
+                )
+            else:
+                lines.append(f"Unexpected X11 response: {resp[:32].hex() if resp else 'empty'}")
+        except (ConnectionRefusedError, ConnectionResetError, OSError):
+            lines.append("Connection refused or reset — not an X11 display")
+        except Exception as exc:
+            lines.append(f"Socket error: {exc}")
+
+    if not vuln_found:
+        _tprint(f"  {Fore.GREEN}[+] X11 display :{display_num} on {ip}: no unauthenticated access{Style.RESET_ALL}")
+
+    out_file.write_text("\n".join(lines), encoding="utf-8")
+    output_mgr.log_command(
+        "x11-probe", "Scattershot-X11-Probe",
+        f"X11 handshake {ip}:{port} display :{display_num}",
+        out_file,
+        extra={"target": f"{ip}:{port}"},
+    )
+
+
 # ── Memcached unauthenticated access ───────────────────────────────────────
 def run_memcached_check(
     ip: str,
@@ -30139,6 +30359,25 @@ def scan_scope(
                                 scope_ips=set(targets))
         _vc.status(f"{scope}_p6_brute", label="Phase 6: Hydra Brute Force", status="complete")
 
+    # ── Phase 6b: BruteSpray — default credential spray against nmap XML ─────
+    if alive_ips and not getattr(args, "no_brute", False):
+        _nmap_xmls = sorted(
+            output_mgr.root.rglob("portscan_*.xml"),
+            key=lambda p: p.stat().st_mtime, reverse=True,
+        )
+        if _nmap_xmls:
+            print(
+                f"\n{Fore.CYAN}[*] {scope_label} Phase 6b: BruteSpray "
+                f"(default credential spray)...{Style.RESET_ALL}"
+            )
+            run_brutespray(
+                _nmap_xmls[0], output_mgr, scope=scope, args=args,
+                timeout=getattr(args, "brutespray_timeout", 600),
+            )
+        else:
+            _vc.status(f"{scope}_p6b_brutespray", label="Phase 6b: BruteSpray",
+                       status="skipped", step="no nmap XML found")
+
     # ── Phase 12: Active Directory Assessment ────────────────────────────────
     _dcs = _detect_domain_controllers(all_results)
     _domain_hint = getattr(args, "domain", None)
@@ -32137,6 +32376,175 @@ def main():
           f"{Fore.YELLOW}{_fsize(summary_path):>8}{Style.RESET_ALL}  "
           f"combined cross-scope summary")
     print(f"\n{Fore.CYAN}{'═'*60}{Style.RESET_ALL}")
+
+
+def run_brutespray(
+    nmap_xml_path: "str | Path",
+    output_mgr: "OutputManager",
+    scope: str = "int",
+    args: "argparse.Namespace | None" = None,
+    timeout: int = 600,
+) -> None:
+    """Run brutespray against nmap XML to spray default credentials on all services."""
+    brutespray_bin = shutil.which("brutespray")
+    if not brutespray_bin:
+        _tprint(f"  {Fore.YELLOW}[~] brutespray not installed — skipping credential spray{Style.RESET_ALL}")
+        return
+    if args and getattr(args, "no_brute", False):
+        return
+
+    nmap_xml = Path(nmap_xml_path)
+    if not nmap_xml.is_file():
+        return
+
+    bs_dir = output_mgr.scope_tool_path("brutespray")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    bs_out_dir = bs_dir / f"brutespray_{ts}"
+    bs_out_dir.mkdir(parents=True, exist_ok=True)
+
+    _tprint(f"\n{Fore.CYAN}[*] Running brutespray credential spray...{Style.RESET_ALL}")
+    _vc.status(f"{scope}_p6b_brutespray", label="Phase 6b: BruteSpray", status="running")
+
+    cmd = [
+        brutespray_bin, "--file", str(nmap_xml),
+        "--threads", "5", "--hosts", "3",
+        "-o", str(bs_out_dir),
+    ]
+
+    _bs_started = datetime.now().astimezone()
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        _bs_ended = datetime.now().astimezone()
+        output_mgr.log_command(
+            "brutespray", brutespray_bin, cmd, bs_out_dir,
+            stdout=result.stdout, stderr=result.stderr,
+            started=_bs_started, ended=_bs_ended,
+            exit_code=result.returncode,
+            extra={"target": f"nmap-xml:{nmap_xml.name}"},
+        )
+
+        _DEFAULT_USERNAMES = {
+            "admin", "root", "administrator", "guest", "user", "test",
+            "sa", "postgres", "mysql", "oracle", "ftp", "anonymous",
+            "tomcat", "manager", "nagios", "cisco", "ubnt", "pi",
+        }
+
+        found_creds: list[dict] = []
+
+        # Parse stdout for "ACCOUNT FOUND:" lines
+        for line in (result.stdout or "").splitlines():
+            m = re.match(
+                r"ACCOUNT FOUND:\s+\[(\w+)\]\s+Host:\s+(\S+)\s+User:\s+(\S+)\s+Password:\s+(\S+)",
+                line,
+            )
+            if m:
+                svc, host, user, pwd = m.groups()
+                found_creds.append({
+                    "service": svc, "host": host,
+                    "user": user, "password": pwd,
+                })
+
+        # Also scan per-service output files brutespray creates
+        for f in bs_out_dir.rglob("*.txt"):
+            try:
+                content = f.read_text(errors="replace")
+            except Exception:
+                continue
+            for line in content.splitlines():
+                m = re.match(
+                    r".*Host:\s+(\S+).*User:\s+(\S+).*Password:\s+(\S+)", line,
+                )
+                if m:
+                    bs_svc_name = f.stem.split("_")[0] if "_" in f.stem else f.stem
+                    host, user, pwd = m.groups()
+                    if not any(
+                        c["host"] == host and c["user"] == user
+                        for c in found_creds
+                    ):
+                        found_creds.append({
+                            "service": bs_svc_name, "host": host,
+                            "user": user, "password": pwd,
+                        })
+
+        for cred in found_creds:
+            _cred_ip = cred["host"].split(":")[0] if ":" in cred["host"] else cred["host"]
+            _port_str = cred["host"].split(":")[1] if ":" in cred["host"] else "0"
+            _cred_port = int(_port_str) if _port_str.isdigit() else 0
+            is_default = cred["user"].lower() in _DEFAULT_USERNAMES
+
+            _cred_title = (
+                f"Default Credentials: {cred['service'].upper()}"
+                if is_default
+                else f"Weak Credentials: {cred['service'].upper()}"
+            )
+            _cred_risk = "CRITICAL" if is_default else "HIGH"
+
+            output_mgr.log_finding(
+                title=_cred_title,
+                ip=_cred_ip, port=_cred_port,
+                command=" ".join(cmd),
+                risk=_cred_risk,
+                description=(
+                    f"brutespray confirmed {'default' if is_default else 'weak'} "
+                    f"credentials on {cred['service']} service at {cred['host']}. "
+                    f"Username: {cred['user']}. "
+                    f"{'Default credentials must be changed immediately.' if is_default else 'Weak credentials should be replaced with strong, unique passwords.'} "
+                    f"Implement account lockout policies and monitor for brute force attempts."
+                ),
+                output=(
+                    f"Service: {cred['service']}\n"
+                    f"Host: {cred['host']}\n"
+                    f"Username: {cred['user']}\n"
+                    f"Password: [REDACTED]"
+                ),
+                sources="brutespray",
+                affected=cred["host"],
+                output_file=str(bs_out_dir.relative_to(output_mgr.root)),
+            )
+
+            try:
+                output_mgr.log_action_item(
+                    item_type="cross_tool",
+                    recommended_tool="Manual",
+                    target=cred["host"],
+                    ip=_cred_ip, port=_cred_port,
+                    title=f"Validate {cred['service'].upper()} Credentials",
+                    description=(
+                        f"brutespray found valid credentials for {cred['service']} on "
+                        f"{cred['host']}.\n"
+                        f"Next steps:\n"
+                        f"  1. Manually verify: connect to {cred['service']}://{cred['host']} "
+                        f"with user '{cred['user']}'\n"
+                        f"  2. Document access level and data exposure\n"
+                        f"  3. Test for privilege escalation from this access"
+                    ),
+                    hostname=None,
+                    source_finding=_cred_title,
+                    priority="CRITICAL" if is_default else "HIGH",
+                )
+            except Exception:
+                pass
+
+        if not found_creds:
+            _tprint(f"  {Fore.GREEN}[+] brutespray: No default credentials found{Style.RESET_ALL}")
+        else:
+            _tprint(
+                f"  {Fore.RED}[!!] brutespray: {len(found_creds)} credential(s) found!{Style.RESET_ALL}"
+            )
+
+    except subprocess.TimeoutExpired:
+        _bs_ended = datetime.now().astimezone()
+        _tprint(f"  {Fore.YELLOW}[~] brutespray timed out after {timeout}s{Style.RESET_ALL}")
+        output_mgr.log_command(
+            "brutespray", brutespray_bin, cmd, bs_out_dir,
+            stdout="", stderr=f"Timed out after {timeout}s",
+            started=_bs_started, ended=_bs_ended, exit_code=-1,
+            extra={"target": f"nmap-xml:{nmap_xml.name}"},
+        )
+    except Exception as exc:
+        _tprint(f"  {Fore.YELLOW}[~] brutespray error: {exc}{Style.RESET_ALL}")
+
+    _vc.status(f"{scope}_p6b_brutespray", label="Phase 6b: BruteSpray", status="done")
 
 
 def _count_findings(findings_json_path) -> int:

@@ -2,7 +2,7 @@
   "version": "1.7.1",
   "tool": "scattershot3",
   "generated": "(complete: upgraded existing + scaffolded missing)",
-  "total": 233,
+  "total": 242,
   "from_existing": 110,
   "newly_scaffolded": 68,
   "findings": [
@@ -18106,6 +18106,290 @@
       "remediation_effort": "Moderate",
       "validation_tools": [
         "o365spray"
+      ]
+    },
+    {
+      "id": "SS3-215",
+      "title": "Unauthenticated X11 Display Access",
+      "aliases": [
+        "X11 Open Display",
+        "X Window System Unauthenticated Access"
+      ],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "HIGH",
+      "description": "An X11 display server accepts connections without authentication. The service responded to either xdpyinfo queries or raw X11 protocol handshake without requiring XAUTH/MIT-MAGIC-COOKIE credentials.",
+      "impact": "An attacker can capture screen contents in real-time, inject keystrokes and mouse events, monitor all user activity on the display, and potentially execute arbitrary commands through keystroke injection. This provides full visibility into and control over the user's desktop session.",
+      "cwe": [
+        "CWE-306"
+      ],
+      "cve_examples": [
+        "CVE-1999-0526"
+      ],
+      "cvss_v3_base": 7.5,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+      "nessus_plugin_ids": [
+        10407
+      ],
+      "qualys_qids": [
+        38170
+      ],
+      "owasp_web": "N/A",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.AC-3"
+      ],
+      "nist_800_53": [
+        "AC-17",
+        "AC-3"
+      ],
+      "nist_800_171": [
+        "3.1.12"
+      ],
+      "pci_dss_4": [
+        "2.2.4"
+      ],
+      "iso_27001": [
+        "A.9.4.1"
+      ],
+      "iso_27002": [
+        "9.4.1"
+      ],
+      "soc2": [
+        "CC6.1"
+      ],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1056.001",
+          "tactic": "Collection",
+          "name": "Keylogging"
+        },
+        {
+          "technique": "T1113",
+          "tactic": "Collection",
+          "name": "Screen Capture"
+        },
+        {
+          "technique": "T1021",
+          "tactic": "Lateral Movement",
+          "name": "Remote Services"
+        }
+      ],
+      "searchsploit_terms": [
+        "x11",
+        "xorg"
+      ],
+      "metasploit_modules": [
+        "auxiliary/scanner/x11/open_x11"
+      ],
+      "kev": false,
+      "remediation_brief": "Disable remote X11 connections or enforce XAUTH/MIT-MAGIC-COOKIE authentication. Configure X11 to listen only on localhost (-nolisten tcp). Use SSH X11 forwarding instead of direct X11 connections. Apply firewall rules to block ports 6000-6063 from untrusted networks.",
+      "remediation_component": "Network",
+      "remediation_category": "Access Control",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "xdpyinfo",
+        "nmap --script x11-access"
+      ]
+    },
+    {
+      "id": "SS3-216",
+      "title": "X11 Display Detected (Authentication Required)",
+      "aliases": [
+        "X Window System Detected"
+      ],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "description": "An X11 display server is running but requires authentication to connect. The X11 protocol handshake was rejected with an authentication-required response.",
+      "impact": "The X11 service is exposed on the network but properly requires authentication. While the service itself is secured, exposure of X11 ports to untrusted networks increases the attack surface. If authentication credentials are weak or compromised, the display could be accessed remotely.",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "N/A",
+      "owasp_api": "",
+      "nist_csf2": [],
+      "nist_800_53": [],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Verify X11 is configured to listen only on localhost unless remote access is required. Use SSH X11 forwarding instead of direct connections. Apply firewall rules to restrict access to X11 ports.",
+      "remediation_component": "Network",
+      "remediation_category": "Configuration",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "xdpyinfo",
+        "nmap"
+      ]
+    },
+    {
+      "id": "SS3-217",
+      "title": "Default Credentials: {SERVICE}",
+      "aliases": [
+        "BruteSpray Default Credentials",
+        "Service Default Password"
+      ],
+      "source_tools": [
+        "scattershot3",
+        "brutespray"
+      ],
+      "risk": "CRITICAL",
+      "description": "brutespray confirmed that a network service accepts default or factory-preset credentials. The service responded with a successful authentication using a well-known username/password combination.",
+      "impact": "An attacker can immediately authenticate to the service using widely-known default credentials. Depending on the service, this may provide full administrative access, ability to read/modify data, execute commands, pivot to other systems, or completely compromise the host. Default credentials are among the most commonly exploited vulnerabilities.",
+      "cwe": [
+        "CWE-798",
+        "CWE-1392"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 9.8,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A07:2021 - Identification and Authentication Failures",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.AC-1"
+      ],
+      "nist_800_53": [
+        "IA-5",
+        "AC-2"
+      ],
+      "nist_800_171": [
+        "3.5.7"
+      ],
+      "pci_dss_4": [
+        "2.1.1",
+        "8.2.2"
+      ],
+      "iso_27001": [
+        "A.9.4.3"
+      ],
+      "iso_27002": [
+        "9.4.3"
+      ],
+      "soc2": [
+        "CC6.1",
+        "CC6.3"
+      ],
+      "hitrust": [
+        "01.d"
+      ],
+      "gdpr": [
+        "Art. 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1078.001",
+          "tactic": "Persistence",
+          "name": "Default Accounts"
+        },
+        {
+          "technique": "T1110",
+          "tactic": "Credential Access",
+          "name": "Brute Force"
+        }
+      ],
+      "searchsploit_terms": [
+        "default credentials",
+        "default password"
+      ],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Change all default credentials immediately. Implement strong, unique passwords for all service accounts. Deploy account lockout policies. Consider disabling unnecessary services entirely.",
+      "remediation_component": "Authentication",
+      "remediation_category": "Access Control",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "brutespray",
+        "hydra",
+        "medusa"
+      ]
+    },
+    {
+      "id": "SS3-218",
+      "title": "Weak Credentials: {SERVICE}",
+      "aliases": [
+        "BruteSpray Weak Credentials",
+        "Service Weak Password"
+      ],
+      "source_tools": [
+        "scattershot3",
+        "brutespray"
+      ],
+      "risk": "HIGH",
+      "description": "brutespray confirmed that a network service accepts weak or easily guessable credentials. The service authenticated successfully with a non-default but weak username/password combination.",
+      "impact": "An attacker can authenticate to the service using credentials that are easily guessable or present in common wordlists. This may provide unauthorized access to sensitive data, the ability to modify configurations, or a foothold for lateral movement within the network.",
+      "cwe": [
+        "CWE-521",
+        "CWE-1391"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 7.5,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "A07:2021 - Identification and Authentication Failures",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.AC-1"
+      ],
+      "nist_800_53": [
+        "IA-5"
+      ],
+      "nist_800_171": [
+        "3.5.7"
+      ],
+      "pci_dss_4": [
+        "8.3.6"
+      ],
+      "iso_27001": [
+        "A.9.4.3"
+      ],
+      "iso_27002": [
+        "9.4.3"
+      ],
+      "soc2": [
+        "CC6.1"
+      ],
+      "hitrust": [
+        "01.d"
+      ],
+      "gdpr": [
+        "Art. 32"
+      ],
+      "mitre_attack": [
+        {
+          "technique": "T1110.001",
+          "tactic": "Credential Access",
+          "name": "Password Guessing"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Enforce strong password policies with minimum length, complexity, and rotation requirements. Implement account lockout after failed attempts. Deploy multi-factor authentication where possible.",
+      "remediation_component": "Authentication",
+      "remediation_category": "Access Control",
+      "remediation_effort": "Easy",
+      "validation_tools": [
+        "brutespray",
+        "hydra",
+        "medusa"
       ]
     }
   ]
