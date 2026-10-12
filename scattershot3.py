@@ -1649,11 +1649,12 @@ def _set_s3_evidence_dir(d) -> None:
 
 
 def _s3_rel_output_file(output_file_str, root) -> str:
-    """Convert a comma-separated output_file string to scope-root-relative paths."""
+    """Convert a comma/newline-separated output_file string to scope-root-relative paths."""
     if not output_file_str:
         return ""
     out = []
-    for part in str(output_file_str).split(","):
+    # Split on both comma and newline so callers can use either delimiter.
+    for part in re.split(r"[,\n]", str(output_file_str)):
         part = part.strip()
         if not part:
             continue
@@ -8545,7 +8546,7 @@ def _port_scan_worker(
                 sources="nmap",
                 output="\n".join(_uf_affected),
                 affected=ip,
-                output_file="\n".join(filter(None, [
+                output_file=",".join(filter(None, [
                     str(_udp_xml_path) if _udp_xml_path else None,
                     str(_ps_out_path) if _ps_out_path else None,
                 ])) or None,
