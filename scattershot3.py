@@ -29046,6 +29046,8 @@ def scan_scope(
                 if _cs in _completed_specs:
                     continue
 
+                _check_pause()
+
                 _ca, _cd = _discover_chunk(
                     _cs, _ci, total_chunks,
                     output_mgr, nmap_path, scope,
@@ -29055,6 +29057,8 @@ def scan_scope(
                     discovery_min_parallelism=getattr(args, "discovery_min_parallelism", None),
                     timing_template=getattr(args, "timing_template", None),
                 )
+
+                _check_pause()
 
                 if _exclude:
                     _ca = [ip for ip in _ca if ip not in _exclude]
@@ -29164,6 +29168,7 @@ def scan_scope(
             # ── Collect port-scan results ─────────────────────────────────
             _nuclei_base = getattr(args, "nuclei_timeout", 600)
             for future in as_completed(port_futures):
+                _check_pause()
                 ip = port_futures[future]
                 try:
                     result_ip, host_result = future.result()
@@ -29701,6 +29706,7 @@ def scan_scope(
                         _fut_to_ip[_rf] = _rip
                     _rescue_pending.clear()
                 for future in as_completed(_pending):
+                    _check_pause()
                     ip = _fut_to_ip[future]
                     try:
                         result_ip, host_result = future.result()
