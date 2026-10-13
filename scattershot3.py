@@ -1073,27 +1073,27 @@ import queue as _queue
 import uuid as _uuid
 
 # Detect when running as a managed subprocess under Vantage
-_VANTAGE_MANAGED = os.environ.get("VANTAGE_MANAGED", "") == "1"
+_CRUCIBLE_MANAGED = os.environ.get("CRUCIBLE_MANAGED", "") == "1"
 
-_VP_LOG    = "__VANTAGE_LOG__:"
-_VP_ERR    = "__VANTAGE_ERR__:"
-_VP_PROMPT = "__VANTAGE_PROMPT__:"
-_VP_STATUS = "__VANTAGE_STATUS__:"
-_VP_TARGET = "__VANTAGE_TARGET__:"
-_VP_PORT   = "__VANTAGE_PORT__:"
-_VP_ACTION = "__VANTAGE_ACTION_ITEM__:"
+_CP_LOG    = "__CRUCIBLE_LOG__:"
+_CP_ERR    = "__CRUCIBLE_ERR__:"
+_CP_PROMPT = "__CRUCIBLE_PROMPT__:"
+_CP_STATUS = "__CRUCIBLE_STATUS__:"
+_CP_TARGET = "__CRUCIBLE_TARGET__:"
+_CP_PORT   = "__CRUCIBLE_PORT__:"
+_CP_ACTION = "__CRUCIBLE_ACTION_ITEM__:"
 
 
 class VantageConsole:
     """Dual-mode console output.
 
-    When VANTAGE_MANAGED=1: emits protocol tokens that Vantage intercepts for
+    When CRUCIBLE_MANAGED=1: emits protocol tokens that Crucible intercepts for
     structured logs, errors, prompts, and phase-status updates.
     When running in a real terminal: falls back to ANSI-coloured text.
     """
 
     def __init__(self) -> None:
-        self._managed = _VANTAGE_MANAGED
+        self._managed = _CRUCIBLE_MANAGED
         self._lock    = threading.Lock()
 
     @property
@@ -1108,7 +1108,7 @@ class VantageConsole:
                     "level":   level,
                     "message": message,
                 }
-                sys.stdout.write(_VP_LOG + json.dumps(entry) + "\n")
+                sys.stdout.write(_CP_LOG + json.dumps(entry) + "\n")
                 sys.stdout.flush()
             else:
                 _colours = {
@@ -1137,7 +1137,7 @@ class VantageConsole:
                     "detail":   detail,
                     "category": category or self._categorise(message),
                 }
-                sys.stderr.write(_VP_ERR + json.dumps(entry) + "\n")
+                sys.stderr.write(_CP_ERR + json.dumps(entry) + "\n")
                 sys.stderr.flush()
             else:
                 _tprint(f"{Fore.RED}[!] {message}{Style.RESET_ALL}")
@@ -1164,7 +1164,7 @@ class VantageConsole:
                     entry["active_tool"] = active_tool
                 if active_tools is not None:
                     entry["active_tools"] = active_tools
-                sys.stdout.write(_VP_STATUS + json.dumps(entry) + "\n")
+                sys.stdout.write(_CP_STATUS + json.dumps(entry) + "\n")
                 sys.stdout.flush()
         # §14j: persist the phase transition to scan.log + scan.log.json with a
         # timestamp, unconditionally (the status token above is ephemeral / live-UI).
@@ -1196,7 +1196,7 @@ class VantageConsole:
             "source":   source,
         }
         with self._lock:
-            sys.stdout.write(_VP_TARGET + json.dumps(entry) + "\n")
+            sys.stdout.write(_CP_TARGET + json.dumps(entry) + "\n")
             sys.stdout.flush()
 
     def port(self, ip: str, port: int, proto: str = "tcp",
@@ -1223,7 +1223,7 @@ class VantageConsole:
             "hostname":  hostname,
         }
         with self._lock:
-            sys.stdout.write(_VP_PORT + json.dumps(entry) + "\n")
+            sys.stdout.write(_CP_PORT + json.dumps(entry) + "\n")
             sys.stdout.flush()
 
     def action_item(self, entry: dict) -> None:
@@ -1232,7 +1232,7 @@ class VantageConsole:
         if not self._managed:
             return
         with self._lock:
-            sys.stdout.write(_VP_ACTION + json.dumps(entry) + "\n")
+            sys.stdout.write(_CP_ACTION + json.dumps(entry) + "\n")
             sys.stdout.flush()
 
     def prompt(self, question: str, prompt_type: str = "text",
@@ -1247,7 +1247,7 @@ class VantageConsole:
                 "skippable": skippable,
             }
             with self._lock:
-                sys.stdout.write(_VP_PROMPT + json.dumps(payload) + "\n")
+                sys.stdout.write(_CP_PROMPT + json.dumps(payload) + "\n")
                 sys.stdout.flush()
             try:
                 return sys.stdin.readline().rstrip("\n")
@@ -2146,7 +2146,7 @@ class OutputManager:
         """
         project_root = self.root.parent  # <project>/  (parent of <project>/<scope>/)
 
-        _managed = os.environ.get("VANTAGE_MANAGED") == "1"
+        _managed = os.environ.get("CRUCIBLE_MANAGED") == "1"
         _has_prev_scan = not _managed and any(
             (project_root / _sc / _lf).is_file()
             for _sc in ("int", "ext")
@@ -4470,12 +4470,12 @@ def check_privileges() -> None:
         )
 
     # ── Offer auto-elevation ──────────────────────────────────────────────────
-    # When running under Vantage (VANTAGE_MANAGED=1), re-exec via sudo would
+    # When running under Vantage (CRUCIBLE_MANAGED=1), re-exec via sudo would
     # replace the subprocess Vantage is managing with a root process, making all
     # output files root-owned and unreadable by Vantage for zip export.  Skip the
     # re-exec prompt entirely; the user can restart Vantage itself as root if
     # full nmap privilege is required.
-    if os.environ.get("VANTAGE_MANAGED"):
+    if os.environ.get("CRUCIBLE_MANAGED"):
         print(
             f"{Fore.YELLOW}[~] Running under Vantage — skipping sudo re-exec to keep "
             f"output files accessible.\n"
@@ -16910,7 +16910,7 @@ def _ensure_gobuster_wordlist() -> "str | None":
     dest = Path(__file__).parent / "raft-medium-directories.txt"
     if dest.exists():
         return str(dest)
-    if _VANTAGE_MANAGED:
+    if _CRUCIBLE_MANAGED:
         sys.stdout.write("[Vantage] Downloading gobuster wordlist (raft-medium-directories.txt)...\n")
         sys.stdout.flush()
     else:
@@ -16918,14 +16918,14 @@ def _ensure_gobuster_wordlist() -> "str | None":
     try:
         import urllib.request
         urllib.request.urlretrieve(_RAFT_MEDIUM_URL, str(dest))
-        if _VANTAGE_MANAGED:
+        if _CRUCIBLE_MANAGED:
             sys.stdout.write(f"[Vantage] Wordlist downloaded: {dest}\n")
             sys.stdout.flush()
         else:
             print(f"{Fore.GREEN}[+] Wordlist saved: {dest}{Style.RESET_ALL}")
         return str(dest)
     except Exception as exc:
-        if _VANTAGE_MANAGED:
+        if _CRUCIBLE_MANAGED:
             sys.stdout.write(f"[Vantage] Wordlist download failed: {exc}\n")
             sys.stdout.flush()
         else:
