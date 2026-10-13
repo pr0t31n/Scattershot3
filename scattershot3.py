@@ -7523,7 +7523,7 @@ def probe_uncertain_and_nonstandard_ports(
                     ]:
                         _smtp_sock.sendall(_smtp_cmd)
                         _smtp_reply = _smtp_sock.recv(1024).decode("utf-8", errors="replace")
-                        if _smtp_reply.startswith(("250", "252")):
+                        if _smtp_reply.startswith("250"):
                             output_mgr.log_finding(
                                 title=f"Enumeration: SMTP {_smtp_label} User Enumeration Enabled",
                                 ip=ip, port=_port, hostname=hostname,
@@ -21759,7 +21759,7 @@ def run_smtp_checks(
             try:
                 resp = _cmd(f"VRFY {user}")
                 lines.append(f"VRFY {user:<15}: {resp[:80]}")
-                if resp[:1] in ("2", "1"):
+                if resp.startswith("250"):
                     enum_users.append((user, resp[:80]))
             except Exception:
                 break
@@ -21770,7 +21770,7 @@ def run_smtp_checks(
             try:
                 expn_resp = _cmd(f"EXPN {mlist}")
                 lines.append(f"EXPN {mlist:<15}: {expn_resp[:80]}")
-                if expn_resp[:1] in ("2", "1"):
+                if expn_resp.startswith("250"):
                     expn_lists.append((mlist, expn_resp[:80]))
             except Exception:
                 break
