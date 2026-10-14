@@ -7587,34 +7587,28 @@ def probe_uncertain_and_nonstandard_ports(
                                 _cert_hn_is_ip = True
                             except ValueError:
                                 pass
-                            _cert_mm_risk = "INFO" if _cert_hn_is_ip else "MEDIUM"
-                            _cert_mm_desc = (
-                                f"The TLS certificate at {ip}:{_port} does not "
-                                f"match the IP address '{hostname}'. This is expected "
-                                "when scanning by IP rather than FQDN, as certificates "
-                                "rarely include IP SANs. Verify with the actual hostname."
-                            ) if _cert_hn_is_ip else (
-                                f"The TLS certificate at {ip}:{_port} does not "
-                                f"match the expected hostname '{hostname}'. "
-                                f"Certificate names: {', '.join(sorted(_cert_all_names))}. "
-                                f"This may indicate a misconfigured service or "
-                                f"enable MITM attacks when certificate validation "
-                                f"is improperly handled."
-                            )
-                            output_mgr.log_finding(
-                                title="TLS Certificate Hostname Mismatch",
-                                ip=ip, port=_port, hostname=hostname,
-                                command=f"openssl s_client -connect {ip}:{_port} -servername {hostname}",
-                                risk=_cert_mm_risk,
-                                description=_cert_mm_desc,
-                                output=(
-                                    f"Expected: {hostname}\n"
-                                    f"Certificate CN: {_cert_cn}\n"
-                                    f"Certificate SANs: {', '.join(_cert_sans[:10])}"
-                                ),
-                                sources="scattershot3-cert-mismatch",
-                                affected=f"{ip}:{_port}",
-                            )
+                            if not _cert_hn_is_ip:
+                                output_mgr.log_finding(
+                                    title="TLS Certificate Hostname Mismatch",
+                                    ip=ip, port=_port, hostname=hostname,
+                                    command=f"openssl s_client -connect {ip}:{_port} -servername {hostname}",
+                                    risk="MEDIUM",
+                                    description=(
+                                        f"The TLS certificate at {ip}:{_port} does not "
+                                        f"match the expected hostname '{hostname}'. "
+                                        f"Certificate names: {', '.join(sorted(_cert_all_names))}. "
+                                        f"This may indicate a misconfigured service or "
+                                        f"enable MITM attacks when certificate validation "
+                                        f"is improperly handled."
+                                    ),
+                                    output=(
+                                        f"Expected: {hostname}\n"
+                                        f"Certificate CN: {_cert_cn}\n"
+                                        f"Certificate SANs: {', '.join(_cert_sans[:10])}"
+                                    ),
+                                    sources="scattershot3-cert-mismatch",
+                                    affected=f"{ip}:{_port}",
+                                )
             except ImportError:
                 pass
             except Exception:
@@ -12039,19 +12033,26 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                         elif _tsf_id in ("cert_commonName_wo_SNI", "cert_commonName"):
                             if _tsf_sev in ("OK", "INFO"):
                                 continue
-                            _tsf_title = "SSL/TLS Certificate: Hostname Mismatch"
                             _tsf_hn_is_ip = False
                             try:
                                 ipaddress.ip_address(hostname)
                                 _tsf_hn_is_ip = True
                             except (ValueError, TypeError):
                                 pass
-                            _tsf_risk = "INFO" if _tsf_hn_is_ip else "MEDIUM"
+                            if _tsf_hn_is_ip:
+                                continue
+                            _tsf_title = "SSL/TLS Certificate: Hostname Mismatch"
+                            _tsf_risk = "MEDIUM"
                         elif _tsf_id == "cert_trust":
                             if _tsf_sev in ("OK", "INFO"):
                                 continue
                             _tsf_title = "SSL/TLS Certificate: Not Trusted"
                             _tsf_risk  = "MEDIUM"
+                        elif _tsf_id == "cert_chain_of_trust":
+                            if _tsf_sev in ("OK", "INFO"):
+                                continue
+                            _tsf_title = "SSL/TLS Certificate: Chain of Trust Invalid"
+                            _tsf_risk  = "HIGH" if output_mgr.scope == "ext" else "MEDIUM"
                         elif _tsf_id == "cert_subjectAltName":
                             # testssl reports SANs in the finding field; if SANs
                             # are present (severity OK/INFO), report them as info
@@ -19284,8 +19285,7 @@ def run_shcheck(
     Run shcheck against a web service and log missing security header findings.
 
     shcheck is a Python script (/opt/shcheck/shcheck.py) or binary that checks
-    HTTP response headers.  Missing headers are logged as LOW or MEDIUM findings.
-    HSTS (Strict-Transport-Security) absence is MEDIUM; other headers are LOW.
+    HTTP response headers.  All missing headers are logged as LOW findings.
     """
     url = _clean_url(scheme, ip, port)
     out_dir = output_mgr.web_path(ip, port)
@@ -19453,7 +19453,7 @@ def run_shcheck(
                 if header_name in _DEPRECATED_HEADERS:
                     continue
                 _seen_headers.add(header_name)
-                risk = "MEDIUM" if header_name == _HSTS_HEADER else "LOW"
+                risk = "LOW"
                 _tprint(
                     f"  {Fore.YELLOW}[~] Missing header: {header_name} "
                     f"on {ip}:{port}{Style.RESET_ALL}"
@@ -19494,7 +19494,7 @@ def run_shcheck(
             header_name = m.group(1).strip()
             if header_name in _DEPRECATED_HEADERS:
                 continue
-            risk = "MEDIUM" if header_name == _HSTS_HEADER else "LOW"
+            risk = "LOW"
             _tprint(
                 f"  {Fore.YELLOW}[~] Missing header: {header_name} "
                 f"on {ip}:{port}{Style.RESET_ALL}"
