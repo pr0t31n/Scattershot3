@@ -78,6 +78,26 @@ def run(cmd, check=True, capture=False, env=None):
     return subprocess.run(cmd, **kwargs)
 
 
+
+def _dpkg_installed(pkg):
+    try:
+        r = subprocess.run(["dpkg", "-s", pkg],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return r.returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+def _rpm_installed(pkg):
+    try:
+        return subprocess.run(
+            ["rpm", "-q", pkg],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        ).returncode == 0
+    except FileNotFoundError:
+        return False
+
+
 def _pip_installed(pkg_spec):
     import importlib.util
     name = pkg_spec.split(">=")[0].split("==")[0].split("[")[0].split("<")[0].strip()
@@ -98,7 +118,26 @@ def _pip_installed(pkg_spec):
 # ---------------------------------------------------------------------------
 # brew helper — NEVER run as root
 # ---------------------------------------------------------------------------
+def _brew_installed_set():
+    bp = shutil.which("brew") or "/opt/homebrew/bin/brew"
+    try:
+        r = subprocess.run([bp, "list", "--formula", "-1"],
+                           capture_output=True, text=True, timeout=30)
+        return set(r.stdout.split()) if r.returncode == 0 else set()
+    except Exception:
+        return set()
+
+_brew_cache = None
+
 def brew_install(pkg, cask=False):
+    global _brew_cache
+    if not cask:
+        if _brew_cache is None:
+            _brew_cache = _brew_installed_set()
+        base = pkg.rsplit("/", 1)[-1] if "/" in pkg else pkg
+        if base in _brew_cache:
+            info(f"  ✓ {pkg} already installed (brew)")
+            return
     brew_path = shutil.which("brew")
     if not brew_path:
         for p in ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]:
@@ -134,13 +173,28 @@ def apt_install(packages):
         run(["apt-get", "update", "-y"])
         run(["apt-get", "upgrade", "-y"])
         _apt_updated = True
-    run(["apt-get", "install", "-y"] + packages)
+    _needed = [p for p in packages if not _dpkg_installed(p)]
+    _skip = len(packages) - len(_needed)
+    if _skip:
+        info(f"  {_skip} APT package(s) already installed")
+    if _needed:
+        run(["apt-get", "install", "-y"] + _needed)
 
 def dnf_install(packages):
-    run(["dnf", "install", "-y"] + packages)
+    _needed = [p for p in packages if not _rpm_installed(p)]
+    _skip = len(packages) - len(_needed)
+    if _skip:
+        info(f"  {_skip} DNF package(s) already installed")
+    if _needed:
+        run(["dnf", "install", "-y"] + _needed)
 
 def zypper_install(packages):
-    run(["zypper", "install", "-y"] + packages)
+    _needed = [p for p in packages if not _rpm_installed(p)]
+    _skip = len(packages) - len(_needed)
+    if _skip:
+        info(f"  {_skip} zypper package(s) already installed")
+    if _needed:
+        run(["zypper", "install", "-y"] + _needed)
 
 # ---------------------------------------------------------------------------
 # System packages
@@ -580,7 +634,8 @@ def install_rustscan():
 
     if OS == "apt":
         info("Trying apt-get install rustscan …")
-        run(["apt-get", "install", "-y", "rustscan"], check=False)
+        if not _dpkg_installed("rustscan"):
+            run(["apt-get", "install", "-y", "rustscan"], check=False)
         if shutil.which("rustscan"):
             return
     elif OS == "macos" and shutil.which("brew"):
@@ -610,7 +665,8 @@ def install_kerbrute():
         return
     if OS == "apt":
         info("Installing kerbrute via apt …")
-        run(["apt-get", "install", "-y", "kerbrute"], check=False)
+        if not _dpkg_installed("kerbrute"):
+            run(["apt-get", "install", "-y", "kerbrute"], check=False)
         if shutil.which("kerbrute"):
             return
     go_bin = find_go()
@@ -844,7 +900,8 @@ def install_msfconsole():
         return
     if OS == "apt":
         info("Installing metasploit-framework via apt …")
-        run(["apt-get", "install", "-y", "metasploit-framework"], check=False)
+        if not _dpkg_installed("metasploit-framework"):
+            run(["apt-get", "install", "-y", "metasploit-framework"], check=False)
     elif OS == "macos":
         info("Installing metasploit via brew cask …")
         brew_install("metasploit", cask=True)

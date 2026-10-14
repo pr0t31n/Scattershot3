@@ -29269,6 +29269,15 @@ def scan_scope(
         engagement_name=eng.get("engagement_name", ""),
         target=", ".join(raw_specs) if raw_specs else (args.targets_file or ""),
     )
+    try:
+        import pr0t31n_dep_snapshot as _ds
+        _ds.write_snapshot(
+            Path(args.project), "scattershot3", VERSION,
+            binaries=["nmap", "sslscan", "nuclei", "gobuster", "wpscan", "hydra", "enum4linux", "rpcclient", "smbmap", "smbclient", "snmpwalk", "searchsploit", "showmount", "ipmitool", "testssl.sh", "rustscan", "msfconsole", "nbtscan", "kerbrute", "sqlmap", "ike-scan", "webanalyze"],
+            pip_packages=["python-nmap", "scapy", "requests", "colorama", "impacket", "ldap3", "openpyxl", "dnspython", "selenium", "bloodhound"],
+        )
+    except Exception:
+        pass
     print()
 
     # ── Discovery + Phase 2 pipeline ─────────────────────────────────────────
