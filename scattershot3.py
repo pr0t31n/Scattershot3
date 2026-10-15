@@ -11764,7 +11764,7 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                     _emit_title = (
                         f"SSL/TLS Vulnerability (Potential): {name}"
                         if severity == "POTENTIAL"
-                        else f"SSL/TLS Vulnerability [UNCONFIRMED]: {name}"
+                        else f"SSL/TLS Vulnerability (Potential): {name}"
                         if _logjam_unconfirmed
                         else f"SSL/TLS Vulnerability: {name}"
                     )
@@ -11775,7 +11775,7 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                     )
                     if _logjam_unconfirmed:
                         _emit_desc = (
-                            "[UNCONFIRMED] testssl flagged LOGJAM due to a common "
+                            "(Potential) testssl flagged LOGJAM due to a common "
                             "DH prime, but no export ciphers or small DH parameters "
                             "were detected. True LOGJAM (CVE-2015-4000) requires "
                             "DHE_EXPORT cipher suites or DH parameters <1024 bits. "
@@ -12219,10 +12219,10 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                                 _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id}"
                                 _tsf_risk  = "HIGH"
                             else:
-                                _tsf_title = f"SSL/TLS Vulnerability [UNCONFIRMED]: {_tsf_id}"
+                                _tsf_title = f"SSL/TLS Vulnerability (Potential): {_tsf_id}"
                                 _tsf_risk  = "INFO"
                                 _tsf_finding = (
-                                    "[UNCONFIRMED] testssl flagged LOGJAM due to a "
+                                    "(Potential) testssl flagged LOGJAM due to a "
                                     "common DH prime, but no export ciphers or small "
                                     "DH parameters were detected. Verify manually. "
                                     "Original: " + _tsf_finding
