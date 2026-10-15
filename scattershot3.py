@@ -1667,13 +1667,15 @@ def _s3_rel_output_file(output_file_str, root) -> str:
 
 # §14h: attach the per-request evidence triplet recorder to the shared session
 # (run dir resolved dynamically to the active scope root).
+_S3_HTTP_RECORDER = None
 try:
     import sys as _s3_sys
     if "/opt/pr0t31n/shared" not in _s3_sys.path:
         _s3_sys.path.insert(0, "/opt/pr0t31n/shared")
     import pr0t31n_http_evidence as _s3_he
-    _s3_he.attach_http_evidence(_HTTP_SESSION, lambda: _S3_EVIDENCE_DIR[0],
-                                phase_getter=lambda: _S3_PHASE[0])
+    _S3_HTTP_RECORDER = _s3_he.attach_http_evidence(
+        _HTTP_SESSION, lambda: _S3_EVIDENCE_DIR[0],
+        phase_getter=lambda: _S3_PHASE[0])
 except Exception:
     pass
 
@@ -7361,6 +7363,10 @@ def probe_uncertain_and_nonstandard_ports(
                         if _hm == "OPTIONS":
                             _allow = _hm_resp.headers.get("Allow", "")
                             if _allow and any(m in _allow.upper() for m in ("PUT", "DELETE", "TRACE")):
+                                _opt_ev = _S3_HTTP_RECORDER.last_paths() if _S3_HTTP_RECORDER else {}
+                                _opt_of = ",".join(p for p in (
+                                    _opt_ev.get("request", ""), _opt_ev.get("response", ""),
+                                    _opt_ev.get("log", "")) if p) or None
                                 output_mgr.log_finding(
                                     title="HTTP Methods: Unsafe Methods Enabled",
                                     ip=ip, port=_port, hostname=hostname,
@@ -7373,9 +7379,14 @@ def probe_uncertain_and_nonstandard_ports(
                                     output=f"Allow: {_allow}",
                                     sources="scattershot3-options-probe",
                                     affected=f"{ip}:{_port}",
+                                    output_file=_opt_of,
                                 )
                         elif _hm == "TRACE":
                             if "TRACE" in _hm_resp.text[:200].upper():
+                                _tr_ev = _S3_HTTP_RECORDER.last_paths() if _S3_HTTP_RECORDER else {}
+                                _tr_of = ",".join(p for p in (
+                                    _tr_ev.get("request", ""), _tr_ev.get("response", ""),
+                                    _tr_ev.get("log", "")) if p) or None
                                 output_mgr.log_finding(
                                     title="HTTP Methods: Unsafe Methods Enabled",
                                     ip=ip, port=_port, hostname=hostname,
@@ -7391,6 +7402,7 @@ def probe_uncertain_and_nonstandard_ports(
                                     output=_hm_resp.text[:300],
                                     sources="scattershot3-trace-probe",
                                     affected=f"{ip}:{_port}",
+                                    output_file=_tr_of,
                                 )
                 except Exception:
                     pass
@@ -7588,6 +7600,38 @@ def probe_uncertain_and_nonstandard_ports(
                             except ValueError:
                                 pass
                             if not _cert_hn_is_ip:
+                                _cert_ev_of = None
+                                try:
+                                    from datetime import datetime as _dt_cert
+                                    _cev_dir = os.path.join(
+                                        str(_S3_EVIDENCE_DIR[0] or output_mgr.root),
+                                        "evidence", "cert_check")
+                                    os.makedirs(_cev_dir, exist_ok=True)
+                                    _cev_ts = _dt_cert.now().strftime("%Y%m%d_%H%M%S")
+                                    _cev_fn = f"{ip}_{_port}_cert_mismatch_{_cev_ts}.txt"
+                                    _cev_abs = os.path.join(_cev_dir, _cev_fn)
+                                    _cev_lines = [
+                                        f"# TLS Certificate Hostname Mismatch Evidence",
+                                        f"# Host: {ip}:{_port}",
+                                        f"# Expected hostname: {hostname}",
+                                        f"# Captured: {_cev_ts}",
+                                        f"",
+                                        f"Expected hostname: {hostname}",
+                                        f"Certificate CN:    {_cert_cn}",
+                                        f"Certificate SANs:  {', '.join(_cert_sans[:20])}",
+                                        f"All names:         {', '.join(sorted(_cert_all_names))}",
+                                        f"",
+                                        f"Issuer: {_cert_obj.issuer.rfc4514_string()}",
+                                        f"Not Before: {_cert_obj.not_valid_before_utc}",
+                                        f"Not After:  {_cert_obj.not_valid_after_utc}",
+                                        f"Serial:     {_cert_obj.serial_number}",
+                                    ]
+                                    with open(_cev_abs, "w") as _cev_f:
+                                        _cev_f.write("\n".join(_cev_lines) + "\n")
+                                    _cert_ev_of = os.path.join(
+                                        "evidence", "cert_check", _cev_fn)
+                                except Exception:
+                                    pass
                                 output_mgr.log_finding(
                                     title="TLS Certificate Hostname Mismatch",
                                     ip=ip, port=_port, hostname=hostname,
@@ -7608,6 +7652,7 @@ def probe_uncertain_and_nonstandard_ports(
                                     ),
                                     sources="scattershot3-cert-mismatch",
                                     affected=f"{ip}:{_port}",
+                                    output_file=_cert_ev_of,
                                 )
             except ImportError:
                 pass
