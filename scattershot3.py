@@ -17249,10 +17249,47 @@ def _overlay_url_bar(img_path, url):
         pass
 
 
+def _classify_screenshot(title, server, status_code):
+    t = (title or "").lower()
+    s = (server or "").lower()
+    sc = status_code or 0
+    if sc == 400: return "Bad Request (400)"
+    if sc == 401: return "Unauthorized (401)"
+    if sc == 403: return "Forbidden (403)"
+    if sc == 404 or "404" in t: return "Not Found (404)"
+    if sc == 405: return "Method Not Allowed (405)"
+    if sc == 429: return "Too Many Requests (429)"
+    if sc == 500: return "Internal Server Error (500)"
+    if sc == 502: return "Bad Gateway (502)"
+    if sc == 503: return "Service Unavailable (503)"
+    if 400 <= sc < 500: return f"Client Error ({sc})"
+    if 500 <= sc < 600: return f"Server Error ({sc})"
+    if "login" in t or "sign in" in t or "log in" in t or "signin" in t: return "Login Page"
+    if "dashboard" in t: return "Dashboard / Admin Panel"
+    if "wordpress" in t or "wp-" in t: return "WordPress Site"
+    if "iis" in t and ("windows" in t or "default" in t): return "Default IIS Page"
+    if "apache" in t and ("it works" in t or "test page" in t or "default" in t): return "Default Apache Page"
+    if "nginx" in t and ("welcome" in t or "default" in t): return "Default Nginx Page"
+    if "default" in t or "welcome" in t or "placeholder" in t: return "Default Web Page"
+    if "index of" in t: return "Directory Listing"
+    if "api" in t or "swagger" in t or "openapi" in t: return "API Documentation"
+    if "error" in t or "exception" in t: return "Error Page"
+    if not title or title.strip() == "":
+        if sc and 200 <= sc < 300: return "Web Page (no title)"
+        if sc and 300 <= sc < 400: return f"Redirect ({sc})"
+        return "Blank / Minimal Response"
+    if "apache" in s: return "Web Page (Apache)"
+    if "nginx" in s: return "Web Page (Nginx)"
+    if "iis" in s or "microsoft" in s: return "Web Page (IIS)"
+    return "Web Page Detected"
+
+
 def _register_screenshot(root: Path, png_path, url: str = "",
                          ip: str = "", port: int = 0,
                          hostname: str = "", scheme: str = "",
-                         title: str = "", description: str = ""):
+                         title: str = "", description: str = "",
+                         classification: str = "", status_code=None,
+                         server: str = "", page_title: str = ""):
     """Copy a screenshot PNG into <root>/screenshots/ with a JSON sidecar.
 
     The screenshots/ directory is the canonical location for the Intelligence
@@ -17262,8 +17299,22 @@ def _register_screenshot(root: Path, png_path, url: str = "",
         src = Path(png_path)
         if not src.is_file():
             return
+        _scheme = scheme or ("https" if port == 443 else "http")
+        if url and "://" not in url:
+            url = f"{_scheme}://{url}"
         ss_dir = root / "screenshots"
         ss_dir.mkdir(parents=True, exist_ok=True)
+        _dedup_key = f"{ip}_{port}_{_scheme}"
+        for existing in ss_dir.glob("*.json"):
+            try:
+                _meta = json.loads(existing.read_text())
+                _e_scheme = _meta.get("scheme", "")
+                _e_ip = _meta.get("ip", "")
+                _e_port = _meta.get("port", 0)
+                if f"{_e_ip}_{_e_port}_{_e_scheme}" == _dedup_key:
+                    return
+            except Exception:
+                continue
         dest = ss_dir / src.name
         if dest.exists():
             stem, suf = src.stem, src.suffix
@@ -17272,11 +17323,16 @@ def _register_screenshot(root: Path, png_path, url: str = "",
                 if not dest.exists():
                     break
         shutil.copy2(str(src), str(dest))
+        _cls = classification or _classify_screenshot(page_title, server, status_code)
         sidecar = {
             "url": url, "ip": ip, "port": int(port) if port else 0,
             "hostname": hostname,
-            "scheme": scheme or ("https" if port == 443 else "http"),
-            "title": title, "description": description,
+            "scheme": _scheme,
+            "title": title, "description": _cls,
+            "classification": _cls,
+            "status_code": int(status_code) if status_code else None,
+            "server": server or "",
+            "page_title": page_title or "",
             "timestamp": datetime.datetime.now().isoformat(),
         }
         dest.with_suffix(".json").write_text(json.dumps(sidecar, indent=2))
@@ -17319,6 +17375,7 @@ def take_web_screenshot(
     try:
         from selenium import webdriver
         from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.support.ui import WebDriverWait
 
         opts = Options()
         opts.add_argument("--headless=new")
@@ -17340,13 +17397,40 @@ def take_web_screenshot(
         svc    = _build_chrome_service()
         driver = webdriver.Chrome(service=svc, options=opts)
         final_url = url
+        _page_title = ""
+        _page_loaded = False
         try:
             driver.set_page_load_timeout(timeout_s)
             try:
                 driver.get(url)
-            except Exception:
-                pass   # timeout / load error — screenshot whatever loaded
+                _page_loaded = True
+            except Exception as _ld_exc:
+                _ld_str = str(_ld_exc).lower()
+                if "connectionrefused" in _ld_str.replace(" ", "") or \
+                   "err_connection_refused" in _ld_str or \
+                   "dns" in _ld_str or "neterror" in _ld_str.replace(" ", ""):
+                    _tprint(
+                        f"  {Fore.CYAN}[i] Screenshot skipped {ip}:{port} — "
+                        f"connection failed{Style.RESET_ALL}")
+                    return None
+                _page_loaded = True  # partial load (timeout)
+            if _page_loaded:
+                try:
+                    WebDriverWait(driver, 20).until(
+                        lambda d: d.execute_script("return document.readyState") == "complete"
+                    )
+                    import time as _tw
+                    _tw.sleep(1.5)
+                except Exception:
+                    _tprint(
+                        f"  {Fore.CYAN}[i] Page did not fully load within 20s "
+                        f"— capturing partial screenshot for {ip}:{port}{Style.RESET_ALL}")
             final_url = driver.current_url or url
+            _page_title = ""
+            try:
+                _page_title = driver.title or ""
+            except Exception:
+                pass
             # Expand window to full page height for a full-page-equivalent capture
             total_height = driver.execute_script(
                 "return Math.max("
@@ -17364,6 +17448,18 @@ def take_web_screenshot(
 
         _overlay_url_bar(out_path, final_url)
 
+        _sc_status = None
+        _sc_server = ""
+        try:
+            _sc_r = requests.head(
+                url, timeout=5, verify=False, allow_redirects=True,
+                headers={"Host": hostname} if hostname else {})
+            _sc_status = _sc_r.status_code
+            _sc_server = _sc_r.headers.get("Server", "")
+        except Exception:
+            pass
+        _sc_cls = _classify_screenshot(_page_title, _sc_server, _sc_status)
+
         _tprint(
             f"  {Fore.GREEN}[+] Screenshot: {ip}:{port} → {out_path.name}{Style.RESET_ALL}"
         )
@@ -17371,7 +17467,10 @@ def take_web_screenshot(
                              ip=ip, port=port, hostname=hostname or "",
                              scheme=scheme,
                              title="Web Screenshot",
-                             description=f"Web service screenshot at {scheme}://{host_part}:{port}")
+                             classification=_sc_cls,
+                             status_code=_sc_status,
+                             server=_sc_server,
+                             page_title=_page_title)
         return str(out_path)
 
     except Exception as exc:
@@ -19551,6 +19650,8 @@ def check_tomcat_manager(
                     if hostname:
                         opts.add_argument(f"--host-resolver-rules=MAP {hostname} {ip}")
 
+                    from selenium.webdriver.support.ui import WebDriverWait as _TC_WDW
+
                     svc    = _build_chrome_service()
                     driver = webdriver.Chrome(service=svc, options=opts)
                     shot_path = tomcat_dir / f"{safe_path}_screenshot.png"
@@ -19560,18 +19661,36 @@ def check_tomcat_manager(
                             driver.get(url)
                         except Exception:
                             pass
+                        try:
+                            _TC_WDW(driver, 20).until(
+                                lambda d: d.execute_script("return document.readyState") == "complete")
+                            import time as _ttc; _ttc.sleep(1.5)
+                        except Exception:
+                            pass
                         _tc_final_url = driver.current_url or url
+                        _tc_ptitle = ""
+                        try:
+                            _tc_ptitle = driver.title or ""
+                        except Exception:
+                            pass
                         driver.save_screenshot(str(shot_path))
                         _overlay_url_bar(shot_path, _tc_final_url)
                         _tprint(
                             f"  {Fore.GREEN}[+] Tomcat screenshot: "
                             f"{url} → {shot_path.name}{Style.RESET_ALL}"
                         )
+                        _tc_cls = _classify_screenshot(
+                            _tc_ptitle,
+                            resp.headers.get("Server", ""),
+                            resp.status_code)
                         _register_screenshot(output_mgr.root, shot_path, url=_tc_final_url,
                                              ip=ip, port=port, hostname=hostname or "",
                                              scheme=scheme,
                                              title="Tomcat Manager Screenshot",
-                                             description=f"Apache Tomcat manager page at {url}")
+                                             classification=_tc_cls,
+                                             status_code=resp.status_code,
+                                             server=resp.headers.get("Server", ""),
+                                             page_title=_tc_ptitle)
                     finally:
                         try:
                             driver.quit()
@@ -25420,7 +25539,7 @@ def run_vnc_check(
                                                 _register_screenshot(output_mgr.root, _snap_file,
                                                                      ip=ip, port=port, scheme="vnc",
                                                                      title="VNC No-Auth Screenshot",
-                                                                     description="VNC framebuffer capture — no authentication required")
+                                                                     classification="VNC No-Auth Framebuffer")
                                         else:
                                             lines.append("Framebuffer read incomplete — native screenshot skipped")
                     except Exception as _native_exc:
@@ -25447,7 +25566,7 @@ def run_vnc_check(
                                         _register_screenshot(output_mgr.root, _snap_file,
                                                              ip=ip, port=port, scheme="vnc",
                                                              title="VNC No-Auth Screenshot",
-                                                             description="VNC framebuffer capture — no authentication required")
+                                                             classification="VNC No-Auth Framebuffer")
                             except (subprocess.TimeoutExpired, Exception):
                                 pass
 
