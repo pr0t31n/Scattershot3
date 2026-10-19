@@ -10887,6 +10887,17 @@ def run_nuclei(
         "-severity", "critical,high,medium,low",
         "-tags", "cve,misconfig,exposed-panels,default-login,network,exposure,auth-bypass",
         "-etags", "dos,fuzz,intrusive",
+    ]
+
+    _inv_tags = _nuclei_tags_from_inventory(output_mgr)
+    if _inv_tags:
+        try:
+            _ti = cmd.index("-tags")
+            cmd[_ti + 1] = cmd[_ti + 1] + "," + ",".join(_inv_tags)
+        except (ValueError, IndexError):
+            pass
+
+    cmd += [
         # Performance tuning — halves worst-case per-request wait and lifts
         # concurrency / rate limit so healthy targets finish faster while
         # slow/firewalled targets fail fast instead of stalling.
@@ -12869,7 +12880,7 @@ def load_settings(path: "str | Path") -> dict:
             engagement[field] = str(engagement[field])
 
     # ── Validate scan fields ──────────────────────────────────────────────────
-    bool_scan_keys  = ["fast", "no_ssl", "no_banner", "no_web", "no_nuclei", "no_brute"]
+    bool_scan_keys  = ["fast", "no_ssl", "no_banner", "no_web", "no_nuclei", "no_brute", "no_cve_correlation"]
     int_scan_keys   = ["port_scan_workers", "web_timeout",
                        "sslscan_timeout", "testssl_timeout", "nuclei_timeout"]
     float_scan_keys = ["banner_timeout"]
@@ -13311,6 +13322,10 @@ Examples:
     parser.add_argument(
         "--no-searchsploit", action="store_true", dest="no_searchsploit",
         help="Skip searchsploit exploit-DB lookup against nmap XML output.",
+    )
+    parser.add_argument(
+        "--no-cve-correlation", action="store_true", dest="no_cve_correlation",
+        help="Disable OSV/NVD CVE correlation against software inventory.",
     )
     parser.add_argument(
         "--no-brute", action="store_true", dest="no_brute",
@@ -15373,6 +15388,479 @@ _SW_CANONICAL = {
     "palo alto":          "Palo Alto",
     "sonicwall":          "SonicWall",
 }
+
+
+# ── CPE generation + CVE correlation ──────────────────────────────────────
+
+_CPE_VENDOR_MAP = {
+    "apache": "apache", "apache httpd": "apache", "apache http server": "apache",
+    "nginx": "f5", "openssl": "openssl", "openssh": "openbsd",
+    "vsftpd": "beasts", "proftpd": "proftpd_project", "pure-ftpd": "pureftpd",
+    "mysql": "oracle", "mariadb": "mariadb", "postgresql": "postgresql",
+    "php": "php", "wordpress": "wordpress", "drupal": "drupal", "joomla": "joomla",
+    "tomcat": "apache", "iis": "microsoft", "lighttpd": "lighttpd",
+    "bind": "isc", "dnsmasq": "thekelleys", "postfix": "postfix",
+    "dovecot": "dovecot", "exim": "exim", "sendmail": "sendmail",
+    "redis": "redis", "mongodb": "mongodb", "elasticsearch": "elastic",
+    "rabbitmq": "vmware", "memcached": "memcached", "squid": "squid-cache",
+    "haproxy": "haproxy", "varnish": "varnish-cache", "caddy": "caddyserver",
+    "grafana": "grafana", "jenkins": "jenkins", "gitlab": "gitlab",
+    "samba": "samba", "cups": "apple", "python": "python",
+    "node.js": "nodejs", "nodejs": "nodejs", "ruby": "ruby-lang",
+    "jquery": "jquery", "react": "facebook", "angular": "google",
+    "vue.js": "vuejs", "express": "expressjs", "django": "djangoproject",
+    "flask": "palletsprojects", "spring": "vmware", "laravel": "laravel",
+    "rails": "rubyonrails", "confluence": "atlassian", "jira": "atlassian",
+    "bitbucket": "atlassian", "nextcloud": "nextcloud", "phpmyadmin": "phpmyadmin",
+    "webmin": "webmin", "cockpit": "cockpit-project", "roundcube": "roundcube",
+    "moodle": "moodle", "mediawiki": "mediawiki", "typo3": "typo3",
+    "magento": "magento", "prestashop": "prestashop",
+    "woocommerce": "wordpress", "ghost": "ghost", "strapi": "strapi",
+    "keycloak": "redhat", "sonarqube": "sonarsource", "nexus": "sonatype",
+    "harbor": "linuxfoundation", "gitea": "gitea", "gogs": "gogs",
+    "minio": "minio", "consul": "hashicorp", "vault": "hashicorp",
+    "traefik": "traefik", "envoy": "envoyproxy", "istio": "istio",
+    "kibana": "elastic", "logstash": "elastic", "cassandra": "apache",
+    "couchdb": "apache", "zookeeper": "apache", "kafka": "apache",
+    "activemq": "apache", "solr": "apache", "airflow": "apache",
+    "superset": "apache", "gunicorn": "benoitc", "uwsgi": "unbit",
+    "passenger": "phusion", "puma": "puma", "unicorn": "unicorn",
+}
+
+_CPE_PRODUCT_MAP = {
+    "apache": "http_server", "apache httpd": "http_server",
+    "apache http server": "http_server", "openssh": "openssh",
+    "mysql": "mysql", "mariadb": "mariadb", "tomcat": "tomcat",
+    "iis": "internet_information_services", "node.js": "node.js",
+    "nodejs": "node.js", "vue.js": "vue.js", "pure-ftpd": "pure-ftpd",
+    "bind": "bind", "cups": "cups", "f5 big-ip": "big-ip",
+}
+
+_SW_TO_NUCLEI_TAGS = {
+    "wordpress": "wordpress", "drupal": "drupal", "joomla": "joomla",
+    "apache": "apache", "nginx": "nginx", "tomcat": "tomcat",
+    "jenkins": "jenkins", "gitlab": "gitlab", "grafana": "grafana",
+    "confluence": "atlassian", "jira": "atlassian", "bitbucket": "atlassian",
+    "nextcloud": "nextcloud", "phpmyadmin": "phpmyadmin", "webmin": "webmin",
+    "moodle": "moodle", "mediawiki": "mediawiki", "magento": "magento",
+    "roundcube": "roundcube", "elasticsearch": "elastic",
+    "kibana": "elastic", "spring": "spring", "strapi": "strapi",
+    "ghost": "ghost", "sonarqube": "sonarqube", "minio": "minio",
+    "gitea": "gitea", "keycloak": "keycloak", "harbor": "harbor",
+}
+
+
+def _build_cpe23(software_name: str, version: str | None) -> str | None:
+    key = software_name.lower().strip()
+    vendor = _CPE_VENDOR_MAP.get(key)
+    if not vendor:
+        for k, v in _CPE_VENDOR_MAP.items():
+            if k in key or key in k:
+                vendor = v
+                break
+    if not vendor:
+        return None
+    product = _CPE_PRODUCT_MAP.get(key, key.replace(" ", "_").replace("-", "_").lower())
+    ver_clean = re.sub(r'[^0-9.]', '', (version or "").split()[0]) if version else "*"
+    if not ver_clean:
+        ver_clean = "*"
+    return f"cpe:2.3:a:{vendor}:{product}:{ver_clean}:*:*:*:*:*:*:*"
+
+
+def _nuclei_tags_from_inventory(output_mgr: "OutputManager") -> list[str]:
+    extra = set()
+    try:
+        sw = json.loads(output_mgr.software_inventory.read_text(encoding="utf-8"))
+        for entry in sw:
+            name = (entry.get("software") or "").lower().strip()
+            for pattern, tag in _SW_TO_NUCLEI_TAGS.items():
+                if pattern in name:
+                    extra.add(tag)
+                    break
+    except Exception:
+        pass
+    return sorted(extra)
+
+
+def _query_osv_cves(name: str, version: str) -> list[dict]:
+    import urllib.request, urllib.error
+    payload = json.dumps({"version": version, "package": {"name": name.lower()}}).encode()
+    try:
+        req = urllib.request.Request(
+            "https://api.osv.dev/v1/query",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        return data.get("vulns", [])
+    except Exception:
+        return []
+
+
+def _query_nvd_cves(name: str, version: str) -> list[dict]:
+    import urllib.request, urllib.error, urllib.parse
+    kw = urllib.parse.quote(f"{name} {version}")
+    url = f"https://services.nvd.nist.gov/rest/json/cves/2.0?keywordSearch={kw}&resultsPerPage=5"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "scattershot3"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+        results = []
+        for item in data.get("vulnerabilities", []):
+            cve = item.get("cve", {})
+            cve_id = cve.get("id", "")
+            if not cve_id.startswith("CVE-"):
+                continue
+            descs = cve.get("descriptions", [])
+            summary = ""
+            for d in descs:
+                if d.get("lang") == "en":
+                    summary = d.get("value", "")
+                    break
+            if not summary and descs:
+                summary = descs[0].get("value", "")
+            metrics = cve.get("metrics", {})
+            score = 0.0
+            vector = ""
+            for mkey in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
+                mlist = metrics.get(mkey, [])
+                if mlist:
+                    cvss_data = mlist[0].get("cvssData", {})
+                    score = cvss_data.get("baseScore", 0.0)
+                    vector = cvss_data.get("vectorString", "")
+                    break
+            results.append({
+                "id": cve_id,
+                "summary": summary[:500],
+                "score": score,
+                "vector": vector,
+                "aliases": [cve_id],
+            })
+        return results
+    except Exception:
+        return []
+
+
+def _osv_vuln_to_cves(vuln: dict) -> list[str]:
+    cves = []
+    vid = vuln.get("id", "")
+    if vid.startswith("CVE-"):
+        cves.append(vid)
+    for alias in vuln.get("aliases", []):
+        if alias.startswith("CVE-") and alias not in cves:
+            cves.append(alias)
+    return cves
+
+
+def _osv_max_severity(vuln: dict) -> tuple[str, float]:
+    best_score = 0.0
+    for sev in vuln.get("severity", []):
+        vec = sev.get("score", "")
+        if vec:
+            try:
+                s = float(vec)
+                if s > best_score:
+                    best_score = s
+            except (ValueError, TypeError):
+                pass
+    cvss = vuln.get("database_specific", {}).get("cvss", {})
+    s2 = cvss.get("score") or cvss.get("baseScore") or 0.0
+    if isinstance(s2, str):
+        try: s2 = float(s2)
+        except ValueError: s2 = 0.0
+    if s2 > best_score:
+        best_score = s2
+    if best_score >= 9.0: return ("CRITICAL", best_score)
+    if best_score >= 7.0: return ("HIGH", best_score)
+    if best_score >= 4.0: return ("MEDIUM", best_score)
+    if best_score > 0:    return ("LOW", best_score)
+    return ("MEDIUM", 0.0)
+
+
+def correlate_software_cves(
+    output_mgr: "OutputManager",
+    all_results: dict,
+    scope: str,
+) -> int:
+    try:
+        sw_entries = json.loads(
+            output_mgr.software_inventory.read_text(encoding="utf-8")
+        )
+    except Exception:
+        return 0
+    if not sw_entries:
+        return 0
+
+    count = 0
+    seen: set = set()
+    cpe_records: list[dict] = []
+    _nvd_calls = 0
+
+    for entry in sw_entries:
+        name = entry.get("software", "")
+        version = entry.get("version")
+        ip = entry.get("ip", "")
+        port = entry.get("port", 0)
+        hostname = entry.get("hostname")
+        if not name or not version:
+            continue
+
+        cpe = _build_cpe23(name, version)
+        if cpe:
+            cpe_records.append({**entry, "cpe": cpe})
+
+        sw_key = (name.lower(), version)
+        if sw_key in seen:
+            continue
+
+        vulns = _query_osv_cves(name, version)
+        source = "osv"
+
+        if not vulns and _nvd_calls < 20:
+            nvd_results = _query_nvd_cves(name, version)
+            _nvd_calls += 1
+            if _nvd_calls % 5 == 0:
+                import time
+                time.sleep(6)
+            if nvd_results:
+                vulns = nvd_results
+                source = "nvd"
+
+        if not vulns:
+            continue
+        seen.add(sw_key)
+
+        all_cves: list[str] = []
+        highest_risk = "INFO"
+        highest_score = 0.0
+        details_lines: list[str] = []
+        ref_urls: list[str] = []
+        actionable_cves: dict[str, list[dict]] = {}
+        _RISK_ORDER = {"CRITICAL": 5, "HIGH": 4, "MEDIUM": 3, "LOW": 2, "INFO": 1}
+        _EXPLOIT_REF_RE = re.compile(
+            r"exploit-db\.com|packetstorm|github\.com/.+/exploit|"
+            r"github\.com/.+/[Pp][Oo][Cc]|metasploit|rapid7\.com/db",
+            re.IGNORECASE,
+        )
+        _ACTIONABLE_CATEGORIES = [
+            ("RCE / Code Execution", re.compile(
+                r"remote.code.exec|command.inject|code.exec|"
+                r"arbitrary.code|shell.inject|os.command|"
+                r"\bRCE\b|\bACE\b|code.injection|command.execution",
+                re.IGNORECASE)),
+            ("Injection", re.compile(
+                r"sql.inject|ldap.inject|xpath.inject|nosql.inject|"
+                r"ssti|server.side.template|expression.language.inject|"
+                r"ognl.inject|el.inject|hql.inject",
+                re.IGNORECASE)),
+            ("Authentication Bypass", re.compile(
+                r"auth.+bypass|bypass.+auth|improper.auth|"
+                r"broken.auth|authentication.bypass|unauthenticated.access",
+                re.IGNORECASE)),
+            ("Privilege Escalation", re.compile(
+                r"privilege.escalat|privesc|\bpe\b.+escalat|"
+                r"elevation.of.privilege|unauthorized.+admin|"
+                r"improper.+privilege|vertical.+escalat",
+                re.IGNORECASE)),
+            ("SSRF", re.compile(
+                r"server.side.request.forg|\bssrf\b|"
+                r"request.forgery.+server",
+                re.IGNORECASE)),
+            ("Deserialization", re.compile(
+                r"deserializ|insecure.+unserializ|"
+                r"object.inject|java.+serial|pickle.+load|"
+                r"yaml.+load.+untrust",
+                re.IGNORECASE)),
+            ("Path Traversal / LFI", re.compile(
+                r"path.traversal|directory.traversal|"
+                r"local.file.inclus|\blfi\b|"
+                r"arbitrary.file.read|file.+disclosure",
+                re.IGNORECASE)),
+            ("Information Disclosure", re.compile(
+                r"credential.+leak|key.+expos|secret.+expos|"
+                r"password.+disclos|source.code.+disclos|"
+                r"sensitive.+data.+expos|private.key.+leak",
+                re.IGNORECASE)),
+        ]
+
+        for vuln in vulns[:10]:
+            if source == "osv":
+                v_cves = _osv_vuln_to_cves(vuln)
+                v_risk, v_score = _osv_max_severity(vuln)
+                v_id = vuln.get("id", "unknown")
+                v_summary = vuln.get("summary", vuln.get("details", "")[:300])
+                v_refs = [r.get("url", "") for r in vuln.get("references", []) if r.get("url")]
+                for _ru in v_refs:
+                    if _ru not in ref_urls:
+                        ref_urls.append(_ru)
+                        break
+            else:
+                v_cves = vuln.get("aliases", [vuln.get("id", "")])
+                v_score = vuln.get("score", 0.0)
+                if v_score >= 9.0: v_risk = "CRITICAL"
+                elif v_score >= 7.0: v_risk = "HIGH"
+                elif v_score >= 4.0: v_risk = "MEDIUM"
+                elif v_score > 0: v_risk = "LOW"
+                else: v_risk = "MEDIUM"
+                v_id = vuln.get("id", "unknown")
+                v_summary = vuln.get("summary", "")
+                v_refs = [f"https://nvd.nist.gov/vuln/detail/{v_id}"]
+                ref_urls.extend(v_refs)
+
+            for c in v_cves:
+                if c not in all_cves:
+                    all_cves.append(c)
+
+            if _RISK_ORDER.get(v_risk, 0) > _RISK_ORDER.get(highest_risk, 0):
+                highest_risk = v_risk
+            if v_score > highest_score:
+                highest_score = v_score
+
+            v_text = f"{v_summary} {v_id} {' '.join(v_cves)}"
+            exploit_urls = [u for u in v_refs if _EXPLOIT_REF_RE.search(u)]
+
+            matched_cats: list[str] = []
+            for cat_name, cat_re in _ACTIONABLE_CATEGORIES:
+                if cat_re.search(v_text):
+                    matched_cats.append(cat_name)
+                    actionable_cves.setdefault(cat_name, []).append({
+                        "cves": v_cves, "id": v_id, "risk": v_risk,
+                        "score": v_score, "summary": v_summary,
+                        "exploit_urls": exploit_urls,
+                    })
+            if cat_name == "Information Disclosure" and matched_cats == ["Information Disclosure"]:
+                if _RISK_ORDER.get(v_risk, 0) < _RISK_ORDER.get("HIGH", 0):
+                    actionable_cves["Information Disclosure"].pop()
+                    matched_cats.clear()
+
+            cve_label = ", ".join(v_cves) if v_cves else v_id
+            score_label = f" (CVSS {v_score})" if v_score else ""
+            line = f"  [{v_risk}] {cve_label}{score_label}\n    {v_summary}"
+            if matched_cats:
+                line += f"\n    ** {' / '.join(matched_cats)} **"
+            if exploit_urls:
+                line += "\n    Known exploit: " + exploit_urls[0]
+            details_lines.append(line)
+
+        _sw_inv_rel = str(output_mgr.software_inventory.relative_to(output_mgr.root))
+
+        output_mgr.log_finding(
+            title=f"Vulnerability (Version Based): {name} {version}",
+            ip=ip, port=int(port), hostname=hostname,
+            risk=highest_risk,
+            description=(
+                f"{len(vulns[:10])} known vulnerability(ies) identified for "
+                f"{name} {version} via {source.upper()} database correlation."
+                + (f"\nCPE: {cpe}" if cpe else "")
+                + f"\nHighest severity: {highest_risk}"
+                + (f" (CVSS {highest_score})" if highest_score else "")
+            ),
+            output=(
+                f"Software: {name} {version}\n"
+                f"Source: {source.upper()} vulnerability database\n"
+                f"Total vulnerabilities: {len(vulns[:10])}\n"
+                f"Highest risk: {highest_risk}"
+                + (f" (CVSS {highest_score})" if highest_score else "")
+                + f"\n\n"
+                + "\n\n".join(details_lines)
+            ),
+            sources=f"{source}-cve-correlation",
+            service="",
+            output_file=_sw_inv_rel,
+            cves=",".join(all_cves),
+            owasp="A06:2025 Vulnerable and Outdated Components",
+            nist="SI-2",
+            remediation=(
+                f"Update {name} to the latest stable version to address "
+                f"{len(all_cves)} known CVE(s). "
+                + (f"See: {ref_urls[0]}" if ref_urls else
+                   "Consult vendor advisories for remediation guidance.")
+            ),
+        )
+        count += 1
+
+        _AI_TOOLS = {
+            "RCE / Code Execution": "Metasploit / Manual Exploit Verification",
+            "Injection": "sqlmap / Manual Injection Testing",
+            "Authentication Bypass": "Manual Verification / Burp Suite",
+            "Privilege Escalation": "Manual Verification / Metasploit",
+            "SSRF": "Manual Verification / Burp Suite",
+            "Deserialization": "ysoserial / Manual Exploit Verification",
+            "Path Traversal / LFI": "Manual Verification / Burp Suite",
+            "Information Disclosure": "Manual Verification",
+        }
+        for cat_name, cat_vulns in actionable_cves.items():
+            if not cat_vulns:
+                continue
+            _ai_cve_ids: list[str] = []
+            _ai_lines: list[str] = []
+            for _ac in cat_vulns:
+                _ac_label = ", ".join(_ac["cves"]) if _ac["cves"] else _ac["id"]
+                _ai_cve_ids.extend(_ac["cves"])
+                _ac_line = f"{_ac_label} ({_ac['risk']}"
+                if _ac["score"]:
+                    _ac_line += f", CVSS {_ac['score']}"
+                _ac_line += f"): {_ac['summary']}"
+                if _ac["exploit_urls"]:
+                    _ac_line += f"\n  Known exploit: {_ac['exploit_urls'][0]}"
+                _ai_lines.append(_ac_line)
+
+            _has_exploit = any(ac["exploit_urls"] for ac in cat_vulns)
+            _ai_rec = (
+                f"Prioritise patching {name} {version} — "
+                f"{len(cat_vulns)} CVE(s) classified as {cat_name}"
+            )
+            if _has_exploit:
+                _first_exp = next(
+                    u for ac in cat_vulns for u in ac["exploit_urls"]
+                )
+                _ai_rec += (
+                    f". A public exploit is available ({_first_exp}); "
+                    "assume active exploitation is feasible"
+                )
+            _ai_rec += ". Update immediately or apply vendor mitigations."
+
+            _ai_priority = "CRITICAL" if cat_name in (
+                "RCE / Code Execution", "Injection", "Authentication Bypass",
+                "Deserialization",
+            ) else "HIGH"
+
+            output_mgr.log_action_item(
+                item_type="exploit",
+                recommended_tool=_AI_TOOLS.get(cat_name, "Manual Verification"),
+                target=f"{ip}:{port}",
+                ip=ip,
+                port=int(port),
+                hostname=hostname,
+                title=f"{cat_name} Verification — {name} {version}",
+                description=(
+                    f"{len(cat_vulns)} {cat_name.lower()} CVE(s) "
+                    f"identified for {name} {version}:\n"
+                    + "\n".join(_ai_lines)
+                ),
+                source_finding=f"Vulnerability (Version Based): {name} {version}",
+                priority=_ai_priority,
+                scope=scope,
+                metadata={
+                    "software": name,
+                    "version": version,
+                    "category": cat_name,
+                    "cves": _ai_cve_ids,
+                    "has_public_exploit": _has_exploit,
+                    "recommendation": _ai_rec,
+                },
+            )
+
+    if cpe_records:
+        cpe_path = output_mgr.root / "software_inventory_cpe.json"
+        try:
+            cpe_path.write_text(json.dumps(cpe_records, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    return count
 
 
 def record_software(
@@ -18434,6 +18922,31 @@ def run_smb_share_deep_enum(
             priority="HIGH",
         )
 
+        # Database files on SMB → Auger action item
+        _db_files = [sf for sf in _sens if _DB_FILE_RE.search(sf.get("path", ""))]
+        if _db_files:
+            _db_paths = ", ".join(sf["path"] for sf in _db_files[:5])
+            output_mgr.log_action_item(
+                item_type="database_file",
+                recommended_tool="Auger",
+                target=f"{ip}:{port}",
+                ip=ip, port=port,
+                title="Database File on SMB Share — Auger File Analysis Recommended",
+                description=(
+                    f"{len(_db_files)} database file(s) found on \\\\{ip}\\{share}: "
+                    f"{_db_paths}. Auger can analyze these files for sensitive data, "
+                    "plaintext credentials, excessive privileges, and schema security issues."
+                ),
+                hostname=hostname,
+                source_finding="Sensitive File on SMB Share",
+                priority="HIGH",
+                metadata={
+                    "share": share,
+                    "db_files": [sf["path"] for sf in _db_files[:10]],
+                    "source": "smbclient",
+                },
+            )
+
 
 def run_smbmap_with_creds(
     ip: str,
@@ -19678,10 +20191,38 @@ def run_gobuster(
             output_file=str(out_file),
         )
 
+        # Database file → Auger action item
+        _path_lower = path.lower()
+        if _DB_FILE_RE.search(_path_lower):
+            _tprint(
+                f"  {Fore.YELLOW}[*] Database file discovered: {found_url} "
+                f"→ Auger action item{Style.RESET_ALL}"
+            )
+            output_mgr.log_action_item(
+                item_type="database_file",
+                recommended_tool="Auger",
+                target=found_url,
+                ip=ip, port=port,
+                title="Database File Discovered — Auger File Analysis Recommended",
+                description=(
+                    f"A database file was discovered at {found_url} (HTTP {status}). "
+                    "Auger can download and analyze this file for sensitive data, "
+                    "plaintext credentials, excessive privileges, and schema security "
+                    "issues."
+                ),
+                hostname=hostname,
+                source_finding="Web Directory/File Discovery",
+                priority="HIGH",
+                metadata={
+                    "db_file_url": found_url,
+                    "http_status": status,
+                    "source": "gobuster",
+                },
+            )
+
         # For HTML-like paths, fetch and check for a login form
         if status == 200:
             _gb_html_exts = (".html", ".htm", ".php", ".asp", ".aspx", ".jsp")
-            _path_lower = path.lower()
             if path.endswith("/") or "." not in path.split("/")[-1] or \
                     any(_path_lower.endswith(e) for e in _gb_html_exts):
                 try:
@@ -22873,6 +23414,10 @@ def run_sip_enum(
 
 
 # ── Sensitive file / content detection ─────────────────────────────────────
+_DB_FILE_RE = re.compile(
+    r"(?i)\.(?:sql|dump|sqlite3?|sqlitedb|s3db|db|rdb|h2\.db|mv\.db)$"
+)
+
 _SENS_NAME_RE = re.compile(
     r"(?i)(?:^|[/\\])("
     r"password[sx]?|passwd|shadow|secrets?|credentials?"
@@ -23419,6 +23964,32 @@ def run_nfs_enum(
                             source_finding="Sensitive File on NFS",
                             priority="HIGH",
                         )
+
+                        # Database files on NFS → Auger action item
+                        _db_files = [sf for sf in _sens if _DB_FILE_RE.search(sf.get("path", ""))]
+                        if _db_files:
+                            _db_paths = ", ".join(sf["path"] for sf in _db_files[:5])
+                            output_mgr.log_action_item(
+                                item_type="database_file",
+                                recommended_tool="Auger",
+                                target=f"{ip}:{_nfs_port}",
+                                ip=ip, port=_nfs_port,
+                                title="Database File on NFS Export — Auger File Analysis Recommended",
+                                description=(
+                                    f"{len(_db_files)} database file(s) on NFS export "
+                                    f"{_export_path} at {ip}: {_db_paths}. Auger can analyze "
+                                    "these files for sensitive data, plaintext credentials, "
+                                    "excessive privileges, and schema security issues."
+                                ),
+                                hostname=hostname,
+                                source_finding="Sensitive File on NFS",
+                                priority="HIGH",
+                                metadata={
+                                    "nfs_export": _export_path,
+                                    "db_files": [sf["path"] for sf in _db_files[:10]],
+                                    "source": "nfs-rpc",
+                                },
+                            )
     except subprocess.TimeoutExpired:
         _vc.log(f"showmount (NFS) timed out on {ip}:{port} after {timeout}s — command: {' '.join(cmd)}", "WARNING")
         _ensure_output_file(out_file, " ".join(cmd),
@@ -30378,6 +30949,34 @@ def scan_scope(
             print(f"{Fore.RED}[!] Metasploit search error: {_msf_exc}{Style.RESET_ALL}")
             _vc.status(f"{scope}_p4c_metasploit",
                        label="Phase 4c: Metasploit Search", status="error")
+
+    # ── Phase 4d: CVE Correlation — OSV + NVD + CPE matching ────────────────
+    if alive_ips and not getattr(args, "no_cve_correlation", False):
+        print(
+            f"\n{Fore.CYAN}[*] {scope_label} Phase 4d: CVE Correlation "
+            f"(software inventory → OSV/NVD)...{Style.RESET_ALL}"
+        )
+        _vc.status(f"{scope}_p4d_cve", label="Phase 4d: CVE Correlation",
+                   status="running")
+        try:
+            _cve_count = correlate_software_cves(output_mgr, all_results, scope)
+            _vc.status(f"{scope}_p4d_cve", label="Phase 4d: CVE Correlation",
+                       status="complete",
+                       step=f"{_cve_count} CVE match(es)")
+            if _cve_count:
+                print(
+                    f"{Fore.GREEN}[+] {scope_label} CVE correlation: "
+                    f"{_cve_count} new finding(s){Style.RESET_ALL}"
+                )
+            else:
+                print(
+                    f"{Fore.YELLOW}[~] {scope_label} CVE correlation: "
+                    f"no additional matches{Style.RESET_ALL}"
+                )
+        except Exception as exc:
+            print(f"{Fore.RED}[!] CVE correlation error: {exc}{Style.RESET_ALL}")
+            _vc.status(f"{scope}_p4d_cve", label="Phase 4d: CVE Correlation",
+                       status="error", step=str(exc)[:80])
 
     # ── Phase 5: Database Attack Suite ───────────────────────────────────────
     _any_db_tool = odat_path or msdat_path or enumdb_path
