@@ -356,6 +356,8 @@ PIP_PACKAGES = [
     "bloodhound>=1.7.0",
     # enumdb — removed from pip (no longer available at >=1.0.10).
     # Installed via git clone in install_git() instead.
+    # o365spray — O365 user enumeration (Phase 14).
+    "o365spray>=3.0.4",
 ]
 
 def install_pip():
@@ -367,6 +369,49 @@ def install_pip():
             continue
         info(f"pip install {pkg} …")
         run(pip + ["install", "--break-system-packages", pkg], check=False)
+    _patch_o365spray_asyncio()
+
+
+def _patch_o365spray_asyncio():
+    """Patch o365spray for Python 3.12+ asyncio.get_event_loop() removal.
+
+    o365spray <=3.0.4 calls asyncio.get_event_loop() which raises RuntimeError
+    on Python 3.12+ when no event loop exists.  Replace with new_event_loop().
+    """
+    if sys.version_info < (3, 12):
+        return
+    try:
+        import o365spray
+        pkg_dir = os.path.dirname(o365spray.__file__)
+    except ImportError:
+        return
+    patched = 0
+    targets = [
+        os.path.join(pkg_dir, "core", "handlers", "enumerator", "enumerate.py"),
+        os.path.join(pkg_dir, "core", "handlers", "sprayer", "spray.py"),
+    ]
+    for fpath in targets:
+        if not os.path.isfile(fpath):
+            continue
+        try:
+            text = open(fpath, "r").read()
+        except OSError:
+            continue
+        if "asyncio.get_event_loop()" not in text:
+            continue
+        new_text = text.replace("asyncio.get_event_loop()",
+                                "asyncio.new_event_loop()")
+        try:
+            open(fpath, "w").write(new_text)
+            patched += 1
+            info(f"  ✓ Patched o365spray asyncio: {os.path.basename(fpath)}")
+        except OSError as e:
+            warn(f"  Cannot patch {fpath}: {e}")
+    if patched:
+        info(f"  ✓ o365spray asyncio patch applied ({patched} file(s))")
+    else:
+        info(f"  ✓ o365spray asyncio patch not needed")
+
 
 # ---------------------------------------------------------------------------
 # Go tools
@@ -950,7 +995,7 @@ VERIFY_TOOLS = [
 VERIFY_PYTHON = [
     "nmap", "scapy", "requests", "colorama",
     "impacket", "ldap3", "openpyxl", "dns", "selenium",
-    "bloodhound",
+    "bloodhound", "o365spray",
 ]
 
 def run_check():
