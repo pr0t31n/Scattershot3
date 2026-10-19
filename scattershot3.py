@@ -11641,9 +11641,6 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
             out_path = output_mgr.write_ssl_output("testssl", ip, port, output)
             result["output_file"] = str(out_path)
             extra = {"target": f"{ip}:{port}", "exit_code": proc.returncode}
-            # Always record the invocation so port_log_index can find it;
-            # log_error in addition when exit code indicates a problem.
-            # testssl exits non-zero when it finds issues, which is normal.
             output_mgr.log_command(
                 "testssl", testssl_path, cmd, out_path, extra=extra,
                 stdout=_stdout, stderr=_stderr,
@@ -11654,6 +11651,40 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                     "testssl", testssl_path, cmd,
                     f"non-zero exit code {proc.returncode}", extra=extra,
                 )
+
+        # ── No-TLS-service guard ──────────────────────────────────────────
+        # When testssl reports that no TLS protocol is offered at all
+        # (SSLv2 through TLS 1.3 all "not offered") and couldn't
+        # determine what service is running, the port is not a TLS
+        # endpoint.  Any findings produced from this output (grade caps,
+        # missing FS, test-failed lines) are false positives.  Return
+        # the raw output for logging but skip all finding generation.
+        _output_lo = output.lower()
+        _no_tls_service = (
+            "couldn't determine what's running" in _output_lo
+            or "service detected:       http" not in _output_lo
+            and all(
+                f"{proto}    not offered" in _output_lo
+                or f"{proto}   not offered" in _output_lo
+                or f"{proto}  not offered" in _output_lo
+                for proto in ("tls 1.2", "tls 1.3")
+            )
+            and "no connection" in _output_lo
+        )
+        if _no_tls_service:
+            _tprint(
+                f"  {Fore.YELLOW}[~] testssl {ip}:{port} — no TLS service "
+                f"detected (all protocols refused); skipping findings"
+                f"{Style.RESET_ALL}"
+            )
+            if output_mgr:
+                output_mgr.log_error(
+                    "testssl", testssl_path, cmd,
+                    f"No TLS service on {ip}:{port} — all protocols refused, "
+                    "all client simulations failed. Findings suppressed.",
+                    extra={"target": f"{ip}:{port}"},
+                )
+            return result
 
         for line in output.splitlines():
             line_stripped = line.strip()
