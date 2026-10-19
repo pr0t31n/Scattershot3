@@ -20160,6 +20160,8 @@ def run_shcheck(
                     continue
                 if header_name in _DEPRECATED_HEADERS:
                     continue
+                if header_name == _HSTS_HEADER and scheme != "https":
+                    continue
                 _seen_headers.add(header_name)
                 risk = "LOW"
                 _tprint(
@@ -20201,6 +20203,8 @@ def run_shcheck(
                 continue
             header_name = m.group(1).strip()
             if header_name in _DEPRECATED_HEADERS:
+                continue
+            if header_name == _HSTS_HEADER and scheme != "https":
                 continue
             risk = "LOW"
             _tprint(
