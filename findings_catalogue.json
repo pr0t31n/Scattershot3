@@ -11943,12 +11943,12 @@
     },
     {
       "id": "SS-042",
-      "title": "Misconfigured Secure Cookie Attribute: SameSite",
+      "title": "Cookies: Misconfigured SameSite Attribute",
       "aliases": [
-        "Missing Secure Cookie Attribute: SameSite",
-        "Missing Secure Cookie Attribute: HttpOnly",
-        "Misconfigured Secure Cookie Attribute: SameSite",
-        "Missing Secure Cookie Attribute: Secure"
+        "Cookies: Missing SameSite Attribute",
+        "Cookies: Missing HttpOnly Flag",
+        "Cookies: Misconfigured SameSite Attribute",
+        "Cookies: Missing Secure Flag"
       ],
       "source_tools": [
         "scattershot3"
@@ -12052,12 +12052,12 @@
     },
     {
       "id": "SS-043",
-      "title": "Missing Secure Cookie Attribute: HttpOnly",
+      "title": "Cookies: Missing HttpOnly Flag",
       "aliases": [
-        "Missing Secure Cookie Attribute: SameSite",
-        "Missing Secure Cookie Attribute: HttpOnly",
-        "Misconfigured Secure Cookie Attribute: SameSite",
-        "Missing Secure Cookie Attribute: Secure"
+        "Cookies: Missing SameSite Attribute",
+        "Cookies: Missing HttpOnly Flag",
+        "Cookies: Misconfigured SameSite Attribute",
+        "Cookies: Missing Secure Flag"
       ],
       "source_tools": [
         "scattershot3"
@@ -12161,12 +12161,12 @@
     },
     {
       "id": "SS-044",
-      "title": "Missing Secure Cookie Attribute: SameSite",
+      "title": "Cookies: Missing SameSite Attribute",
       "aliases": [
-        "Missing Secure Cookie Attribute: SameSite",
-        "Missing Secure Cookie Attribute: HttpOnly",
-        "Misconfigured Secure Cookie Attribute: SameSite",
-        "Missing Secure Cookie Attribute: Secure"
+        "Cookies: Missing SameSite Attribute",
+        "Cookies: Missing HttpOnly Flag",
+        "Cookies: Misconfigured SameSite Attribute",
+        "Cookies: Missing Secure Flag"
       ],
       "source_tools": [
         "scattershot3"
@@ -12270,12 +12270,12 @@
     },
     {
       "id": "SS-045",
-      "title": "Missing Secure Cookie Attribute: Secure",
+      "title": "Cookies: Missing Secure Flag",
       "aliases": [
-        "Missing Secure Cookie Attribute: SameSite",
-        "Missing Secure Cookie Attribute: HttpOnly",
-        "Misconfigured Secure Cookie Attribute: SameSite",
-        "Missing Secure Cookie Attribute: Secure"
+        "Cookies: Missing SameSite Attribute",
+        "Cookies: Missing HttpOnly Flag",
+        "Cookies: Misconfigured SameSite Attribute",
+        "Cookies: Missing Secure Flag"
       ],
       "source_tools": [
         "scattershot3"

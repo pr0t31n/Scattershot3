@@ -8767,7 +8767,7 @@ def _port_scan_worker(
                     _sc_out  = f"Set-Cookie: {_sc[:300]}"
                     if "httponly" not in _sc_lo:
                         output_mgr.log_finding(
-                            title="Missing Secure Cookie Attribute: HttpOnly",
+                            title="Cookies: Missing HttpOnly Flag",
                             ip=ip, port=port, hostname=hostname, risk="LOW",
                             command=_sc_cmd_str,
                             description=(
@@ -8782,7 +8782,7 @@ def _port_scan_worker(
                         )
                     if _is_https and "secure" not in _sc_lo:
                         output_mgr.log_finding(
-                            title="Missing Secure Cookie Attribute: Secure",
+                            title="Cookies: Missing Secure Flag",
                             ip=ip, port=port, hostname=hostname, risk="LOW",
                             command=_sc_cmd_str,
                             description=(
@@ -8798,7 +8798,7 @@ def _port_scan_worker(
                     _ss_m = re.search(r'samesite\s*=\s*([^\s;,]+)', _sc_lo)
                     if not _ss_m:
                         output_mgr.log_finding(
-                            title="Missing Secure Cookie Attribute: SameSite",
+                            title="Cookies: Missing SameSite Attribute",
                             ip=ip, port=port, hostname=hostname, risk="LOW",
                             command=_sc_cmd_str,
                             description=(
@@ -8815,7 +8815,7 @@ def _port_scan_worker(
                         _ss_val = _ss_m.group(1).strip()
                         if _ss_val not in ("strict", "lax", "none"):
                             output_mgr.log_finding(
-                                title="Misconfigured Secure Cookie Attribute: SameSite",
+                                title="Cookies: Misconfigured SameSite Attribute",
                                 ip=ip, port=port, hostname=hostname, risk="LOW",
                                 command=_sc_cmd_str,
                                 description=(
@@ -8829,7 +8829,7 @@ def _port_scan_worker(
                             )
                         elif _ss_val == "none" and "secure" not in _sc_lo:
                             output_mgr.log_finding(
-                                title="Misconfigured Secure Cookie Attribute: SameSite",
+                                title="Cookies: Misconfigured SameSite Attribute",
                                 ip=ip, port=port, hostname=hostname, risk="LOW",
                                 command=_sc_cmd_str,
                                 description=(
@@ -29760,9 +29760,9 @@ def run_zap_dast(
         # a separate finding.  Risk is overridden to the canonical level.
         _ZAP_MERGE_MAP = {
             "HTTP Only Site": ("Insecure Protocol Detected: HTTP", "MEDIUM"),
-            "Cookie No HttpOnly Flag": ("Insecure Cookie Configuration: Missing HttpOnly", "LOW"),
-            "Cookie Without Secure Flag": ("Insecure Cookie Configuration: Missing Secure", "LOW"),
-            "Cookie without SameSite Attribute": ("Insecure Cookie Configuration: Missing SameSite", "LOW"),
+            "Cookie No HttpOnly Flag": ("Cookies: Missing HttpOnly Flag", "LOW"),
+            "Cookie Without Secure Flag": ("Cookies: Missing Secure Flag", "LOW"),
+            "Cookie without SameSite Attribute": ("Cookies: Missing SameSite Attribute", "LOW"),
             "Strict-Transport-Security Header Not Set": ("Missing Security Header: Strict-Transport-Security", "LOW"),
         }
         # CSP-related alerts are consolidated into a single finding per
