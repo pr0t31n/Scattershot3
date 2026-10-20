@@ -1684,6 +1684,38 @@ except Exception:
 # on every iteration.  Named with a leading underscore to flag them as
 # private module-level constants rather than public API.
 
+# Infrastructure cookie patterns — load balancer, CDN, WAF, reverse-proxy
+# cookies whose missing security flags are not a session-hijack vector.
+_INFRA_COOKIE_RE = re.compile(
+    r'^(BIGipServer|AWSALB|AWSELB|__cf|_cf_bm|cf_clearance|'
+    r'incap_ses|visid_incap|nlbi_|GCLB|SERVERID|HAProxy|'
+    r'route|__RequestVerificationToken|__AntiXsrf|'
+    r'AWSALBCORS|AWSELBCORS|__cflb|__cfruid|'
+    r'pps_magic|AzureAppProxy)',
+    re.I,
+)
+
+
+def _is_deletion_cookie(sc_raw: str) -> bool:
+    """Return True when a Set-Cookie header is a deletion instruction."""
+    parts = sc_raw.split(";")
+    nv = parts[0].strip()
+    val = nv.split("=", 1)[1].strip() if "=" in nv else ""
+    if val and val not in ('""', "''"):
+        return False
+    for p in parts[1:]:
+        p = p.strip().lower()
+        if p.startswith("expires=") and ("1970" in p or "1969" in p):
+            return True
+        if p.startswith("max-age="):
+            try:
+                if int(p[8:].strip()) <= 0:
+                    return True
+            except ValueError:
+                pass
+    return False
+
+
 # HTML <title> extraction used in probe_http()
 _RE_TITLE      = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
@@ -8728,6 +8760,10 @@ def _port_scan_worker(
                     _sc_lo   = _sc.lower()
                     _cname   = (_sc.split("=")[0].strip() if "=" in _sc
                                 else _sc.split(";")[0].strip())
+                    if _INFRA_COOKIE_RE.match(_cname):
+                        continue
+                    if _is_deletion_cookie(_sc):
+                        continue
                     _sc_out  = f"Set-Cookie: {_sc[:300]}"
                     if "httponly" not in _sc_lo:
                         output_mgr.log_finding(
