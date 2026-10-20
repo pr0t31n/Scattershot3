@@ -356,8 +356,7 @@ PIP_PACKAGES = [
     "bloodhound>=1.7.0",
     # enumdb — removed from pip (no longer available at >=1.0.10).
     # Installed via git clone in install_git() instead.
-    # o365spray — O365 user enumeration (Phase 14).
-    "o365spray>=3.0.4",
+    # o365spray — removed from PyPI; installed via git clone in install_git().
 ]
 
 def install_pip():
@@ -789,6 +788,28 @@ def install_xsstrike():
                  dep], check=False)
 
 
+def install_o365spray():
+    """Clone o365spray and install via pip from the clone (removed from PyPI)."""
+    dest = "/opt/o365spray"
+    if shutil.which("o365spray") and os.path.isdir(dest):
+        info("o365spray already installed — pulling latest…")
+        git_clone_or_update("https://github.com/0xZDH/o365spray.git", dest)
+        return
+    elif shutil.which("o365spray"):
+        info("o365spray already installed (not a git clone).")
+        return
+    git_clone_or_update("https://github.com/0xZDH/o365spray.git", dest)
+    info("Installing o365spray from git clone …")
+    run([sys.executable, "-m", "pip", "install", "--break-system-packages",
+         dest], check=False, capture=True)
+    if not shutil.which("o365spray"):
+        req = os.path.join(dest, "requirements.txt")
+        if os.path.isfile(req):
+            info("pip install did not produce o365spray binary; trying requirements.txt …")
+            run([sys.executable, "-m", "pip", "install", "--break-system-packages",
+                 "-r", req], check=False)
+
+
 def install_enumdb():
     """Clone enumdb and install via pip from the clone (PyPI package removed)."""
     if shutil.which("enumdb") and os.path.isdir("/opt/enumdb"):
@@ -867,6 +888,7 @@ def install_git():
     _safe(install_msdat, "msdat")
     _safe(install_xsstrike, "XSStrike")
     _safe(install_enumdb, "enumdb")
+    _safe(install_o365spray, "o365spray")
     _safe(install_vulners_nse, "vulners.nse")
 
 # ---------------------------------------------------------------------------
