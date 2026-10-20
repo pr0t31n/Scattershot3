@@ -861,6 +861,14 @@ def install_git():
     def _adenum():
         git_clone_or_update("https://github.com/SecuProject/ADenum.git", "/opt/ADenum")
         info("Installing ADenum Python dependencies …")
+        if not shutil.which("krb5-config"):
+            info("  krb5-config not found — installing Kerberos dev headers for gssapi …")
+            if OS == "apt":
+                run(["apt-get", "install", "-y", "libkrb5-dev"], check=False)
+            elif OS in ("dnf", "zypper"):
+                run([OS, "install", "-y", "krb5-devel"], check=False)
+            elif OS == "macos":
+                run(["brew", "install", "krb5"], check=False)
         for dep in ["ldap3", "impacket", "gssapi"]:
             if _pip_installed(dep):
                 info(f"  ✓ {dep} already installed")
