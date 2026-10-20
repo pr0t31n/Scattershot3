@@ -12812,6 +12812,7 @@ _ARGPARSE_DEFAULTS: dict = {
     "discovery_min_parallelism": None,
     "timing_template":           None,
     "passive_seed_duration":     300,
+    "exclude":                   [],
 }
 
 # Canonical template written by --init-settings
@@ -12858,6 +12859,7 @@ _SETTINGS_TEMPLATE: dict = {
         "discovery_min_parallelism": 20,
         "timing_template":           "",
         "passive_seed_duration":     300,
+        "exclude": [],
     },
 }
 
@@ -13103,6 +13105,16 @@ def apply_settings(args: argparse.Namespace, settings: dict) -> None:
         if getattr(args, "passive_seed_duration", None) == _ARGPARSE_DEFAULTS["passive_seed_duration"]:
             args.passive_seed_duration = psd
 
+    # ── Exclusions ────────────────────────────────────────────────────────
+    _excl_settings = scan.get("exclude", [])
+    if isinstance(_excl_settings, str):
+        _excl_settings = [e.strip() for e in
+                          _excl_settings.replace(",", "\n").split("\n")
+                          if e.strip()]
+    if _excl_settings:
+        existing = getattr(args, "exclude", []) or []
+        args.exclude = list(set(existing) | set(_excl_settings))
+
     # ── scope_output_dirs (Crucible v2 scope-separated output) ────────────
     sod = scan.get("scope_output_dirs")
     if isinstance(sod, dict) and sod:
@@ -13183,6 +13195,17 @@ Examples:
             "Newline-separated file of targets (IPs, ranges, CIDRs). "
             "Blank lines and # comments are ignored. "
             "Merged with positional targets and any settings-file targets."
+        ),
+    )
+
+    # ---- Exclusions ---------------------------------------------------------
+    parser.add_argument(
+        "--exclude", "-X", nargs="*", default=[], metavar="SPEC",
+        help=(
+            "IPs, IP ranges, or CIDR blocks to EXCLUDE from scanning. "
+            "These targets are removed after expansion, before any scan "
+            "pass begins.  Also accepted via scan.exclude in the settings "
+            "file or injected by Crucible from the project exclusion list."
         ),
     )
 
@@ -30017,6 +30040,7 @@ def scan_scope(
     o365spray_path:  "str | None" = None,
     target_count:    int = 0,
     exclude_ips:     "set | None" = None,
+    exclude_nets:    "list | None" = None,
 ) -> dict:
     """
     Run a complete discovery + port + web + banner + SSL scan pass for one
@@ -30049,6 +30073,18 @@ def scan_scope(
     _lazy = target_count > 0 and not targets
     _n_targets = target_count if _lazy else len(targets)
     _exclude = exclude_ips or set()
+    _exclude_nets = exclude_nets or []
+
+    def _is_excluded_ip(ip_str):
+        if ip_str in _exclude:
+            return True
+        if _exclude_nets:
+            try:
+                _addr = ipaddress.ip_address(ip_str)
+                return any(_addr in _net for _net in _exclude_nets)
+            except ValueError:
+                pass
+        return False
 
     print(f"\n{Fore.CYAN}{'═'*60}{Style.RESET_ALL}")
     print(f"{Fore.CYAN}[*] {scope_label} {Fore.CYAN}pass — {_n_targets:,} target(s){Style.RESET_ALL}")
@@ -30210,8 +30246,8 @@ def scan_scope(
 
                 _check_pause()
 
-                if _exclude:
-                    _ca = [ip for ip in _ca if ip not in _exclude]
+                if _exclude or _exclude_nets:
+                    _ca = [ip for ip in _ca if not _is_excluded_ip(ip)]
 
                 for ip in _ca:
                     alive_map[ip] = True
@@ -30469,10 +30505,14 @@ def scan_scope(
             discovery_min_parallelism=getattr(args, "discovery_min_parallelism", None),
             timing_template=getattr(args, "timing_template", None),
         )
-        # In lazy mode, exclude local IPs from alive results
-        if _lazy and _exclude:
+        # In lazy mode, exclude local + project-excluded IPs from alive results
+        if _lazy and (_exclude or _exclude_nets):
             for _eip in _exclude:
                 alive_map.pop(_eip, None)
+            if _exclude_nets:
+                for _aip in list(alive_map):
+                    if _aip not in _exclude and _is_excluded_ip(_aip):
+                        alive_map.pop(_aip, None)
 
         # ── Phase 1b: Supplemental host discovery (-sn -PS -PA -PR) ───────
         if _lazy:
@@ -30490,7 +30530,7 @@ def scan_scope(
             )
             _newly_alive = [ip for ip, alive in _alive_map_2.items()
                             if alive and not alive_map.get(ip)
-                            and ip not in _exclude]
+                            and not _is_excluded_ip(ip)]
             for ip in _newly_alive:
                 alive_map[ip] = True
                 print(f"    {Fore.GREEN}[+] {ip} — ALIVE (supplemental probe){Style.RESET_ALL}")
@@ -32261,6 +32301,48 @@ def main():
             print(f"{Fore.RED}[!] No valid targets after expansion. Exiting.{Style.RESET_ALL}")
             sys.exit(1)
 
+    # ── Project-level exclusions (--exclude / scan.exclude) ──────────
+    _excl_specs = getattr(args, "exclude", []) or []
+    _project_exclude_addrs: set = set()
+    _project_exclude_nets: list = []
+    if _excl_specs:
+        for _es in _excl_specs:
+            _es = _es.strip()
+            if not _es:
+                continue
+            try:
+                _net = ipaddress.ip_network(_es, strict=False)
+                if _net.prefixlen == _net.max_prefixlen:
+                    _project_exclude_addrs.add(str(_net.network_address))
+                else:
+                    _project_exclude_nets.append(_net)
+            except ValueError:
+                pass
+        if _project_exclude_addrs or _project_exclude_nets:
+            _n_rules = len(_project_exclude_addrs) + len(_project_exclude_nets)
+            print(f"\n{Fore.YELLOW}[~] Applying {_n_rules} exclusion rule(s){Style.RESET_ALL}")
+            for _es in _excl_specs:
+                if _es.strip():
+                    print(f"    {Fore.YELLOW}✗ {_es.strip()}{Style.RESET_ALL}")
+        if not _lazy_targets and (_project_exclude_addrs or _project_exclude_nets):
+            def _proj_excluded(ip_str):
+                if ip_str in _project_exclude_addrs:
+                    return True
+                try:
+                    _addr = ipaddress.ip_address(ip_str)
+                    return any(_addr in _net for _net in _project_exclude_nets)
+                except ValueError:
+                    return False
+            _before = len(all_ips)
+            all_ips = [ip for ip in all_ips if not _proj_excluded(ip)]
+            _removed = _before - len(all_ips)
+            if _removed:
+                print(f"    {Fore.YELLOW}Removed {_removed:,} IP(s) from target list{Style.RESET_ALL}")
+            if not all_ips:
+                print(f"{Fore.RED}[!] All targets excluded. Exiting.{Style.RESET_ALL}")
+                sys.exit(1)
+            _target_count = len(all_ips)
+
     # ── Remove originating-host IPs — never scan ourselves ────────────
     local_ips = _get_local_ips()
     _local_in_scope: set = set()
@@ -32281,6 +32363,10 @@ def main():
     if not _lazy_targets and not all_ips:
         print(f"{Fore.RED}[!] No valid targets remain after excluding local IPs. Exiting.{Style.RESET_ALL}")
         sys.exit(1)
+
+    # Merge project-level exclusion single-IPs into _local_in_scope so
+    # they are forwarded to scan_scope's exclude_ips for lazy-mode filtering.
+    _local_in_scope |= _project_exclude_addrs
 
     # ── Preserve raw specs per scope for compact nmap discovery calls ──
     raw_scopes    = partition_raw_targets(resolved)
@@ -32725,7 +32811,8 @@ def main():
                              enumdb_path=enumdb_path,
                              zap_path=zap_path,
                              target_count=_int_count,
-                             exclude_ips=_local_in_scope)
+                             exclude_ips=_local_in_scope,
+                             exclude_nets=_project_exclude_nets)
         combined_results["int"] = results
         _pm.set_phase_status("scope_int", "complete", label="Scan: Internal")
         _vc.status("scope_int", label="Scan: Internal", status="complete")
@@ -32775,7 +32862,8 @@ def main():
                              zap_path=zap_path,
                              o365spray_path=o365spray_path,
                              target_count=_ext_count,
-                             exclude_ips=_local_in_scope)
+                             exclude_ips=_local_in_scope,
+                             exclude_nets=_project_exclude_nets)
         combined_results["ext"] = results
         _pm.set_phase_status("scope_ext", "complete", label="Scan: External")
         _vc.status("scope_ext", label="Scan: External", status="complete")
