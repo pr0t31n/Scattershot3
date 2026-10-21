@@ -15365,6 +15365,13 @@ _RE_NM_OS_SUFFIX   = re.compile(
 )
 # "protocol 2.0" appears in nmap extrainfo for SSH and similar services
 _RE_NM_PROTOCOL    = re.compile(r"^protocol\s+([\d.]+)$", re.IGNORECASE)
+_RE_EXTRAINFO_OS_HINT = re.compile(
+    r"\b(?:Ubuntu|Debian|CentOS|RHEL|Fedora|Alpine|Arch|Gentoo"
+    r"|openSUSE|Raspbian|Kali|Parrot|Mint|Manjaro|Rocky|Alma|Oracle"
+    r"|Windows|Red Hat|Amazon|Linux|FreeBSD|OpenBSD|NetBSD|Solaris"
+    r"|macOS|Darwin|AIX|HP-UX|SUSE)\b",
+    re.IGNORECASE,
+)
 
 
 def _parse_nmap_version_field(
@@ -15411,8 +15418,7 @@ def _parse_nmap_version_field(
             pm = _RE_NM_PROTOCOL.match(part)
             if pm:
                 protocol = pm.group(1)
-            elif part and os_out is None:
-                # Treat remaining non-protocol parts as OS hints
+            elif part and os_out is None and _RE_EXTRAINFO_OS_HINT.search(part):
                 os_out = part
 
     return version, os_out, protocol
@@ -17459,7 +17465,7 @@ def take_web_screenshot(
         opts.add_argument("--disable-gpu")
         opts.add_argument("--ignore-certificate-errors")
         opts.add_argument("--allow-insecure-localhost")
-        opts.add_argument("--window-size=1280,800")
+        opts.add_argument("--window-size=1920,1080")
         opts.add_experimental_option("excludeSwitches", ["enable-logging"])
         chrome_bin = _find_chrome_binary()
         if chrome_bin:
@@ -19717,7 +19723,7 @@ def check_tomcat_manager(
                     opts.add_argument("--disable-gpu")
                     opts.add_argument("--ignore-certificate-errors")
                     opts.add_argument("--allow-insecure-localhost")
-                    opts.add_argument("--window-size=1280,800")
+                    opts.add_argument("--window-size=1920,1080")
                     opts.add_experimental_option("excludeSwitches", ["enable-logging"])
                     chrome_bin = _find_chrome_binary()
                     if chrome_bin:
