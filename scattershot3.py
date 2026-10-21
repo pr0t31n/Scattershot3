@@ -6507,6 +6507,7 @@ def probe_uncertain_and_nonstandard_ports(
     if output_mgr is None or not results:
         return
 
+    _scanner_ips = _get_local_ips()
     _host_dir = output_mgr.host_path(ip)
     for _port, _pinfo in sorted(results.items()):
         if not isinstance(_pinfo, dict):
@@ -6818,7 +6819,7 @@ def probe_uncertain_and_nonstandard_ports(
                     _rfc1918_found = set()
                     for _m in _RE_RFC1918_IN_TEXT.finditer(_rfc1918_text):
                         _candidate = _m.group(1)
-                        if _candidate == ip:
+                        if _candidate == ip or _candidate in _scanner_ips:
                             continue
                         try:
                             _caddr = ipaddress.ip_address(_candidate)
