@@ -7253,6 +7253,21 @@ def probe_uncertain_and_nonstandard_ports(
 
         # ── Cloud metadata endpoint probe ─────────────────────────────────
         # After a web-port is confirmed, check for cloud metadata SSRF paths.
+        def _cloud_metadata_looks_real(provider, body):
+            """Return True only when *body* contains markers specific to a real
+            cloud metadata response, not a generic error/ban/default page."""
+            b = body.lower()
+            if provider == "AWS EC2":
+                _aws_markers = ("ami-id", "instance-id", "local-ipv4",
+                                "hostname", "iam/", "placement/",
+                                "network/", "public-keys/")
+                return sum(1 for m in _aws_markers if m in b) >= 3
+            if provider == "Azure IMDS":
+                return '"compute"' in b and '"network"' in b
+            if provider == "GCP":
+                _gcp_markers = ("project/", "instance/", "attributes/")
+                return sum(1 for m in _gcp_markers if m in b) >= 2
+            return False
         if _got_http and getattr(output_mgr, "scope", "ext") == "int":
             _meta_paths = [
                 ("/latest/meta-data/", "AWS EC2"),
@@ -7269,7 +7284,7 @@ def probe_uncertain_and_nonstandard_ports(
                         _meta_url, timeout=3, verify=False,
                         headers=_meta_hdrs,
                     )
-                    if _meta_resp.status_code == 200 and len(_meta_resp.text) > 10:
+                    if _meta_resp.status_code == 200 and len(_meta_resp.text) > 10 and _cloud_metadata_looks_real(_cloud, _meta_resp.text):
                         output_mgr.log_finding(
                             title=f"Cloud Metadata Endpoint Accessible ({_cloud})",
                             ip=ip, port=_port, hostname=hostname,
@@ -25869,17 +25884,21 @@ def run_winrm_check(
             except Exception:
                 pass
 
-        if port == 5985 and scheme == "http":
+        _cleartext_methods = {"Basic", "NTLM", "CredSSP"}
+        _has_cleartext_auth = bool(_cleartext_methods & set(auth_methods))
+        if port == 5985 and scheme == "http" and _has_cleartext_auth:
             output_mgr.log_finding(
                 title="WinRM Over Cleartext HTTP",
                 ip=ip, port=port,
                 command=f"HTTP POST {url}",
                 hostname=hostname, risk="MEDIUM",
                 description=(
-                    f"WinRM on {ip}:{port} is served over HTTP (cleartext). "
-                    f"Credentials transmitted via Basic or NTLM authentication are "
-                    f"exposed to network sniffing. Configure WinRM to use HTTPS "
-                    f"(port 5986) with a valid TLS certificate."
+                    f"WinRM on {ip}:{port} is served over HTTP (cleartext) and "
+                    f"accepts credential-bearing auth methods "
+                    f"({', '.join(sorted(_cleartext_methods & set(auth_methods)))}). "
+                    f"Credentials are exposed to network sniffing. Configure WinRM "
+                    f"to use HTTPS (port 5986) with a valid TLS certificate, or "
+                    f"restrict to Kerberos-only authentication."
                 ),
                 output=f"Scheme: {scheme}\nAuth methods: {auth_methods}",
                 sources="winrm-probe",
