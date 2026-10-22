@@ -12833,12 +12833,10 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                                     and "not offered" not in _tsf_finding_lo):
                                 continue  # HSTS is configured — not a finding
                             if _tsf_id_base == "HSTS_time":
-                                _tsf_title    = "Missing Security Headers"
-                                _tsf_affected = "Strict Transport Security (short duration)"
+                                _tsf_title    = "Missing Security Header: Strict-Transport-Security (Short Duration)"
                                 _tsf_risk     = "LOW" if _is_ext else "INFO"
                             else:
-                                _tsf_title    = "Missing Security Headers"
-                                _tsf_affected = "Strict Transport Security"
+                                _tsf_title    = "Missing Security Header: Strict-Transport-Security"
                                 _tsf_risk     = "LOW"
                         elif _tsf_id_base == "cert_keySize":
                             _tsf_title = "SSL/TLS Certificate: Weak Encryption Method"
