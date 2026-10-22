@@ -20912,7 +20912,7 @@ def run_enum4linux(
             dom_name = _dom_m.group(1).strip()
             _tprint(f"  {Fore.CYAN}[+] enum4linux: Domain/Workgroup = {dom_name}{Style.RESET_ALL}")
             _ef(
-                "Domain / Workgroup Name Identified",
+                "Discovery: Domain / Workgroup Name",
                 "INFO",
                 f"enum4linux identified the domain/workgroup name as '{dom_name}' on {ip}.",
                 f"Domain Name: {dom_name}",
@@ -20922,7 +20922,7 @@ def run_enum4linux(
         _sid_m = re.search(r"Domain SID\s*[=:]\s*(S-\d-\d[\d\-]+)", raw, re.IGNORECASE)
         if _sid_m:
             sid = _sid_m.group(1).strip()
-            _ef("Domain SID Identified", "INFO",
+            _ef("Discovery: Domain SID", "INFO",
                 f"Domain SID identified on {ip}: {sid}. "
                 f"The SID can be used to enumerate user RIDs.",
                 f"Domain SID: {sid}")
@@ -21030,7 +21030,7 @@ def run_enum4linux(
             user_list = sorted(_users)
             _tprint(f"  {Fore.CYAN}[+] enum4linux: {len(user_list)} user(s) found on {ip}{Style.RESET_ALL}")
             _ef(
-                "Domain/Local Users Enumerated",
+                "Enumeration: Domain/Local Users",
                 "LOW",
                 f"enum4linux enumerated {len(user_list)} user account(s) on {ip} "
                 f"via anonymous/null SMB session. "
@@ -21058,7 +21058,7 @@ def run_enum4linux(
                 f"{ip}: {', '.join(admin_list)}{Style.RESET_ALL}"
             )
             _ef(
-                "Administrators Group Members Identified",
+                "Enumeration: Administrators Group Members",
                 "HIGH",
                 f"enum4linux identified {len(admin_list)} member(s) of the local "
                 f"Administrators group on {ip}: {', '.join(admin_list[:20])}. "
@@ -21075,7 +21075,7 @@ def run_enum4linux(
             if name.lower() not in ("type", "comment", "-------"):
                 _shares.add(name)
         if _shares:
-            _ef("SMB Shares Enumerated", "INFO",
+            _ef("Enumeration: SMB Shares", "INFO",
                 f"enum4linux enumerated {len(_shares)} share(s) on {ip}: "
                 f"{', '.join(sorted(_shares))}.",
                 "Shares: " + ", ".join(sorted(_shares)))
@@ -21088,7 +21088,7 @@ def run_enum4linux(
         ):
             _rid_users.add(rm.group(2))
         if _rid_users:
-            _ef("RID Cycling Successful", "MEDIUM",
+            _ef("Enumeration: RID Cycling", "MEDIUM",
                 f"enum4linux successfully enumerated {len(_rid_users)} user(s) "
                 f"via RID cycling on {ip}: {', '.join(sorted(_rid_users)[:30])}.",
                 "RID users: " + ", ".join(sorted(_rid_users)[:30]))
