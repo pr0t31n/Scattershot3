@@ -6389,22 +6389,27 @@ def _parse_nse_findings(
         )
 
     # ── ssh-auth-methods: password authentication enabled ────────────────────
+    # Only the explicit 'password' method counts as password authentication.
+    # 'keyboard-interactive' alone is ambiguous — it could be PAM-based
+    # password prompts, TOTP/OTP, Duo push, or other challenge-response
+    # mechanisms.  Flagging it as "password auth" without the 'password'
+    # method present produces false positives (e.g. pubkey + kbdint-for-2FA).
     if ssh_auth_out and not re.search(r"\bnone\b", ssh_auth_out, re.IGNORECASE):
         _ssh_methods = [m.strip().lower() for m in
                         re.findall(r"(?:password|publickey|keyboard-interactive|gssapi-[\w-]+|hostbased)",
                                    ssh_auth_out, re.IGNORECASE)]
-        _has_password = "password" in _ssh_methods or "keyboard-interactive" in _ssh_methods
+        _has_password = "password" in _ssh_methods
+        _has_kbdint = "keyboard-interactive" in _ssh_methods
         _has_pubkey = "publickey" in _ssh_methods
         if _has_password:
             _pw_only = not _has_pubkey
             _risk = "MEDIUM" if _pw_only else "LOW"
-            _title = ("SSH Password-Only Authentication (No Public Key)"
-                      if _pw_only else "SSH Password Authentication Enabled")
+            _title = ("SSH Configuration: Password Authentication Only"
+                      if _pw_only else "SSH Configuration: Password Authentication Enabled")
             _desc_detail = (
-                "only password-based authentication methods (password and/or "
-                "keyboard-interactive) with no public key authentication available"
+                "only password-based authentication (no public key available)"
                 if _pw_only else
-                "password-based authentication methods alongside public key. "
+                "password-based authentication alongside public key. "
                 "Password authentication is susceptible to brute-force attacks "
                 "and does not enforce multi-factor authentication"
             )
@@ -6422,6 +6427,27 @@ def _parse_nse_findings(
                     f"ChallengeResponseAuthentication in sshd_config and require "
                     f"public key authentication exclusively. CIS Benchmark and "
                     f"DISA STIG both mandate disabling password-based SSH login."
+                ),
+                output=ssh_auth_out,
+                sources="nmap-nse",
+                affected=f"{ip}:{port}",
+                output_file=output_file,
+            )
+        elif _has_kbdint and not _has_pubkey:
+            _tprint(
+                f"  {Fore.YELLOW}[~] SSH keyboard-interactive only on "
+                f"{ip}:{port} (methods: {', '.join(_ssh_methods)}){Style.RESET_ALL}"
+            )
+            output_mgr.log_finding(
+                title="SSH Configuration: Keyboard-Interactive Only (No Public Key)",
+                ip=ip, port=port, command=cmd, hostname=hostname, risk="MEDIUM",
+                description=(
+                    f"The SSH server on {ip}:{port} accepts only keyboard-interactive "
+                    f"authentication with no public key option. keyboard-interactive may "
+                    f"be PAM-based password prompts, TOTP/OTP, or other challenge-response "
+                    f"mechanisms. Without public key authentication available, the server "
+                    f"relies entirely on challenge-response security. "
+                    f"Supported methods: {', '.join(_ssh_methods)}."
                 ),
                 output=ssh_auth_out,
                 sources="nmap-nse",
@@ -25534,6 +25560,44 @@ def _nfs_deep_enum(
     return result
 
 
+_NFS_RPC_ERROR_RE = re.compile(
+    r"(?i)(?:clnt_create|rpc\s+mount\s+export|rpc\s+program\s+not\s+registered"
+    r"|unable\s+to\s+receive|no\s+route\s+to\s+host|connection\s+refused"
+    r"|timed?\s*out|port\s+mapper\s+failure|rpcinfo.*failed)",
+)
+
+
+def _nfs_acl_contains_ip(allowed: str, scanner_ip: str) -> "bool | None":
+    """Check if *scanner_ip* falls within the NFS ACL *allowed* field.
+
+    Returns True/False when deterministic, None when ambiguous (hostname-based
+    ACL we can't resolve here).
+    """
+    if not scanner_ip:
+        return None
+    allowed = allowed.strip()
+    if allowed in ("*", "(everyone)"):
+        return True
+    for entry in re.split(r"[,\s]+", allowed):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if entry == scanner_ip:
+            return True
+        if "/" in entry:
+            try:
+                import ipaddress
+                net = ipaddress.ip_network(entry, strict=False)
+                if ipaddress.ip_address(scanner_ip) in net:
+                    return True
+            except (ValueError, TypeError):
+                pass
+        if re.match(r"^[\d.]+$", entry):
+            continue
+        return None
+    return False
+
+
 def run_nfs_enum(
     ip: str,
     port: int,
@@ -25544,15 +25608,11 @@ def run_nfs_enum(
     timeout: int = 30,
 ) -> None:
     """
-    NFS export enumeration using showmount.
+    NFS export enumeration using showmount + NFSv3 RPC deep-enum validation.
 
-    Runs ``showmount -e <ip>`` and logs any exported paths.  A world-accessible
-    export (allowed host = '*' or '0.0.0.0/0') is flagged as HIGH; any
-    visible export is logged as at least MEDIUM for review.
-
-    Severity:
-      World-accessible export → HIGH
-      Any NFS export visible  → MEDIUM (review host lists)
+    1. ``showmount -e`` discovers exported paths and their ACLs.
+    2. Each export is validated via direct NFSv3 RPC mount + directory walk.
+    3. Risk is assigned based on validation outcome, not enumeration alone.
     """
     if not showmount_path:
         return
@@ -25561,14 +25621,16 @@ def run_nfs_enum(
     safe_ip  = ip.replace(".", "_")
     out_file = out_dir / f"{safe_ip}_{port}_nfs_{ts_safe}.txt"
 
+    scanner_ip = get_source_ip_for(ip)
+
     cmd = [showmount_path, "-e", ip, "--no-headers"]
     _tprint(f"  {Fore.CYAN}[*] showmount NFS enum: {ip}:{port}{Style.RESET_ALL}")
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout,
         )
-        output = result.stdout + result.stderr
-        out_file.write_text(output, encoding="utf-8")
+        raw_output = result.stdout + result.stderr
+        out_file.write_text(raw_output, encoding="utf-8")
         try:
             os.chmod(out_file, 0o644)
         except OSError:
@@ -25577,182 +25639,287 @@ def run_nfs_enum(
             "showmount", showmount_path, cmd, out_file,
             extra={"target": ip},
         )
-        if output.strip() and "clnt_create: rpc: program not registered" not in output.lower():
-            _tprint(
-                f"  {Fore.YELLOW}[!] NFS exports on {ip}: "
-                f"{output.splitlines()[0]}{Style.RESET_ALL}"
-            )
-            # Parse export paths for deep enumeration
-            _nfs_exports: list[tuple[str, str]] = []
-            for _ln in output.splitlines():
-                _ln = _ln.strip()
-                if _ln and _ln.startswith("/"):
-                    _parts = _ln.split()
-                    _nfs_exports.append((_parts[0], _parts[1] if len(_parts) > 1 else "*"))
 
-            # Detect world-accessible exports: '*' or '0.0.0.0' in allowed list
-            world = any(
-                re.search(r"\*|0\.0\.0\.0", line)
-                for line in output.splitlines()
-            )
-            risk = "HIGH" if world else "MEDIUM"
-            output_mgr.log_finding(
-                title=f"NFS Export{'s' if output.count('/') > 1 else ''} Accessible"
-                      f"{' — World-Readable' if world else ''}",
-                ip=ip, port=port,
-                command=" ".join(cmd),
-                hostname=hostname, risk=risk,
-                description=(
-                    f"showmount -e reports the following NFS exports on {ip}. "
-                    f"{'At least one export allows access from any host (*).' if world else ''} "
-                    f"Readable exports leak sensitive files; writable exports allow "
-                    f"arbitrary file placement (SSH key injection, web shells, cron jobs)."
-                ),
-                output=output,
-                sources="showmount",
-                affected=f"{ip}:{port}",
-                output_file=str(out_file),
-            )
+        # ── Filter: suppress when output is only RPC errors ─────────────
+        _clean_lines = [
+            ln.strip() for ln in raw_output.splitlines()
+            if ln.strip() and not _NFS_RPC_ERROR_RE.search(ln)
+        ]
+        _has_exports = any(ln.startswith("/") for ln in _clean_lines)
 
-            # ── Deep enumeration of each export via NFSv3 RPC ─────────────
-            if _nfs_exports:
-                _mount_port = _portmap_getport(ip, _MOUNT_PROG, _MOUNT_VERS) or 20048
-                _nfs_port   = _portmap_getport(ip, _NFS_PROG,   _NFS_VERS)   or 2049
-                for _export_path, _allowed in _nfs_exports:
+        if not _has_exports:
+            if raw_output.strip():
+                _tprint(
+                    f"  {Fore.YELLOW}[~] showmount on {ip} returned RPC errors "
+                    f"only — no finding emitted{Style.RESET_ALL}"
+                )
+            return
+
+        _tprint(
+            f"  {Fore.YELLOW}[!] NFS exports on {ip}: "
+            f"{_clean_lines[0]}{Style.RESET_ALL}"
+        )
+
+        # ── Parse export paths ──────────────────────────────────────────
+        _nfs_exports: list[tuple[str, str]] = []
+        for _ln in raw_output.splitlines():
+            _ln = _ln.strip()
+            if _ln and _ln.startswith("/"):
+                _parts = _ln.split()
+                _nfs_exports.append((_parts[0], _parts[1] if len(_parts) > 1 else "*"))
+
+        world = any(
+            re.search(r"\*|0\.0\.0\.0", line)
+            for line in raw_output.splitlines()
+        )
+
+        # ── Deep enumeration of each export via NFSv3 RPC ──────────────
+        _enum_results: list[dict] = []
+        _any_mounted = False
+        if _nfs_exports:
+            _mount_port = _portmap_getport(ip, _MOUNT_PROG, _MOUNT_VERS) or 20048
+            _nfs_port   = _portmap_getport(ip, _NFS_PROG,   _NFS_VERS)   or 2049
+            for _export_path, _allowed in _nfs_exports:
+                _tprint(
+                    f"  {Fore.CYAN}[*] NFS deep enum: {ip}:{_nfs_port}"
+                    f"{_export_path}{Style.RESET_ALL}"
+                )
+                _er = _nfs_deep_enum(
+                    host=ip,
+                    export=_export_path,
+                    out_dir=out_dir,
+                    nfs_port=_nfs_port,
+                    mount_port=_mount_port,
+                    ts_safe=ts_safe,
+                    timeout=20,
+                )
+
+                _acl_match = _nfs_acl_contains_ip(_allowed, scanner_ip)
+                _er["export_path"] = _export_path
+                _er["allowed"] = _allowed
+                _er["acl_match"] = _acl_match
+                _enum_results.append(_er)
+
+                if _er["error"]:
                     _tprint(
-                        f"  {Fore.CYAN}[*] NFS deep enum: {ip}:{_nfs_port}"
-                        f"{_export_path}{Style.RESET_ALL}"
+                        f"  {Fore.YELLOW}[~] NFS mount refused for "
+                        f"{_export_path}: {_er['error']}{Style.RESET_ALL}"
                     )
-                    _er = _nfs_deep_enum(
-                        host=ip,
-                        export=_export_path,
-                        out_dir=out_dir,
-                        nfs_port=_nfs_port,
-                        mount_port=_mount_port,
-                        ts_safe=ts_safe,
-                        timeout=20,
+                    continue
+
+                _any_mounted = True
+                _enum_file_str = str(_er["out_file"]) if _er["out_file"] else str(out_file)
+                _sens = _er["sensitive"]
+                _total = len(_er["tree"])
+
+                if _sens:
+                    _tprint(
+                        f"  {Fore.RED}[!] NFS {_export_path}: "
+                        f"{len(_sens)} sensitive file(s) found{Style.RESET_ALL}"
                     )
-                    if _er["error"]:
-                        _tprint(
-                            f"  {Fore.YELLOW}[~] NFS enum skipped "
-                            f"{_export_path}: {_er['error']}{Style.RESET_ALL}"
-                        )
-                        continue
+                else:
+                    _tprint(
+                        f"  {Fore.GREEN}[+] NFS {_export_path}: "
+                        f"{_total} entries enumerated, no sensitive files"
+                        f"{Style.RESET_ALL}"
+                    )
 
-                    _enum_file_str = str(_er["out_file"]) if _er["out_file"] else str(out_file)
-                    _sens = _er["sensitive"]
-                    _total = len(_er["tree"])
+                output_mgr.log_finding(
+                    title=f"Enumeration: NFS Export Enumerated: {_export_path}",
+                    ip=ip, port=port,
+                    command=f"nfs-rpc-enum {ip}:{_nfs_port}{_export_path}",
+                    hostname=hostname,
+                    risk="MEDIUM" if _sens else "INFO",
+                    description=(
+                        f"NFSv3 RPC direct enumeration of {ip}:{_nfs_port}{_export_path} "
+                        f"completed without mounting. {_total} entries traversed "
+                        f"(max depth {_ENUM_DEPTH}, cap {_ENUM_SCAN_MAX}). "
+                        + (f"{len(_sens)} file(s) matched sensitive naming patterns."
+                           if _sens else "No sensitive filenames detected.")
+                    ),
+                    output="\n".join(
+                        e["path"] for e in _er["tree"][:50]
+                    ) + (f"\n... ({_total} total)" if _total > 50 else ""),
+                    sources="nfs-rpc",
+                    affected=f"{ip}:{port}",
+                    output_file=_enum_file_str,
+                )
 
-                    if _sens:
-                        _tprint(
-                            f"  {Fore.RED}[!] NFS {_export_path}: "
-                            f"{len(_sens)} sensitive file(s) found{Style.RESET_ALL}"
-                        )
-                    else:
-                        _tprint(
-                            f"  {Fore.GREEN}[+] NFS {_export_path}: "
-                            f"{_total} entries enumerated, no sensitive files"
-                            f"{Style.RESET_ALL}"
-                        )
-
-                    # Log an enrichment finding with the directory tree summary
+                for _sf in _sens:
+                    _hits = _sf.get("hits", [])
+                    _hit_labels = ", ".join(h["type"] for h in _hits) if _hits else "sensitive filename"
+                    _snips = "; ".join(
+                        f"{h['type']}: {h['snippet']}" for h in _hits[:3]
+                    ) if _hits else ""
+                    _sf_risk = "CRITICAL" if any(
+                        h["type"] in ("Private Key", "AWS Access Key", "Password field")
+                        for h in _hits
+                    ) else "HIGH" if _hits else "MEDIUM"
                     output_mgr.log_finding(
-                        title=f"Enumeration: NFS Export Enumerated: {_export_path}",
+                        title=f"Sensitive File on NFS: {_sf['path']}",
                         ip=ip, port=port,
-                        command=f"nfs-rpc-enum {ip}:{_nfs_port}{_export_path}",
+                        command=f"nfs-rpc-read {ip}:{_nfs_port}{_export_path}",
                         hostname=hostname,
-                        risk="MEDIUM" if _sens else "INFO",
+                        risk=_sf_risk,
                         description=(
-                            f"NFSv3 RPC direct enumeration of {ip}:{_nfs_port}{_export_path} "
-                            f"completed without mounting. {_total} entries traversed "
-                            f"(max depth {_ENUM_DEPTH}, cap {_ENUM_SCAN_MAX}). "
-                            + (f"{len(_sens)} file(s) matched sensitive naming patterns."
-                               if _sens else "No sensitive filenames detected.")
+                            f"NFS export {_export_path} on {ip} contains a file matching "
+                            f"sensitive naming patterns: {_sf['path']} "
+                            f"(size {_sf['fsize'] if 'fsize' in _sf else _sf.get('size', 0)} bytes). "
+                            f"Pattern match: {_hit_labels}."
+                            + (f" Content indicators: {_snips}" if _snips else "")
                         ),
-                        output="\n".join(
-                            e["path"] for e in _er["tree"][:50]
-                        ) + (f"\n... ({_total} total)" if _total > 50 else ""),
+                        output=(
+                            f"NFS path: {_sf['path']}\n"
+                            f"Export: {_export_path}\n"
+                            f"Size: {_sf.get('size', 0)} bytes\n"
+                            f"Pattern match: {_hit_labels}\n"
+                            + (f"Content indicators: {_snips}\n" if _snips else "")
+                        ),
                         sources="nfs-rpc",
                         affected=f"{ip}:{port}",
                         output_file=_enum_file_str,
                     )
+                if _sens:
+                    output_mgr.log_action_item(
+                        "credential_reuse", "Isotope", f"{ip}:{_nfs_port}",
+                        ip, _nfs_port,
+                        title="Isotope: Analyze sensitive files from NFS export",
+                        description=(
+                            f"{len(_sens)} sensitive file(s) on NFS export "
+                            f"{_export_path} at {ip}. Isotope can analyze "
+                            f"these files for credentials, private keys, and "
+                            f"configuration data enabling lateral movement."
+                        ),
+                        hostname=hostname,
+                        source_finding="Sensitive File on NFS",
+                        priority="HIGH",
+                    )
 
-                    # Log individual findings per sensitive file
-                    for _sf in _sens:
-                        _hits = _sf.get("hits", [])
-                        _hit_labels = ", ".join(h["type"] for h in _hits) if _hits else "sensitive filename"
-                        _snips = "; ".join(
-                            f"{h['type']}: {h['snippet']}" for h in _hits[:3]
-                        ) if _hits else ""
-                        _sf_risk = "CRITICAL" if any(
-                            h["type"] in ("Private Key", "AWS Access Key", "Password field")
-                            for h in _hits
-                        ) else "HIGH" if _hits else "MEDIUM"
-                        output_mgr.log_finding(
-                            title=f"Sensitive File on NFS: {_sf['path']}",
-                            ip=ip, port=port,
-                            command=f"nfs-rpc-read {ip}:{_nfs_port}{_export_path}",
-                            hostname=hostname,
-                            risk=_sf_risk,
-                            description=(
-                                f"NFS export {_export_path} on {ip} contains a file matching "
-                                f"sensitive naming patterns: {_sf['path']} "
-                                f"(size {_sf['fsize'] if 'fsize' in _sf else _sf.get('size', 0)} bytes). "
-                                f"Pattern match: {_hit_labels}."
-                                + (f" Content indicators: {_snips}" if _snips else "")
-                            ),
-                            output=(
-                                f"NFS path: {_sf['path']}\n"
-                                f"Export: {_export_path}\n"
-                                f"Size: {_sf.get('size', 0)} bytes\n"
-                                f"Pattern match: {_hit_labels}\n"
-                                + (f"Content indicators: {_snips}\n" if _snips else "")
-                            ),
-                            sources="nfs-rpc",
-                            affected=f"{ip}:{port}",
-                            output_file=_enum_file_str,
-                        )
-                    if _sens:
+                    _db_files = [sf for sf in _sens if _DB_FILE_RE.search(sf.get("path", ""))]
+                    if _db_files:
+                        _db_paths = ", ".join(sf["path"] for sf in _db_files[:5])
                         output_mgr.log_action_item(
-                            "credential_reuse", "Isotope", f"{ip}:{_nfs_port}",
-                            ip, _nfs_port,
-                            title="Isotope: Analyze sensitive files from NFS export",
+                            item_type="database_file",
+                            recommended_tool="Auger",
+                            target=f"{ip}:{_nfs_port}",
+                            ip=ip, port=_nfs_port,
+                            title="Database File on NFS Export — Auger File Analysis Recommended",
                             description=(
-                                f"{len(_sens)} sensitive file(s) on NFS export "
-                                f"{_export_path} at {ip}. Isotope can analyze "
-                                f"these files for credentials, private keys, and "
-                                f"configuration data enabling lateral movement."
+                                f"{len(_db_files)} database file(s) on NFS export "
+                                f"{_export_path} at {ip}: {_db_paths}. Auger can analyze "
+                                "these files for sensitive data, plaintext credentials, "
+                                "excessive privileges, and schema security issues."
                             ),
                             hostname=hostname,
                             source_finding="Sensitive File on NFS",
                             priority="HIGH",
+                            metadata={
+                                "nfs_export": _export_path,
+                                "db_files": [sf["path"] for sf in _db_files[:10]],
+                                "source": "nfs-rpc",
+                            },
                         )
 
-                        # Database files on NFS → Auger action item
-                        _db_files = [sf for sf in _sens if _DB_FILE_RE.search(sf.get("path", ""))]
-                        if _db_files:
-                            _db_paths = ", ".join(sf["path"] for sf in _db_files[:5])
-                            output_mgr.log_action_item(
-                                item_type="database_file",
-                                recommended_tool="Auger",
-                                target=f"{ip}:{_nfs_port}",
-                                ip=ip, port=_nfs_port,
-                                title="Database File on NFS Export — Auger File Analysis Recommended",
-                                description=(
-                                    f"{len(_db_files)} database file(s) on NFS export "
-                                    f"{_export_path} at {ip}: {_db_paths}. Auger can analyze "
-                                    "these files for sensitive data, plaintext credentials, "
-                                    "excessive privileges, and schema security issues."
-                                ),
-                                hostname=hostname,
-                                source_finding="Sensitive File on NFS",
-                                priority="HIGH",
-                                metadata={
-                                    "nfs_export": _export_path,
-                                    "db_files": [sf["path"] for sf in _db_files[:10]],
-                                    "source": "nfs-rpc",
-                                },
-                            )
+        # ── Build the main NFS finding with proper evidence context ─────
+        _evidence_lines: list[str] = []
+        _evidence_lines.append(f"{'═' * 60}")
+        _evidence_lines.append(f"NFS EXPORT ENUMERATION — {ip}:{port}")
+        _evidence_lines.append(f"Scanner IP: {scanner_ip or 'unknown'}")
+        _evidence_lines.append(f"{'═' * 60}")
+        _evidence_lines.append("")
+        _evidence_lines.append("SHOWMOUNT RESULTS:")
+
+        _mount_refused_all = True
+        for _export_path, _allowed in _nfs_exports:
+            _evidence_lines.append(f"  Export: {_export_path}")
+            _evidence_lines.append(f"  Allowed Hosts: {_allowed}")
+            _er_match = next(
+                (er for er in _enum_results if er.get("export_path") == _export_path),
+                None,
+            )
+            if _er_match:
+                _acl_str = {
+                    True: f"YES — scanner ({scanner_ip}) is within ACL",
+                    False: f"NO — scanner ({scanner_ip}) is NOT in ACL",
+                    None: "UNKNOWN — hostname-based ACL, could not verify",
+                }.get(_er_match["acl_match"], "UNKNOWN")
+                _evidence_lines.append(f"  Scanner in ACL: {_acl_str}")
+                if _er_match["error"]:
+                    _evidence_lines.append(f"  Mount Attempt: REFUSED — {_er_match['error']}")
+                else:
+                    _mount_refused_all = False
+                    _total = len(_er_match["tree"])
+                    _sens_ct = len(_er_match["sensitive"])
+                    _evidence_lines.append(f"  Mount Attempt: SUCCESS — {_total} entries enumerated")
+                    if _sens_ct:
+                        _evidence_lines.append(f"  Sensitive Files: {_sens_ct} found")
+            _evidence_lines.append("")
+
+        _evidence_lines.append(f"{'─' * 60}")
+        _evidence_lines.append("RAW SHOWMOUNT OUTPUT:")
+        _evidence_lines.append(raw_output.strip())
+
+        _formatted_evidence = "\n".join(_evidence_lines)
+
+        # ── Risk assignment based on validation outcome ─────────────────
+        if _any_mounted:
+            # Validated: at least one export was successfully mounted via RPC
+            _any_sens = any(er.get("sensitive") for er in _enum_results if not er.get("error"))
+            if world and _any_sens:
+                risk = "CRITICAL"
+            elif world or _any_sens:
+                risk = "HIGH"
+            else:
+                risk = "MEDIUM"
+            _validation_status = "Validated — NFSv3 RPC mount succeeded"
+        elif _mount_refused_all and _nfs_exports:
+            # All mounts refused — exports exist but scanner can't access them
+            risk = "LOW"
+            _validation_status = (
+                f"Unvalidated — all {len(_nfs_exports)} export mount(s) refused. "
+                f"Scanner IP ({scanner_ip or 'unknown'}) may not be in the NFS ACL. "
+                "Exports are advertised but access could not be confirmed from this VLAN"
+            )
+        else:
+            risk = "INFO"
+            _validation_status = "Enumeration only — no mount attempted"
+
+        _desc_parts = [
+            f"showmount -e reports {len(_nfs_exports)} NFS export(s) on {ip}.",
+        ]
+        if world:
+            _desc_parts.append(
+                "At least one export allows access from any host (*)."
+            )
+        _desc_parts.append(f"Validation: {_validation_status}.")
+        if _any_mounted:
+            _desc_parts.append(
+                "Readable exports leak sensitive files; writable exports allow "
+                "arbitrary file placement (SSH key injection, web shells, cron jobs)."
+            )
+        else:
+            _desc_parts.append(
+                "The export ACL prevents the scanner from mounting these shares. "
+                "Verify the allowed-host lists to determine whether production "
+                "systems have broader access than required."
+            )
+
+        # Rewrite the output file with formatted evidence
+        out_file.write_text(_formatted_evidence, encoding="utf-8")
+
+        output_mgr.log_finding(
+            title=f"NFS: Export Accessible"
+                  f"{' — World-Readable' if world else ''}",
+            ip=ip, port=port,
+            command=" ".join(cmd),
+            hostname=hostname, risk=risk,
+            description=" ".join(_desc_parts),
+            output=_formatted_evidence,
+            sources="showmount",
+            affected=f"{ip}:{port}",
+            output_file=str(out_file),
+        )
+
     except subprocess.TimeoutExpired:
         _vc.log(f"showmount (NFS) timed out on {ip}:{port} after {timeout}s — command: {' '.join(cmd)}", "WARNING")
         _ensure_output_file(out_file, " ".join(cmd),

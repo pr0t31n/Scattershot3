@@ -2428,8 +2428,12 @@
     },
     {
       "id": "SS3-035",
-      "title": "NFS Export Accessible Without Authentication",
-      "aliases": [],
+      "title": "NFS: Export Accessible",
+      "aliases": [
+        "NFS Export Accessible Without Authentication",
+        "NFS Export Accessible",
+        "NFS Exports Accessible"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -17818,8 +17822,9 @@
     },
     {
       "id": "SS3-211",
-      "title": "SSH Password Authentication Enabled",
+      "title": "SSH Configuration: Password Authentication Enabled",
       "aliases": [
+        "SSH Password Authentication Enabled",
         "SSH Password Auth Enabled",
         "SSH Credential Authentication"
       ],
@@ -17902,8 +17907,9 @@
     },
     {
       "id": "SS3-212",
-      "title": "SSH Password-Only Authentication (No Public Key)",
+      "title": "SSH Configuration: Password Authentication Only",
       "aliases": [
+        "SSH Password-Only Authentication (No Public Key)",
         "SSH No Public Key Authentication",
         "SSH Password Only"
       ],
@@ -19411,6 +19417,78 @@
       "description": "Server role inferred from hostname token analysis. Keywords in the hostname suggest a specific server function (e.g., sql=Database, api=API Server, vpn=VPN Gateway).",
       "impact": "Server role identification aids in targeting specific service types and identifying high-value targets such as database servers, domain controllers, or backup systems.",
       "remediation_brief": "Use role-neutral hostnames for externally-facing systems. Ensure hostname-implied services are properly hardened for their role."
+    },
+    {
+      "id": "SS3-241",
+      "title": "SSH Configuration: Keyboard-Interactive Only (No Public Key)",
+      "aliases": [
+        "SSH Keyboard-Interactive Authentication",
+        "SSH KbdInt Only"
+      ],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "MEDIUM",
+      "description": "The SSH server accepts only keyboard-interactive authentication with no public key option. Keyboard-interactive may be PAM-based password prompts, TOTP/OTP, Duo push, or other challenge-response mechanisms. Without public key authentication available, the server relies entirely on challenge-response security.",
+      "impact": "Without public key authentication, the SSH server cannot accept key-based or certificate-based login. If the keyboard-interactive backend is password-based PAM, the server is susceptible to brute-force attacks. Even if the backend is 2FA, the absence of a public key option limits authentication flexibility and violates CIS/STIG hardening requirements.",
+      "cwe": [
+        "CWE-287"
+      ],
+      "cve_examples": [],
+      "cvss_v3_base": 5.3,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "PR.AC-01",
+        "PR.AC-07"
+      ],
+      "nist_800_53": [
+        "IA-2",
+        "IA-5",
+        "CM-6"
+      ],
+      "nist_800_171": [
+        "3.5.3",
+        "3.5.4"
+      ],
+      "pci_dss_4": [
+        "8.3.1",
+        "2.2.4"
+      ],
+      "iso_27001": [
+        "A.9.4.2"
+      ],
+      "iso_27002": [
+        "9.4.2"
+      ],
+      "soc2": [
+        "CC6.1"
+      ],
+      "hitrust": [
+        "01.d"
+      ],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1078",
+          "tactic": "Initial Access",
+          "name": "Valid Accounts"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_brief": "Enable public key authentication in /etc/ssh/sshd_config. If keyboard-interactive is used for 2FA, ensure public key is also available as a primary authentication factor. Deploy SSH key pairs for all authorized users.",
+      "remediation_component": "Server",
+      "remediation_category": "Hardening",
+      "remediation_effort": "Moderate",
+      "validation_tools": [
+        "nmap --script ssh-auth-methods",
+        "ssh-audit"
+      ]
     }
   ]
 }
