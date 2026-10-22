@@ -29262,16 +29262,17 @@ def run_amqp_check(
                     pass
             elif resp.status_code == 401:
                 output_mgr.log_finding(
-                    title="RabbitMQ Management UI Exposed",
+                    title="Discovery: Admin Console",
                     ip=ip, port=port,
                     command=f"HTTP GET {mgmt_url}",
                     hostname=hostname, risk="INFO",
                     description=(
                         f"RabbitMQ management UI is accessible on {ip}:{port}. "
-                        f"Default credentials were rejected. Verify strong "
-                        f"passwords are used and restrict access via firewall."
+                        f"Default credentials were rejected (HTTP 401). Verify "
+                        f"strong passwords are used and restrict management "
+                        f"access via firewall."
                     ),
-                    output=f"Status: {resp.status_code}",
+                    output=f"RabbitMQ Management UI\nStatus: {resp.status_code}",
                     sources="rabbitmq-mgmt-probe",
                     affected=f"{ip}:{port}",
                     output_file=str(out_file),
