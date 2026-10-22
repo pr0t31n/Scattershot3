@@ -11996,6 +11996,7 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
         _cipher_source = _ss_xml_ciphers   if _ss_xml_ciphers   else result["ciphers"]
 
         if output_mgr:
+            _ss_is_ext = (output_mgr.scope == "ext")
             # Heartbleed
             if result.get("heartbleed") and "vulnerable" in result["heartbleed"]:
                 output_mgr.log_finding(
@@ -12119,7 +12120,8 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
                 if is_weak:
                     output_mgr.log_finding(
                         title="Weak Cipher Identified",
-                        ip=ip, port=port, command=cmd, hostname=hostname, risk="HIGH",
+                        ip=ip, port=port, command=cmd, hostname=hostname,
+                        risk="HIGH" if _ss_is_ext else "MEDIUM",
                         description=f"sslscan: Weak cipher suite accepted: {_cn} ({_cbits} bit)",
                         sources="sslscan",
                         output=f"Cipher: {_cn}\nKey strength: {_cbits} bit",
@@ -12432,14 +12434,24 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                             r'(?:512|768|1024)\s*(?:bit|b\b)', _lj_lo))
                         if not _lj_has_export and not _lj_small_dh:
                             _logjam_unconfirmed = True
-                    # Confirmed-vulnerable risk by name
-                    _confirmed_risk = (
-                        "CRITICAL" if name in ("Heartbleed", "ROBOT", "DROWN", "POODLE")
-                        else _lucky13_risk if name == "LUCKY13"
-                        else _sweet32_risk if name == "SWEET32"
-                        else "INFO" if _logjam_unconfirmed
-                        else "HIGH"
-                    )
+                    # Confirmed-vulnerable risk by name (scope-aware)
+                    _is_ext = (output_mgr.scope == "ext")
+                    if name == "Heartbleed":
+                        _confirmed_risk = "CRITICAL"
+                    elif name == "ROBOT":
+                        _confirmed_risk = "CRITICAL" if _is_ext else "HIGH"
+                    elif name == "DROWN":
+                        _confirmed_risk = "CRITICAL" if _is_ext else "HIGH"
+                    elif name == "POODLE":
+                        _confirmed_risk = "HIGH" if _is_ext else "MEDIUM"
+                    elif name == "LUCKY13":
+                        _confirmed_risk = _lucky13_risk
+                    elif name == "SWEET32":
+                        _confirmed_risk = _sweet32_risk
+                    elif _logjam_unconfirmed:
+                        _confirmed_risk = "INFO"
+                    else:
+                        _confirmed_risk = "HIGH"
                     # Potential-only matches downgrade two notches to INFO
                     # so they don't trip critical-finding alerts.
                     _emit_risk  = "INFO" if severity == "POTENTIAL" else _confirmed_risk
@@ -12705,31 +12717,34 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                 # Wrap per-entry so a single malformed entry cannot abort the loop.
                 try:
                     _tsf_id      = _tsf.get("id", "")
+                    # Strip chain-position suffixes: " <hostCert#1>", " <#2>", etc.
+                    _tsf_id_base = re.sub(r'\s*<[^>]*>\s*$', '', _tsf_id).strip()
                     _tsf_sev     = (_tsf.get("severity") or "INFO").upper()
                     _tsf_risk    = _TESTSSL_RISK_MAP.get(_tsf_sev, "INFO")
                     # Use `or ""` to coerce JSON null → empty string before .lower()
                     _tsf_finding = _tsf.get("finding") or ""
                     _tsf_finding_lo = _tsf_finding.lower()
                     _tsf_affected = ""
+                    _is_ext = (output_mgr.scope == "ext")
                     # Extract any CVEs mentioned inline in the finding text
                     _tsf_cve_inline = ",".join(re.findall(r'CVE-\d{4}-\d+', _tsf_finding))
                     # Protocol IDs: only generate findings when the protocol IS offered
-                    if _tsf_id in _TESTSSL_PROTO_IDS:
+                    if _tsf_id_base in _TESTSSL_PROTO_IDS:
                         if "not offered" in _tsf_finding_lo:
                             continue  # protocol is correctly absent — no finding
-                        _tsf_title = f"Deprecated Protocol Enabled: {_TESTSSL_PROTO_IDS[_tsf_id]}"
-                        _tsf_risk  = _proto_risk(_TESTSSL_PROTO_IDS[_tsf_id])
-                        _tsf_cve   = _TESTSSL_CVES_JSON.get(_tsf_id, "")
+                        _tsf_title = f"Deprecated Protocol Enabled: {_TESTSSL_PROTO_IDS[_tsf_id_base]}"
+                        _tsf_risk  = _proto_risk(_TESTSSL_PROTO_IDS[_tsf_id_base])
+                        _tsf_cve   = _TESTSSL_CVES_JSON.get(_tsf_id_base, "")
                         if _tsf_cve_inline:
                             _all_cves = set(c for c in (_tsf_cve + "," + _tsf_cve_inline).split(",") if c.strip())
                             _tsf_cve = ",".join(sorted(_all_cves))
                     else:
-                        _tsf_cve = _TESTSSL_CVES_JSON.get(_tsf_id, "")
+                        _tsf_cve = _TESTSSL_CVES_JSON.get(_tsf_id_base, "")
                         if _tsf_cve_inline:
                             _all_cves = set(c for c in (_tsf_cve + "," + _tsf_cve_inline).split(",") if c.strip())
                             _tsf_cve = ",".join(sorted(_all_cves))
                         # ── IDs to suppress entirely ──────────────────────────
-                        if _tsf_id in _TS_SKIP_IDS or _tsf_id.startswith("cipher-"):
+                        if _tsf_id_base in _TS_SKIP_IDS or _tsf_id_base.startswith("cipher-"):
                             continue
                         # ── Certificate: Self-Signed ──────────────────────────
                         if "self-signed" in _tsf_finding_lo or "self signed" in _tsf_finding_lo:
@@ -12744,20 +12759,19 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                             _tsf_title = f"SSL/TLS Vulnerability (Potential): {_tsf_id}"
                             _tsf_risk  = "INFO"
                         # ── Cipher: No Cipher Order Configured ────────────────
-                        elif _tsf_id.startswith("cipher_order"):
+                        elif _tsf_id_base.startswith("cipher_order"):
                             if "not" in _tsf_finding_lo:
                                 _tsf_title = "SSL/TLS Ciphers: No Cipher Order Configured"
                                 _tsf_risk  = "LOW"
                             else:
                                 continue  # cipher order is configured — not a finding
                         # ── ID-based title / risk overrides ───────────────────
-                        elif _tsf_id.lower() == "cert_extlifespan":
-                            # testssl severity OK means cert lifespan is acceptable
+                        elif _tsf_id_base.lower() == "cert_extlifespan":
                             if _tsf_sev in ("OK", "INFO"):
                                 continue
                             _tsf_title = "SSL/TLS Certificate: Long Duration"
-                            _tsf_risk  = "MEDIUM" if output_mgr.scope == "ext" else "LOW"
-                        elif _tsf_id in ("cert_commonName_wo_SNI", "cert_commonName"):
+                            _tsf_risk  = "MEDIUM" if _is_ext else "LOW"
+                        elif _tsf_id_base in ("cert_commonName_wo_SNI", "cert_commonName"):
                             if _tsf_sev in ("OK", "INFO"):
                                 continue
                             _tsf_hn_is_ip = False
@@ -12769,18 +12783,18 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                             if _tsf_hn_is_ip:
                                 continue
                             _tsf_title = "SSL/TLS Certificate: Hostname Mismatch"
-                            _tsf_risk = "MEDIUM"
-                        elif _tsf_id == "cert_trust":
+                            _tsf_risk  = "MEDIUM" if _is_ext else "LOW"
+                        elif _tsf_id_base == "cert_trust":
                             if _tsf_sev in ("OK", "INFO"):
                                 continue
                             _tsf_title = "SSL/TLS Certificate: Not Trusted"
-                            _tsf_risk  = "MEDIUM"
-                        elif _tsf_id == "cert_chain_of_trust":
+                            _tsf_risk  = "HIGH" if _is_ext else "MEDIUM"
+                        elif _tsf_id_base == "cert_chain_of_trust":
                             if _tsf_sev in ("OK", "INFO"):
                                 continue
                             _tsf_title = "SSL/TLS Certificate: Chain of Trust Invalid"
-                            _tsf_risk  = "HIGH" if output_mgr.scope == "ext" else "MEDIUM"
-                        elif _tsf_id == "cert_subjectAltName":
+                            _tsf_risk  = "HIGH" if _is_ext else "MEDIUM"
+                        elif _tsf_id_base == "cert_subjectAltName":
                             # testssl reports SANs in the finding field; if SANs
                             # are present (severity OK/INFO), report them as info
                             # not as "missing"
@@ -12813,21 +12827,62 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                                     sources="testssl",
                                     affected=f"{ip}:{port}",
                                 )
-                        elif _tsf_id.startswith("hsts"):
+                        elif _tsf_id_base.lower().startswith("hsts"):
                             # HSTS positively present: finding says "offered" without negation
                             if ("offered" in _tsf_finding_lo
                                     and "not offered" not in _tsf_finding_lo):
                                 continue  # HSTS is configured — not a finding
-                            _tsf_title    = "Missing Security Headers"
-                            _tsf_affected = "Strict Transport Security"
-                            _tsf_risk     = "LOW"
-                        elif _tsf_id == "cert_keySize":
+                            if _tsf_id_base == "HSTS_time":
+                                _tsf_title    = "Missing Security Headers"
+                                _tsf_affected = "Strict Transport Security (short duration)"
+                                _tsf_risk     = "LOW" if _is_ext else "INFO"
+                            else:
+                                _tsf_title    = "Missing Security Headers"
+                                _tsf_affected = "Strict Transport Security"
+                                _tsf_risk     = "LOW"
+                        elif _tsf_id_base == "cert_keySize":
                             _tsf_title = "SSL/TLS Certificate: Weak Encryption Method"
                             _tsf_risk  = "LOW"
-                        elif _tsf_id == "cert_serialNumberLen":
+                        elif _tsf_id_base == "cert_serialNumberLen":
                             _tsf_title = "SSL/TLS Certificate: Serial Number Entropy"
                             # keep testssl-assigned risk
-                        elif _tsf_id == "cipherlist_OBSOLETED":
+                        elif _tsf_id_base == "cert_keyUsage":
+                            if _tsf_sev in ("OK", "INFO"):
+                                continue
+                            _tsf_title = "SSL/TLS Certificate: Key Usage Violation"
+                            _tsf_risk  = "HIGH" if _is_ext else "MEDIUM"
+                        elif _tsf_id_base == "cipherlist_LOW":
+                            if "not offered" in _tsf_finding_lo:
+                                continue
+                            _tsf_title = "SSL/TLS Ciphers: LOW-Grade Ciphers Accepted"
+                            _tsf_risk  = "HIGH" if _is_ext else "MEDIUM"
+                        elif _tsf_id_base == "cipherlist_3DES_IDEA":
+                            if "not offered" in _tsf_finding_lo:
+                                continue
+                            _tsf_title = "SSL/TLS Ciphers: 3DES/IDEA Ciphers Accepted"
+                            _tsf_risk  = "MEDIUM" if _is_ext else "LOW"
+                        elif _tsf_id_base == "BEAST_CBC_TLS1":
+                            if "not vulnerable" in _tsf_finding_lo:
+                                continue
+                            _tsf_title = "SSL/TLS Vulnerability: BEAST (CBC/TLS1)"
+                            _tsf_risk  = "MEDIUM" if _is_ext else "LOW"
+                        elif _tsf_id_base == "fallback_SCSV":
+                            if _tsf_sev in ("OK", "INFO"):
+                                continue
+                            if "offered" in _tsf_finding_lo and "not" not in _tsf_finding_lo:
+                                continue
+                            _tsf_title = "SSL/TLS Vulnerability: TLS_FALLBACK_SCSV Not Supported"
+                            _tsf_risk  = "MEDIUM" if _is_ext else "LOW"
+                        elif _tsf_id_base == "Cache-Control_multiple":
+                            _tsf_title = "HTTP Header: Conflicting Cache-Control Directives"
+                            _tsf_risk  = "LOW" if _is_ext else "INFO"
+                        elif _tsf_id_base == "cert_trust_wildcard":
+                            _tsf_title = "SSL/TLS Certificate: Wildcard Certificate"
+                            _tsf_risk  = "LOW" if _is_ext else "INFO"
+                        elif _tsf_id_base == "certs_list_ordering_problem":
+                            _tsf_title = "SSL/TLS Certificate: Chain Ordering Issue"
+                            _tsf_risk  = "INFO"
+                        elif _tsf_id_base == "cipherlist_OBSOLETED":
                             # "not offered" means no obsolete ciphers — clean result
                             if "not offered" in _tsf_finding_lo:
                                 continue
@@ -12846,7 +12901,7 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                             output_mgr.log_finding(
                                     title="SSL/TLS Ciphers: Obsolete Ciphers",
                                     ip=ip, port=port, command=cmd, hostname=hostname,
-                                    risk="MEDIUM",
+                                    risk="MEDIUM" if _is_ext else "LOW",
                                     description=(
                                         f"Obsolete cipher suites offered: {', '.join(_obs_ciphers)}"
                                         if _obs_ciphers else
@@ -12866,42 +12921,40 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                                     remediation="Disable weak and obsolete cipher suites; use modern TLS 1.2/1.3 with AEAD ciphers.",
                                 )
                             continue
-                        elif _tsf_id == "DNS_CAArecord":
-                            if output_mgr.scope != "ext":
-                                continue  # internal scope: CAA records not relevant
-                            # testssl reports "not checked" when scanning by IP
-                            # (no domain to query) — skip, not a real finding
+                        elif _tsf_id_base == "DNS_CAArecord":
+                            if not _is_ext:
+                                continue
                             if "not checked" in _tsf_finding_lo:
                                 continue
                             _tsf_title = "DNS: Missing CAA Record"
                             _tsf_risk  = "LOW"
-                        elif _tsf_id == "TLS_session_ticket":
+                        elif _tsf_id_base == "TLS_session_ticket":
                             _tsf_title = "SSL/TLS Session: Long Duration"
                             # keep testssl-assigned risk
-                        elif _tsf_id == "LUCKY13":
+                        elif _tsf_id_base == "LUCKY13":
                             if "not vulnerable" in _tsf_finding_lo:
                                 continue
                             if "potentially" in _tsf_finding_lo:
                                 _tsf_title = "SSL/TLS Vulnerability (Potential): Lucky13"
                             else:
-                                _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id}"
-                            _tsf_risk  = "MEDIUM" if output_mgr.scope == "ext" else "LOW"
-                        elif _tsf_id == "SWEET32":
+                                _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id_base}"
+                            _tsf_risk  = "MEDIUM" if _is_ext else "LOW"
+                        elif _tsf_id_base == "SWEET32":
                             if "not vulnerable" in _tsf_finding_lo:
                                 continue
-                            _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id}"
-                            _tsf_risk  = "MEDIUM" if output_mgr.scope == "ext" else "LOW"
-                        elif _tsf_id == "LOGJAM":
+                            _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id_base}"
+                            _tsf_risk  = "MEDIUM" if _is_ext else "LOW"
+                        elif _tsf_id_base == "LOGJAM":
                             if "not vulnerable" in _tsf_finding_lo:
                                 continue
                             _lj_has_export = "export" in _tsf_finding_lo
                             _lj_small_dh = bool(re.search(
                                 r'(?:512|768|1024)\s*(?:bit|b\b)', _tsf_finding_lo))
                             if _lj_has_export or _lj_small_dh:
-                                _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id}"
-                                _tsf_risk  = "HIGH"
+                                _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id_base}"
+                                _tsf_risk  = "HIGH" if _is_ext else "MEDIUM"
                             else:
-                                _tsf_title = f"SSL/TLS Vulnerability (Potential): {_tsf_id}"
+                                _tsf_title = f"SSL/TLS Vulnerability (Potential): {_tsf_id_base}"
                                 _tsf_risk  = "INFO"
                                 _tsf_finding = (
                                     "(Potential) testssl flagged LOGJAM due to a "
@@ -12909,56 +12962,52 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                                     "DH parameters were detected. Verify manually. "
                                     "Original: " + _tsf_finding
                                 )
-                        # ── Auto-validated checks (testssl IDs we re-confirm
-                        # independently and assign risk based on impact) ───
-                        elif _tsf_id == "insecure_redirect":
-                            # HTTPS server redirects to http:// — MITM downgrade
+                        # ── Auto-validated checks ───
+                        elif _tsf_id_base == "insecure_redirect":
                             _tsf_title = "SSL/TLS Vulnerability: insecure_redirect"
-                            _tsf_risk  = "MEDIUM"  # confirmed downgrade vector
-                        elif _tsf_id == "secure_client_renego":
-                            # Server allows client-initiated renegotiation —
-                            # CPU-asymmetric DoS vector only (not data exposure)
+                            _tsf_risk  = "MEDIUM"
+                        elif _tsf_id_base == "secure_client_renego":
                             _tsf_title = "SSL/TLS Vulnerability: secure_client_renego"
                             _tsf_risk  = "LOW"
-                        elif _tsf_id == "ipv4_in_header":
-                            # IPv4 leak in response headers — info disclosure.
-                            # Risk may be escalated to MEDIUM by validator if
-                            # the leaked address is RFC 1918 (internal topology).
+                        elif _tsf_id_base == "ipv4_in_header":
                             _tsf_title = "SSL/TLS Vulnerability: ipv4_in_header"
                             _tsf_risk  = "LOW"
-                        elif _tsf_id == "TLS_misses_extension_23":
-                            # Missing Extended Master Secret (RFC 7627) — vulnerable
-                            # to Triple Handshake (CVE-2014-1295) on TLS ≤ 1.2.
-                            # BUT if testssl says the extension IS present (severity
-                            # OK/INFO, finding says "detected"/"offered"), that's a
-                            # PASS — not a finding.
+                        elif _tsf_id_base == "TLS_misses_extension_23":
                             if (_tsf_sev in ("OK", "INFO")
                                     or "detected" in _tsf_finding_lo
                                     or "offered" in _tsf_finding_lo):
                                 continue
                             _tsf_title = "SSL/TLS Vulnerability: TLS_misses_extension_23"
-                            _tsf_risk  = "MEDIUM"
-                        elif _tsf_id in ("cert_notAfter",
+                            _tsf_risk  = "MEDIUM" if _is_ext else "LOW"
+                        elif _tsf_id_base in ("cert_notAfter",
                                          "cert_expirationStatus",
                                          "expiration"):
-                            # testssl reports two separate IDs for the same
-                            # expiry condition.  Merge into one finding and only
-                            # emit when the cert is actually expired.
                             if any(kw in _tsf_finding_lo
                                    for kw in ("expired", "already past",
                                               "has expired")):
                                 _tsf_title = "SSL/TLS Certificate: Expired"
-                                _tsf_risk  = "HIGH"
+                                _tsf_risk  = "HIGH" if _is_ext else "MEDIUM"
                             else:
                                 continue
-                        elif _tsf_id.startswith("FS"):
+                        elif _tsf_id_base.startswith("cert_signatureAlgorithm"):
+                            if _tsf_sev in ("OK", "INFO"):
+                                continue
+                            _tsf_title = "SSL/TLS Certificate: Weak Signature Algorithm"
+                            _tsf_risk  = "HIGH" if _is_ext else "MEDIUM"
+                        elif (_tsf_id_base.startswith("intermediate_cert_expiration")
+                              or _tsf_id_base.startswith("intermediate_cert_notAfter")):
+                            if _tsf_sev in ("OK", "INFO"):
+                                continue
+                            _tsf_title = "SSL/TLS Certificate: Intermediate Certificate Expired"
+                            _tsf_risk  = "HIGH" if _is_ext else "MEDIUM"
+                        elif _tsf_id_base.startswith("FS"):
                             if "offered" in _tsf_finding_lo and "not" not in _tsf_finding_lo:
                                 continue
-                            if _tsf_id in ("FS", "FS_offered", "FS_ciphers"):
+                            if _tsf_id_base in ("FS", "FS_offered", "FS_ciphers"):
                                 _tsf_title = "SSL/TLS Forward Secrecy: Not Supported"
-                                _tsf_risk  = "MEDIUM"
+                                _tsf_risk  = "MEDIUM" if _is_ext else "LOW"
                             else:
-                                _tsf_title = f"SSL/TLS Forward Secrecy: {_tsf_id}"
+                                _tsf_title = f"SSL/TLS Forward Secrecy: {_tsf_id_base}"
                                 _tsf_risk  = "LOW"
                         else:
                             # Generic fallback — suppress clean results and INFO noise
@@ -12968,16 +13017,13 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                             if ("not offered" in _tsf_finding_lo
                                     or "not vulnerable" in _tsf_finding_lo):
                                 continue
-                            _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id}"
+                            _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id_base}"
+                            if _tsf_risk in ("HIGH", "CRITICAL") and not _is_ext:
+                                _tsf_risk = {"CRITICAL": "HIGH", "HIGH": "MEDIUM"}.get(_tsf_risk, _tsf_risk)
 
-                    # ── Inline validator for the four auto-validated checks ───
-                    # Re-tests the finding independently and populates the v1.1
-                    # 'confidence' field. May also escalate risk (e.g. RFC 1918
-                    # leakage → MEDIUM) or downgrade severity description (e.g.
-                    # TLS 1.3-only servers → 'Not applicable').
                     _vconf, _vdetail, _vrisk = ("", "", "")
-                    if _tsf_id in _TESTSSL_VALIDATORS:
-                        _vconf, _vdetail, _vrisk = _ssl_run_validator(_tsf_id, ip, port)
+                    if _tsf_id_base in _TESTSSL_VALIDATORS:
+                        _vconf, _vdetail, _vrisk = _ssl_run_validator(_tsf_id_base, ip, port)
                         if _vrisk:                       # validator-suggested risk override
                             _tsf_risk = _vrisk
                         if _vconf == "Not applicable":
