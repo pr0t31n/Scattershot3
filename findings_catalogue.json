@@ -2,7 +2,7 @@
   "version": "1.7.1",
   "tool": "scattershot3",
   "generated": "(complete: upgraded existing + scaffolded missing)",
-  "total": 242,
+  "total": 259,
   "from_existing": 110,
   "newly_scaffolded": 68,
   "findings": [
@@ -18391,6 +18391,811 @@
         "hydra",
         "medusa"
       ]
+    },
+    {
+      "aliases": [],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-1",
+        "ID.AM-2"
+      ],
+      "nist_800_53": [
+        "CM-8",
+        "RA-5"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_component": "Configuration",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Easy",
+      "validation_tools": [],
+      "id": "SS3-219",
+      "title": "Discovery: OS Version Inferred \u2014 {os}",
+      "description": "Operating system inferred from software version analysis and port fingerprinting rather than direct nmap OS detection or SSH banner identification. Inference sources include IIS version to Windows Server edition mapping, SQL Server version correlation, OpenSSH banner to Linux distribution mapping, Cockpit version to RHEL mapping, Microsoft service software presence, VMware ESXi detection, and Windows-characteristic port combinations (RDP, SMB, MSRPC, WinRM).",
+      "impact": "Accurate OS identification enables targeted vulnerability assessment, patch validation, and compliance scope determination. Inferred OS guides the tester toward OS-specific attack vectors, default credential databases, and known exploit chains. Without OS identification, vulnerability assessment is less targeted and may miss platform-specific weaknesses.",
+      "remediation_brief": "Informational finding. Validate inferred OS with targeted nmap -O scan or authenticated assessment. Use the inferred OS to scope platform-specific vulnerability checks."
+    },
+    {
+      "aliases": [],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-1",
+        "ID.AM-2"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1558",
+          "tactic": "Credential Access",
+          "name": "Steal or Forge Kerberos Tickets"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_component": "Configuration",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Easy",
+      "validation_tools": [],
+      "id": "SS3-220",
+      "title": "Discovery: Server Role Identified \u2014 Domain Controller",
+      "description": "Host identified as an Active Directory Domain Controller based on Kerberos (88/tcp), LDAP (389/tcp), and supporting services (Global Catalog, DNS, SMB). Domain Controllers are the central authentication and authorization authority for Windows Active Directory environments.",
+      "impact": "Domain Controllers hold the keys to the entire Active Directory environment. Compromise of a DC grants access to all domain-joined systems, user credentials (NTDS.dit), Group Policy Objects, and Kerberos ticket-granting services. DCs are prime targets for Kerberoasting, DCSync, Golden Ticket, and Pass-the-Hash attacks. Identifying DCs early directs the tester to the highest-value targets.",
+      "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
+    },
+    {
+      "aliases": [],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-1",
+        "ID.AM-2"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1071.004",
+          "tactic": "Command and Control",
+          "name": "Application Layer Protocol: DNS"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_component": "Configuration",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Easy",
+      "validation_tools": [],
+      "id": "SS3-221",
+      "title": "Discovery: Server Role Identified \u2014 DNS Server",
+      "description": "Host identified as a DNS server based on port 53 (TCP/UDP) and optionally detected DNS software (BIND, dnsmasq, Unbound, PowerDNS, Microsoft DNS).",
+      "impact": "DNS servers reveal internal network topology, naming conventions, and service locations through zone transfers (AXFR) and record enumeration. A compromised DNS server enables DNS poisoning, traffic redirection, and man-in-the-middle attacks across the entire network.",
+      "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
+    },
+    {
+      "aliases": [],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-1",
+        "ID.AM-2"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1557",
+          "tactic": "Credential Access",
+          "name": "Adversary-in-the-Middle"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_component": "Configuration",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Easy",
+      "validation_tools": [],
+      "id": "SS3-222",
+      "title": "Discovery: Server Role Identified \u2014 DHCP Server",
+      "description": "Host identified as a DHCP server based on port 67/udp and optionally detected DHCP software (ISC DHCP, dnsmasq).",
+      "impact": "DHCP servers control IP address assignment and can push configuration to all clients including DNS servers, default gateways, and proxy settings. A rogue or compromised DHCP server enables network-wide man-in-the-middle attacks via malicious gateway or DNS injection.",
+      "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
+    },
+    {
+      "aliases": [],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-1",
+        "ID.AM-2"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1114",
+          "tactic": "Collection",
+          "name": "Email Collection"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_component": "Configuration",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Easy",
+      "validation_tools": [],
+      "id": "SS3-223",
+      "title": "Discovery: Server Role Identified \u2014 Mail Server",
+      "description": "Host identified as a mail server based on SMTP (25/tcp) and optionally POP3/IMAP/submission ports (110, 143, 465, 587, 993, 995) with detected mail software (Postfix, Sendmail, Exim, Exchange, Dovecot).",
+      "impact": "Mail servers process and store organizational email containing sensitive communications, credentials, and attachments. They are targets for credential harvesting, phishing relay, open relay abuse, and data exfiltration. Exchange servers in particular may expose OWA and EWS interfaces with known exploitation chains (ProxyShell, ProxyLogon).",
+      "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
+    },
+    {
+      "aliases": [],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-1",
+        "ID.AM-2"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1190",
+          "tactic": "Initial Access",
+          "name": "Exploit Public-Facing Application"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_component": "Configuration",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Easy",
+      "validation_tools": [],
+      "id": "SS3-224",
+      "title": "Discovery: Server Role Identified \u2014 Web Server",
+      "description": "Host identified as a web server based on HTTP/HTTPS ports (80, 443, 8080, 8443) and optionally detected web server software (Nginx, Apache, IIS, Tomcat, Lighttpd, Caddy, HAProxy).",
+      "impact": "Web servers host applications, APIs, and administrative interfaces that represent a significant portion of the external attack surface. Identification enables targeted web vulnerability scanning, technology-specific exploit testing, and web application penetration testing.",
+      "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
+    },
+    {
+      "aliases": [],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-1",
+        "ID.AM-2"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1213",
+          "tactic": "Collection",
+          "name": "Data from Information Repositories"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_component": "Configuration",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Easy",
+      "validation_tools": [],
+      "id": "SS3-225",
+      "title": "Discovery: Server Role Identified \u2014 Database Server",
+      "description": "Host identified as a database server based on database ports (MySQL 3306, PostgreSQL 5432, MSSQL 1433, Oracle 1521, MongoDB 27017, Redis 6379, Cassandra 9042) and optionally detected database software.",
+      "impact": "Database servers store the organization's structured data including user records, financial data, and application state. Direct database access enables data exfiltration, privilege escalation via stored procedures, and lateral movement through linked servers or database links. Exposed database ports are high-value targets for credential brute-forcing.",
+      "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
+    },
+    {
+      "aliases": [],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-1",
+        "ID.AM-2"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1039",
+          "tactic": "Collection",
+          "name": "Data from Network Shared Drive"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_component": "Configuration",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Easy",
+      "validation_tools": [],
+      "id": "SS3-226",
+      "title": "Discovery: Server Role Identified \u2014 File Server",
+      "description": "Host identified as a file server based on SMB (445/tcp), NetBIOS (139/tcp), NFS (2049/tcp), and RPC (111/tcp) port combinations.",
+      "impact": "File servers contain shared documents, configuration files, scripts, and potentially credentials or sensitive data in accessible shares. SMB shares are prime targets for credential relay attacks (NTLM relay), sensitive data discovery, and lateral movement. NFS exports may allow unauthorized access when misconfigured.",
+      "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
+    },
+    {
+      "aliases": [],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-1",
+        "ID.AM-2"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_component": "Configuration",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Easy",
+      "validation_tools": [],
+      "id": "SS3-227",
+      "title": "Discovery: Server Role Identified \u2014 Print Server",
+      "description": "Host identified as a print server based on IPP (631/tcp), LPD (515/tcp), or JetDirect (9100/tcp) ports and optionally CUPS software detection.",
+      "impact": "Print servers process documents that may contain sensitive information. Print protocols (IPP, LPD, JetDirect) historically have weak authentication and known vulnerabilities. CUPS servers may expose administrative interfaces and have been subject to remote code execution vulnerabilities.",
+      "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
+    },
+    {
+      "aliases": [],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-1",
+        "ID.AM-2"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1090",
+          "tactic": "Command and Control",
+          "name": "Proxy"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_component": "Configuration",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Easy",
+      "validation_tools": [],
+      "id": "SS3-228",
+      "title": "Discovery: Server Role Identified \u2014 Proxy/Load Balancer",
+      "description": "Host identified as a proxy or load balancer based on common proxy ports (3128, 8080, 8443) and optionally detected software (Squid, HAProxy, Nginx, Varnish, Envoy, Traefik, F5).",
+      "impact": "Proxy and load balancer infrastructure reveals backend server topology and may expose administrative interfaces. Misconfigured proxies can enable server-side request forgery (SSRF), cache poisoning, and access to internal-only services. Load balancer admin panels may grant control over traffic routing.",
+      "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
+    },
+    {
+      "aliases": [],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-1",
+        "ID.AM-2"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1133",
+          "tactic": "Initial Access",
+          "name": "External Remote Services"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_component": "Configuration",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Easy",
+      "validation_tools": [],
+      "id": "SS3-229",
+      "title": "Discovery: Server Role Identified \u2014 VPN Gateway",
+      "description": "Host identified as a VPN gateway based on OpenVPN (1194/tcp/udp), IKE (500/udp), NAT-T (4500/udp), L2TP (1701/udp), or PPTP (1723/tcp) ports and optionally detected VPN software.",
+      "impact": "VPN gateways are the entry point to internal networks from external locations. Compromising a VPN gateway grants authenticated access to the internal network segment. VPN appliances have been subject to critical vulnerabilities (Pulse Secure, Fortinet, Cisco AnyConnect) that enable pre-authentication remote code execution.",
+      "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
+    },
+    {
+      "aliases": [],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-1",
+        "ID.AM-2"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1556",
+          "tactic": "Credential Access",
+          "name": "Modify Authentication Process"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_component": "Configuration",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Easy",
+      "validation_tools": [],
+      "id": "SS3-230",
+      "title": "Discovery: Server Role Identified \u2014 RADIUS Server",
+      "description": "Host identified as a RADIUS authentication server based on authentication (1812/udp) and accounting (1813/udp) ports and optionally detected RADIUS software (FreeRADIUS).",
+      "impact": "RADIUS servers centralize network access authentication for VPN, wireless, and 802.1X wired access. Compromising a RADIUS server enables authentication bypass for all connected network access infrastructure, potentially granting access to every network segment protected by 802.1X or VPN authentication.",
+      "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
+    },
+    {
+      "aliases": [],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-1",
+        "ID.AM-2"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1018",
+          "tactic": "Discovery",
+          "name": "Remote System Discovery"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_component": "Configuration",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Easy",
+      "validation_tools": [],
+      "id": "SS3-231",
+      "title": "Discovery: Server Role Identified \u2014 Monitoring Server",
+      "description": "Host identified as a monitoring or observability server based on SNMP (161-162/udp), Prometheus (9090/tcp), Grafana (3000/tcp), Kibana (5601/tcp), or Elasticsearch (9200/tcp) port combinations and optionally detected monitoring software.",
+      "impact": "Monitoring servers aggregate telemetry, logs, and metrics from across the infrastructure, providing a comprehensive view of network topology, service health, and security events. Compromising a monitoring server reveals the full infrastructure map and may expose credentials stored in data source configurations. SNMP community strings and monitoring agent credentials are high-value targets.",
+      "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
+    },
+    {
+      "aliases": [],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-1",
+        "ID.AM-2"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1610",
+          "tactic": "Defense Evasion",
+          "name": "Deploy Container"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_component": "Configuration",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Easy",
+      "validation_tools": [],
+      "id": "SS3-232",
+      "title": "Discovery: Server Role Identified \u2014 Virtualization Host",
+      "description": "Host identified as a virtualization host based on VMware (902/tcp, 443/tcp), Proxmox (8006/tcp) ports and optionally detected hypervisor software (ESXi, VMware, Proxmox, vCenter).",
+      "impact": "Virtualization hosts run multiple virtual machines and represent high-value targets. Compromising a hypervisor grants access to all hosted VMs, their virtual disks, memory contents, and network traffic. ESXi and vCenter have been subject to critical vulnerabilities enabling remote code execution and VM escape.",
+      "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
+    },
+    {
+      "aliases": [],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-1",
+        "ID.AM-2"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1195.002",
+          "tactic": "Initial Access",
+          "name": "Supply Chain Compromise: Compromise Software Supply Chain"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_component": "Configuration",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Easy",
+      "validation_tools": [],
+      "id": "SS3-233",
+      "title": "Discovery: Server Role Identified \u2014 CI/CD Server",
+      "description": "Host identified as a CI/CD server based on Jenkins (8080/tcp, 50000/tcp), GitLab, TeamCity, or Bamboo port and software detection.",
+      "impact": "CI/CD servers have access to source code repositories, build artifacts, deployment credentials, and production infrastructure. Compromising a CI/CD pipeline enables supply chain attacks, credential theft from build environments, and code injection into production deployments. Jenkins servers frequently expose unauthenticated script consoles.",
+      "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
+    },
+    {
+      "aliases": [],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-1",
+        "ID.AM-2"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1610",
+          "tactic": "Defense Evasion",
+          "name": "Deploy Container"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_component": "Configuration",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Easy",
+      "validation_tools": [],
+      "id": "SS3-234",
+      "title": "Discovery: Server Role Identified \u2014 Container Host",
+      "description": "Host identified as a container orchestration host based on Docker API (2375-2376/tcp), Kubernetes API (6443/tcp), kubelet (10250/tcp) ports and optionally detected container software (Docker, Kubernetes, Portainer, Rancher).",
+      "impact": "Container hosts run containerized workloads and expose orchestration APIs that may grant cluster-wide access. An exposed Docker socket (2375/tcp without TLS) allows arbitrary container creation with host filesystem access. Kubernetes API access enables pod creation, secret extraction, and lateral movement across the cluster.",
+      "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
+    },
+    {
+      "aliases": [],
+      "source_tools": [
+        "scattershot3"
+      ],
+      "risk": "INFO",
+      "cwe": [],
+      "cve_examples": [],
+      "cvss_v3_base": 0.0,
+      "cvss_vector": "N/A",
+      "nessus_plugin_ids": [],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": [
+        "ID.AM-1",
+        "ID.AM-2"
+      ],
+      "nist_800_53": [
+        "CM-8"
+      ],
+      "nist_800_171": [],
+      "pci_dss_4": [],
+      "iso_27001": [],
+      "iso_27002": [],
+      "soc2": [],
+      "hitrust": [],
+      "gdpr": [],
+      "mitre_attack": [
+        {
+          "technique": "T1005",
+          "tactic": "Collection",
+          "name": "Data from Local System"
+        }
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": [],
+      "kev": false,
+      "remediation_component": "Configuration",
+      "remediation_category": "Asset Management",
+      "remediation_effort": "Easy",
+      "validation_tools": [],
+      "id": "SS3-235",
+      "title": "Discovery: Server Role Identified \u2014 Backup Server",
+      "description": "Host identified as a backup server based on Veeam (10000/tcp), Bacula/Bareos (9103/tcp), or monitoring agent (6556/tcp) ports and optionally detected backup software.",
+      "impact": "Backup servers contain copies of data from across the infrastructure, including databases, file servers, and application data. Compromising a backup server provides access to historical data, potentially including credentials, and may enable restoration of data to attacker-controlled systems. Backup credentials often have broad read access across the environment.",
+      "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
     }
   ]
 }

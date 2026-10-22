@@ -3717,6 +3717,7 @@ class OutputManager:
 
         # ── Load auxiliary data files ─────────────────────────────────────────
         _sw_by_port:   dict = {}   # (ip, port) → ["nginx 1.20", ...]
+        _sw_by_ip:     dict = {}   # ip → [{"software":..., "version":..., "port":..., "os":...}, ...]
         _resp_by_port: dict = {}   # (ip, port) → http_status_int
         try:
             sw_entries = json.loads(self.software_inventory.read_text(encoding="utf-8"))
@@ -3731,6 +3732,11 @@ class OutputManager:
                     _sw_by_port.setdefault(pkey, [])
                     if label not in _sw_by_port[pkey]:
                         _sw_by_port[pkey].append(label)
+                    _sw_by_ip.setdefault(sw_ip, [])
+                    _sw_by_ip[sw_ip].append({
+                        "software": sw_name, "version": sw_ver,
+                        "port": int(sw_port), "os": (sw.get("os") or "").strip(),
+                    })
         except Exception:
             pass
 
@@ -3821,20 +3827,14 @@ class OutputManager:
                         "state":         "open|filtered",
                     }
 
-            # Seed OS hint from software_inventory
-            os_hint = None
-            for pkey, sw_list in _sw_by_port.items():
-                if pkey[0] == ip:
-                    for sw in sw_list:
-                        if any(k in sw.lower() for k in ("windows", "linux", "ubuntu",
-                                                           "debian", "centos", "macos",
-                                                           "freebsd", "android", "ios")):
-                            os_hint = sw
-                            break
-                if os_hint:
-                    break
-            if os_hint:
-                h["os"] = os_hint
+            # Seed OS from multi-signal inference engine
+            _infer_result = _infer_host_os(
+                ip, _sw_by_ip.get(ip, []),
+                set(int(pk.split("/")[0]) for pk in h["ports_map"]),
+            )
+            if _infer_result:
+                h["os"] = _infer_result[0]
+                h["_os_evidence"] = _infer_result[1]
 
         # ── Enrich from findings ──────────────────────────────────────────────
         _WEB_URL_TITLES = {
@@ -3871,11 +3871,11 @@ class OutputManager:
             if ts and (not h["first_seen"] or ts < h["first_seen"]):
                 h["first_seen"] = ts
 
-            # Track OS version findings
+            # Track OS version findings — direct detection overrides inference
             title_lower = (f.get("title") or "").strip().lower()
             if title_lower.startswith("os version detected:"):
                 os_val = (f.get("title") or "").strip()[len("os version detected:"):].strip()
-                if os_val and not h["os"]:
+                if os_val:
                     h["os"] = os_val
 
             # Track tools via sources field
@@ -4015,6 +4015,139 @@ class OutputManager:
             })
         net_hosts.sort(key=_ip_sort_key)
 
+        # Emit "Discovery: OS Version Inferred" findings for hosts where OS
+        # was determined by inference rather than direct nmap/SSH detection
+        _os_det_ips: set = set()
+        for f in findings:
+            t = (f.get("title") or "").strip().lower()
+            if t.startswith("os version detected:"):
+                _os_det_ips.add((f.get("ip") or "").strip())
+        for _hip, h in hosts_map.items():
+            _h_os = h.get("os")
+            _h_ev = h.get("_os_evidence", "")
+            if not _h_os:
+                continue
+            if _hip in _os_det_ips:
+                continue
+            if _h_ev.startswith("Detected directly"):
+                continue
+            # Build software evidence summary for this host
+            _sw_list = _sw_by_ip.get(_hip, [])
+            _ev_lines = [f"Inference: {_h_ev}"]
+            _seen_sw = set()
+            for _s in _sw_list:
+                _slbl = f"{_s['software']} {_s['version']}".strip()
+                if _slbl and _slbl not in _seen_sw:
+                    _seen_sw.add(_slbl)
+                    _ev_lines.append(
+                        f"  port {_s['port']}: {_slbl}"
+                        + (f" (OS: {_s['os']})" if _s.get("os") else "")
+                    )
+            _port_set = set(int(pk.split("/")[0]) for pk in h["ports_map"])
+            _win_ports = _port_set & _WINDOWS_PORTS
+            if _win_ports:
+                _ev_lines.append(
+                    f"  Windows-associated ports: "
+                    f"{', '.join(str(p) for p in sorted(_win_ports))}"
+                )
+            self.log_finding(
+                title=f"Discovery: OS Version Inferred — {_h_os}",
+                ip=_hip,
+                port=0,
+                command=[],
+                hostname=h.get("hostname"),
+                risk="INFO",
+                description=(
+                    f"Operating system inferred as {_h_os} from software "
+                    f"version analysis and port fingerprinting. "
+                    f"Evidence: {_h_ev}"
+                ),
+                sources="scattershot3",
+                output="\n".join(_ev_lines),
+                affected=_hip,
+                output_file=str(
+                    self.software_inventory.relative_to(self.root)
+                ),
+            )
+
+        # Backfill inferred OS into software_inventory.json entries so the
+        # Software Inventory intelligence tab shows OS for every row on hosts
+        # where we successfully inferred the operating system.
+        _os_map: dict = {}  # ip → inferred os string
+        for _hip, h in hosts_map.items():
+            _h_os = h.get("os")
+            if _h_os:
+                _os_map[_hip] = _h_os
+        if _os_map:
+            try:
+                _si = json.loads(
+                    self.software_inventory.read_text(encoding="utf-8")
+                )
+                _modified = False
+                for _ent in (_si if isinstance(_si, list) else []):
+                    _eip = (_ent.get("ip") or "").strip()
+                    if _eip in _os_map and not (_ent.get("os") or "").strip():
+                        _ent["os"] = _os_map[_eip]
+                        _modified = True
+                if _modified:
+                    _si_tmp = self.software_inventory.with_suffix(".tmp")
+                    _si_tmp.write_text(
+                        json.dumps(_si, indent=2), encoding="utf-8"
+                    )
+                    _si_tmp.replace(self.software_inventory)
+            except Exception:
+                pass
+
+        # Emit "Discovery: Server Role Identified" findings from port/software
+        # combination analysis, and build server_roles.json for intelligence tab
+        _all_roles: list[dict] = []
+        for _hip, h in hosts_map.items():
+            _port_set = set(int(pk.split("/")[0]) for pk in h["ports_map"])
+            _svc_map: dict[int, str] = {}
+            for pk, pinfo in h["ports_map"].items():
+                try:
+                    _svc_map[int(pk.split("/")[0])] = pinfo.get("service", "")
+                except (ValueError, IndexError):
+                    pass
+            _roles = _infer_host_roles(
+                _sw_by_ip.get(_hip, []), _port_set, _svc_map,
+            )
+            for _role, _role_ev in _roles:
+                _all_roles.append({
+                    "ip":       _hip,
+                    "hostname": h.get("hostname") or "",
+                    "os":       h.get("os") or "",
+                    "role":     _role,
+                    "evidence": _role_ev,
+                    "ports":    sorted(_port_set),
+                })
+                self.log_finding(
+                    title=f"Discovery: Server Role Identified — {_role}",
+                    ip=_hip,
+                    port=0,
+                    command=[],
+                    hostname=h.get("hostname"),
+                    risk="INFO",
+                    description=(
+                        f"Host identified as a {_role} based on open port "
+                        f"combination and detected software. {_role_ev}"
+                    ),
+                    sources="scattershot3",
+                    output=f"Role: {_role}\n{_role_ev}",
+                    affected=_hip,
+                    output_file=str(
+                        self.software_inventory.relative_to(self.root)
+                    ),
+                )
+        if _all_roles:
+            _roles_path = self.root / "server_roles.json"
+            try:
+                _rt = _roles_path.with_suffix(".tmp")
+                _rt.write_text(json.dumps(_all_roles, indent=2), encoding="utf-8")
+                _rt.replace(_roles_path)
+            except Exception:
+                pass
+
         targets = {"hosts": net_hosts}
         out_path = self.root / "targets.json"
         tmp = out_path.with_suffix(".tmp")
@@ -4108,17 +4241,19 @@ class OutputManager:
             except Exception:
                 sw_entries = []
 
-            sw_headers = ["IP", "Port", "Protocol", "Software", "Version",
-                          "Source", "DateTime"]
+            sw_headers = ["IP", "Port", "Hostname", "Protocol", "Software",
+                          "Version", "OS", "Source", "DateTime"]
             sw_rows = []
             for sw in sw_entries:
                 sw_rows.append([
                     sw.get("ip", ""),
                     sw.get("port", ""),
+                    sw.get("hostname", ""),
                     sw.get("protocol", ""),
                     sw.get("software", ""),
                     sw.get("version", ""),
-                    sw.get("source", ""),
+                    sw.get("os", ""),
+                    sw.get("source", sw.get("method", "")),
                     sw.get("datetime", ""),
                 ])
             _write_sheet(wb, "Software Inventory", sw_headers, sw_rows)
@@ -15056,6 +15191,414 @@ def _normalize_os_name(raw: str) -> str:
     raw = re.sub(r"\bwindows srv\b|\bwin srv\b", "windows server", raw)
     raw = re.sub(r"\bwin\b", "windows", raw)
     return raw
+
+
+# ─────────────────────────────────────────────
+# OS inference from software versions + port combinations
+# ─────────────────────────────────────────────
+# Maps software product versions to the Windows Server edition they ship with.
+# IIS and HTTPAPI alone narrow to a Windows generation; SQL Server narrows
+# further.  When multiple signals are present the most specific one wins.
+
+_IIS_TO_WINDOWS: dict[str, str] = {
+    "6.0":  "Windows Server 2003",
+    "7.0":  "Windows Server 2008",
+    "7.5":  "Windows Server 2008 R2",
+    "8.0":  "Windows Server 2012",
+    "8.5":  "Windows Server 2012 R2",
+    "10.0": "Windows Server 2016+",   # 2016, 2019, 2022 all report 10.0
+}
+
+_SQL_TO_WINDOWS: dict[str, str] = {
+    "8.0":   "Windows Server 2000+",      # SQL 2000
+    "9.0":   "Windows Server 2003+",      # SQL 2005
+    "10.":   "Windows Server 2008+",      # SQL 2008 / 2008 R2
+    "11.":   "Windows Server 2012+",      # SQL 2012
+    "12.":   "Windows Server 2012+",      # SQL 2014
+    "13.":   "Windows Server 2012 R2+",   # SQL 2016
+    "14.":   "Windows Server 2016+",      # SQL 2017
+    "15.":   "Windows Server 2016+",      # SQL 2019
+    "16.":   "Windows Server 2019+",      # SQL 2022
+}
+
+# IIS 10.0 + SQL Server version → specific Windows Server edition
+_IIS10_SQL_COMBO: dict[str, str] = {
+    "13.": "Windows Server 2016",          # IIS 10.0 + SQL 2016
+    "14.": "Windows Server 2016",          # IIS 10.0 + SQL 2017 (2016 or 2019)
+    "15.": "Windows Server 2019",          # IIS 10.0 + SQL 2019
+    "16.": "Windows Server 2022",          # IIS 10.0 + SQL 2022
+}
+
+# OpenSSH for Windows version → Windows Server (when SSH is present on Windows)
+_WIN_SSH_TO_WINDOWS: dict[str, str] = {
+    "7.7":  "Windows Server 2019",
+    "8.1":  "Windows Server 2019",
+    "8.6":  "Windows Server 2022",
+    "8.9":  "Windows Server 2022",
+    "9.5":  "Windows Server 2022",
+}
+
+# Cockpit web console version ranges → RHEL version
+_COCKPIT_TO_RHEL: list[tuple[int, int, str]] = [
+    (185, 220, "RHEL/CentOS 8"),
+    (221, 282, "RHEL/CentOS 8"),
+    (283, 322, "RHEL/CentOS 8"),       # late RHEL 8 builds
+    (323, 999, "RHEL/CentOS 9"),
+]
+
+# Exchange version prefix → Windows Server
+_EXCHANGE_TO_WINDOWS: dict[str, str] = {
+    "15.0":  "Windows Server 2012 R2+",   # Exchange 2013
+    "15.1":  "Windows Server 2016+",      # Exchange 2016
+    "15.2":  "Windows Server 2019+",      # Exchange 2019
+}
+
+# Port sets that strongly indicate an OS family
+_WINDOWS_PORTS = {135, 139, 445, 3389, 5985, 5986}  # MSRPC, NetBIOS, SMB, RDP, WinRM
+_LINUX_EXCLUSIVE_PORTS = {111}  # rpcbind (NFS) — common on Linux/Unix, rare on Windows
+
+def _infer_host_os(
+    ip: str,
+    sw_entries: list[dict],
+    open_ports: set[int],
+) -> "tuple[str, str] | None":
+    """
+    Infer the host OS from software versions and port combinations.
+
+    Returns (os_string, evidence_description) or None.  Priority order:
+      1. Explicit OS field from nmap/SSH banner (already resolved by _resolve_ssh_os)
+      2. IIS version → Windows Server edition
+      3. IIS 10.0 + SQL Server version → narrow Windows Server edition
+      4. SQL Server version → Windows Server range
+      5. HTTPAPI / Microsoft FTPD / ASP.NET / Exchange → Windows Server
+      6. Cockpit version → RHEL
+      7. VMware ESXi detection
+      8. Port combination inference (RDP+SMB+MSRPC = Windows)
+    """
+    if not sw_entries and not open_ports:
+        return None
+
+    # Collect signals
+    _explicit_os = None       # from software_inventory os field (SSH/nmap)
+    _iis_ver = None
+    _sql_ver = None
+    _has_httpapi = False
+    _has_ms_ftpd = False
+    _has_aspnet = False
+    _has_exchange = False
+    _exchange_ver = None
+    _cockpit_ver = None
+    _has_esxi = False
+    _win_ssh_ver = None
+    _has_rdp = 3389 in open_ports
+    _has_smb = 445 in open_ports
+    _has_msrpc = 135 in open_ports
+    _has_winrm = 5985 in open_ports or 5986 in open_ports
+
+    for ent in sw_entries:
+        sw = (ent.get("software") or "").strip()
+        ver = (ent.get("version") or "").strip()
+        os_val = (ent.get("os") or "").strip()
+        sw_lower = sw.lower()
+
+        # 1. Explicit OS already resolved by record_software / _resolve_ssh_os
+        if os_val and not _explicit_os:
+            _os_lower = os_val.lower()
+            if any(k in _os_lower for k in (
+                "ubuntu", "debian", "rhel", "centos", "rocky", "alma",
+                "fedora", "alpine", "suse", "freebsd", "windows", "esxi",
+                "red hat", "oracle", "amazon", "kali", "raspbian",
+            )):
+                _explicit_os = os_val
+
+        # 2. IIS version
+        if sw_lower in ("microsoft iis", "iis", "microsoft-iis") and ver:
+            _iis_ver = ver
+
+        # 3. SQL Server version (nmap reports as "Microsoft SQL Server")
+        if "sql server" in sw_lower and ver:
+            _sql_ver = ver
+
+        # 4. HTTPAPI
+        if "httpapi" in sw_lower:
+            _has_httpapi = True
+
+        # 5. Microsoft FTPD
+        if sw_lower in ("microsoft ftpd", "microsoft-ftpd"):
+            _has_ms_ftpd = True
+
+        # 6. ASP.NET
+        if "asp.net" in sw_lower or sw_lower == "kestrel":
+            _has_aspnet = True
+
+        # 7. Exchange
+        if "exchange" in sw_lower:
+            _has_exchange = True
+            if ver:
+                _exchange_ver = ver
+
+        # 8. Cockpit version → RHEL
+        if sw_lower == "cockpit" and ver:
+            try:
+                _cockpit_ver = int(ver.split(".")[0])
+            except (ValueError, IndexError):
+                pass
+
+        # 9. ESXi
+        if "esxi" in sw_lower or "vmware" in sw_lower:
+            _has_esxi = True
+
+        # 10. OpenSSH for Windows
+        if sw_lower == "openssh" and os_val and "windows" in os_val.lower():
+            _win_ssh_ver = ver
+
+    # ── Decision tree (most specific wins) ──────────────────────────────
+
+    # Explicit OS from nmap/SSH banner is highest confidence
+    if _explicit_os:
+        return (_explicit_os, "Detected directly via nmap/SSH banner OS field")
+
+    # IIS version → Windows Server
+    if _iis_ver:
+        _iis_major = _iis_ver.split(".")[0] + "." + (_iis_ver.split(".")[1] if "." in _iis_ver else "0")
+        ws = _IIS_TO_WINDOWS.get(_iis_major)
+        if ws:
+            # IIS 10.0 can be narrowed with SQL Server version
+            if _iis_major == "10.0" and _sql_ver:
+                for prefix, narrow_ws in _IIS10_SQL_COMBO.items():
+                    if _sql_ver.startswith(prefix):
+                        return (narrow_ws,
+                                f"Microsoft IIS {_iis_ver} + SQL Server {_sql_ver} "
+                                f"→ {narrow_ws}")
+            return (ws, f"Microsoft IIS {_iis_ver} → {ws}")
+
+    # SQL Server version alone → Windows Server range
+    if _sql_ver:
+        for prefix, ws in _SQL_TO_WINDOWS.items():
+            if _sql_ver.startswith(prefix):
+                return (ws, f"Microsoft SQL Server {_sql_ver} → {ws}")
+
+    # Exchange version → Windows Server
+    if _exchange_ver:
+        for prefix, ws in _EXCHANGE_TO_WINDOWS.items():
+            if _exchange_ver.startswith(prefix):
+                return (ws, f"Microsoft Exchange {_exchange_ver} → {ws}")
+
+    # OpenSSH for Windows → specific Windows Server
+    if _win_ssh_ver:
+        for prefix, ws in _WIN_SSH_TO_WINDOWS.items():
+            if _win_ssh_ver.startswith(prefix):
+                return (ws, f"OpenSSH for Windows {_win_ssh_ver} → {ws}")
+
+    # Any Microsoft server software → generic Windows Server
+    _ms_evidence = []
+    if _has_httpapi:
+        _ms_evidence.append("Microsoft HTTPAPI")
+    if _has_ms_ftpd:
+        _ms_evidence.append("Microsoft FTPD")
+    if _has_aspnet:
+        _ms_evidence.append("ASP.NET")
+    if _has_exchange:
+        _ms_evidence.append("Microsoft Exchange")
+    if _ms_evidence:
+        return ("Windows Server",
+                f"Microsoft software detected: {', '.join(_ms_evidence)}")
+
+    # Cockpit version → RHEL
+    if _cockpit_ver is not None:
+        for lo, hi, label in _COCKPIT_TO_RHEL:
+            if lo <= _cockpit_ver <= hi:
+                return (label, f"Cockpit v{_cockpit_ver} → {label}")
+
+    # ESXi
+    if _has_esxi:
+        return ("VMware ESXi", "VMware ESXi software detected")
+
+    # Port combination inference (lowest confidence)
+    _win_port_hits = []
+    if _has_rdp:
+        _win_port_hits.append("3389/RDP")
+    if _has_smb:
+        _win_port_hits.append("445/SMB")
+    if _has_msrpc:
+        _win_port_hits.append("135/MSRPC")
+    if _has_winrm:
+        _win_port_hits.append("5985/WinRM")
+    if len(_win_port_hits) >= 2:
+        return ("Windows Server",
+                f"Windows port combination: {', '.join(_win_port_hits)}")
+
+    return None
+
+
+# ─────────────────────────────────────────────
+# Server role inference from port + software combinations
+# ─────────────────────────────────────────────
+# Each rule: (label, required_ports, optional_ports, min_match, software_hints)
+#   - required_ports: all must be open
+#   - optional_ports: at least min_match of these must be open
+#   - software_hints: if any software name (lowered) contains a hint, boost confidence
+_ROLE_RULES: list[tuple[str, set[int], set[int], int, list[str]]] = [
+    # Active Directory Domain Controller
+    ("Domain Controller",
+     {88, 389},                                  # Kerberos + LDAP mandatory
+     {636, 3268, 3269, 135, 445, 53, 464},       # LDAPS, GC, GC-S, RPC, SMB, DNS, kpasswd
+     2,                                           # need at least 2 optional
+     ["active directory", "kerberos", "ldap"]),
+
+    # DNS Server
+    ("DNS Server",
+     {53},
+     set(),
+     0,
+     ["bind", "dnsmasq", "unbound", "powerdns", "named", "microsoft dns"]),
+
+    # DHCP Server
+    ("DHCP Server",
+     {67},
+     {68},
+     0,
+     ["dhcpd", "isc-dhcp", "dnsmasq"]),
+
+    # Mail Server (SMTP)
+    ("Mail Server",
+     {25},
+     {110, 143, 465, 587, 993, 995},
+     0,
+     ["postfix", "sendmail", "exim", "exchange", "dovecot", "courier"]),
+
+    # Web Server (HTTP/HTTPS)
+    ("Web Server",
+     set(),
+     {80, 443, 8080, 8443},
+     1,
+     ["nginx", "apache", "iis", "tomcat", "lighttpd", "caddy", "haproxy"]),
+
+    # Database Server
+    ("Database Server",
+     set(),
+     {3306, 5432, 1433, 1521, 27017, 6379, 9042},
+     1,
+     ["mysql", "mariadb", "postgresql", "postgres", "sql server", "oracle",
+      "mongodb", "redis", "cassandra"]),
+
+    # File Server (SMB/NFS)
+    ("File Server",
+     set(),
+     {445, 139, 2049, 111},
+     2,
+     ["samba", "nfs"]),
+
+    # Print Server
+    ("Print Server",
+     {631},
+     {515, 9100},
+     0,
+     ["cups", "lpd"]),
+
+    # Proxy / Load Balancer
+    ("Proxy/Load Balancer",
+     set(),
+     {3128, 8080, 8443},
+     1,
+     ["squid", "haproxy", "nginx", "varnish", "envoy", "traefik", "f5"]),
+
+    # VPN Gateway
+    ("VPN Gateway",
+     set(),
+     {1194, 500, 4500, 1701, 1723},
+     1,
+     ["openvpn", "strongswan", "wireguard", "ipsec"]),
+
+    # RADIUS / Authentication Server
+    ("RADIUS Server",
+     set(),
+     {1812, 1813},
+     1,
+     ["freeradius", "radius"]),
+
+    # Monitoring Server
+    ("Monitoring Server",
+     set(),
+     {161, 162, 9090, 3000, 5601, 9200},
+     2,
+     ["prometheus", "grafana", "nagios", "zabbix", "snmp", "kibana",
+      "elasticsearch"]),
+
+    # Virtualization Host
+    ("Virtualization Host",
+     set(),
+     {902, 443, 8006},
+     1,
+     ["esxi", "vmware", "proxmox", "vcenter"]),
+
+    # CI/CD Server
+    ("CI/CD Server",
+     set(),
+     {8080, 8443, 50000},
+     1,
+     ["jenkins", "gitlab", "teamcity", "bamboo"]),
+
+    # Container Orchestrator
+    ("Container Host",
+     set(),
+     {2375, 2376, 6443, 10250},
+     1,
+     ["docker", "kubernetes", "k8s", "portainer", "rancher"]),
+
+    # Backup Server
+    ("Backup Server",
+     set(),
+     {10000, 9392, 6556},
+     1,
+     ["veeam", "bacula", "bareos", "amanda"]),
+]
+
+
+def _infer_host_roles(
+    sw_entries: list[dict],
+    open_ports: set[int],
+    services: dict[int, str],
+) -> list[tuple[str, str]]:
+    """
+    Infer server roles from port + software combinations.
+
+    Returns a list of (role_label, evidence_description) tuples.
+    *services* maps port → service name from nmap.
+    """
+    if not open_ports:
+        return []
+
+    sw_names_lower: set[str] = set()
+    for ent in sw_entries:
+        sw = (ent.get("software") or "").strip().lower()
+        if sw:
+            sw_names_lower.add(sw)
+    # Also include service names from nmap
+    svc_names_lower: set[str] = set()
+    for svc in services.values():
+        if svc and svc != "—":
+            svc_names_lower.add(svc.lower())
+
+    roles: list[tuple[str, str]] = []
+    for label, required, optional, min_opt, sw_hints in _ROLE_RULES:
+        if not required.issubset(open_ports):
+            continue
+        opt_hits = optional & open_ports
+        if len(opt_hits) < min_opt:
+            continue
+        # Check software hints for confirmation
+        sw_match = [h for h in sw_hints
+                    if any(h in s for s in sw_names_lower)
+                    or any(h in s for s in svc_names_lower)]
+        # Build evidence
+        port_ev = sorted(required | opt_hits)
+        ev_parts = [f"Ports: {', '.join(str(p) for p in port_ev)}"]
+        if sw_match:
+            ev_parts.append(f"Software: {', '.join(sw_match)}")
+        roles.append((label, "; ".join(ev_parts)))
+
+    return roles
 
 
 def check_os_eol(
