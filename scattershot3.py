@@ -18686,6 +18686,20 @@ def _classify_screenshot(title, server, status_code, *, port=0,
     return "Web Page Detected"
 
 
+_ADMIN_CONSOLE_LABELS = frozenset({
+    "VMware vCenter", "VMware ESXi", "Oracle Enterprise Manager",
+    "PRTG Network Monitor", "SolarWinds Orion", "Splunk Web",
+    "FortiGate", "Palo Alto Networks", "SonicWall",
+    "Zabbix", "Nagios", "Grafana", "Kibana",
+    "phpMyAdmin", "pgAdmin", "MinIO Console",
+    "Proxmox VE", "Ubiquiti UniFi", "OPNsense", "pfSense",
+    "Keycloak", "Cockpit Web Console",
+    "iDRAC Management Console", "iLO Management Console",
+    "Webmin Console", "Jenkins",
+    "Dashboard / Admin Panel",
+})
+
+
 def _register_screenshot(root: Path, png_path, url: str = "",
                          ip: str = "", port: int = 0,
                          hostname: str = "", scheme: str = "",
@@ -19010,7 +19024,7 @@ def take_web_screenshot(
             # VMware ESXi management interface
             if "esxi host client" in _b_low or ("vmware" in _b_low and "esxi" in _b_low):
                 output_mgr.log_finding(
-                    title="Information Disclosure: VMware ESXi Management Interface Exposed",
+                    title="Discovery: VMware ESXi Management Interface",
                     ip=ip, port=port, hostname=hostname,
                     command=f"screenshot {url}", risk="INFO",
                     description=(
@@ -19026,7 +19040,7 @@ def take_web_screenshot(
             # Jenkins CI/CD
             if "sign in to jenkins" in _b_low or "dashboard [jenkins]" in _b_low:
                 output_mgr.log_finding(
-                    title="Information Disclosure: Jenkins CI/CD Server Exposed",
+                    title="Discovery: Jenkins CI/CD Server",
                     ip=ip, port=port, hostname=hostname,
                     command=f"screenshot {url}", risk="INFO",
                     description=(
@@ -19044,7 +19058,7 @@ def take_web_screenshot(
             if "log in with your server" in _b_low or (
                     "cockpit" in _b_low and port == 9090):
                 output_mgr.log_finding(
-                    title="Information Disclosure: System Management Console (Cockpit) Exposed",
+                    title="Discovery: System Management Console (Cockpit)",
                     ip=ip, port=port, hostname=hostname,
                     command=f"screenshot {url}", risk="INFO",
                     description=(
@@ -19061,7 +19075,7 @@ def take_web_screenshot(
             # Oracle EM Agent
             if "the agent does not service request submitted" in _b_low:
                 output_mgr.log_finding(
-                    title="Information Disclosure: Oracle EM Agent Exposed",
+                    title="Discovery: Oracle EM Agent",
                     ip=ip, port=port, hostname=hostname,
                     command=f"screenshot {url}", risk="INFO",
                     description=(
@@ -19092,7 +19106,7 @@ def take_web_screenshot(
         # Sentinel from server header
         if "sentinelprotectionserver" in (_sc_server or "").lower():
             output_mgr.log_finding(
-                title="Information Disclosure: License Server Exposed (Sentinel)",
+                title="Discovery: License Server (Sentinel)",
                 ip=ip, port=port, hostname=hostname,
                 command=f"screenshot {url}", risk="INFO",
                 description=(
@@ -19102,6 +19116,61 @@ def take_web_screenshot(
                 ),
                 output=f"Server: {_sc_server}",
                 sources="screenshot-header",
+                affected=f"{ip}:{port}",
+                output_file=_out_rel,
+            )
+
+        # ── Generic admin console discovery from classification ──────────
+        if _sc_cls and _sc_cls in _ADMIN_CONSOLE_LABELS:
+            output_mgr.log_finding(
+                title="Discovery: Admin Console",
+                ip=ip, port=port, hostname=hostname,
+                command=f"screenshot {url}", risk="INFO",
+                description=(
+                    f"An administrative console was identified: {_sc_cls}. "
+                    "Administrative consoles are high-value targets that may "
+                    "allow system configuration, user management, or "
+                    "infrastructure control if accessed with valid or default "
+                    "credentials."
+                ),
+                output=f"Identified: {_sc_cls}\nURL: {url}",
+                sources="screenshot-classification",
+                affected=f"{ip}:{port}",
+                output_file=_out_rel,
+            )
+        # ── Login page discovery from classification + body ────────────────
+        if _sc_cls == "Login Page":
+            output_mgr.log_finding(
+                title="Discovery: Login Page",
+                ip=ip, port=port, hostname=hostname,
+                command=f"screenshot {url}", risk="INFO",
+                description=(
+                    "A login page was detected via page title analysis during "
+                    "screenshot capture. Login pages expose authentication "
+                    "endpoints that may be susceptible to brute-force attacks, "
+                    "credential stuffing, or default credentials."
+                ),
+                output=f"URL: {url}",
+                sources="screenshot-classification",
+                affected=f"{ip}:{port}",
+                output_file=_out_rel,
+            )
+        if _body_snippet and re.search(
+                r'<input[^>]*\btype\s*=\s*["\']?password["\']?',
+                _body_snippet, re.IGNORECASE):
+            output_mgr.log_finding(
+                title="Discovery: Login Page",
+                ip=ip, port=port, hostname=hostname,
+                command=f"screenshot {url}", risk="INFO",
+                description=(
+                    "A password input field was detected in the page body "
+                    "during screenshot capture, indicating a login form. "
+                    "Login pages expose authentication endpoints that may be "
+                    "susceptible to brute-force attacks, credential stuffing, "
+                    "or default credentials."
+                ),
+                output=f"URL: {url}\nDetected: password input field in page body",
+                sources="screenshot-body",
                 affected=f"{ip}:{port}",
                 output_file=_out_rel,
             )
@@ -22024,6 +22093,29 @@ def run_gobuster(
                     "http_status": status,
                     "source": "gobuster",
                 },
+            )
+
+        # Admin console path detection
+        _ADMIN_PATH_SEGS = ("/admin", "/administrator", "/manage", "/manager",
+                            "/console", "/dashboard", "/controlpanel", "/cp",
+                            "/panel", "/wp-admin", "/sysadmin", "/webadmin")
+        _path_stripped = _path_lower.rstrip("/")
+        if any(_path_stripped == seg or _path_stripped.endswith(seg)
+               for seg in _ADMIN_PATH_SEGS):
+            output_mgr.log_finding(
+                title="Discovery: Admin Console",
+                ip=ip, port=port, hostname=hostname,
+                command=" ".join(cmd), risk="INFO",
+                description=(
+                    f"An administrative path was discovered at {found_url} "
+                    f"(HTTP {status}). Administrative paths are high-value "
+                    "targets that may allow system configuration or user "
+                    "management if accessed with valid or default credentials."
+                ),
+                output=f"Path: {path}\nURL: {found_url}\nHTTP Status: {status}",
+                sources="gobuster",
+                affected=found_url,
+                output_file=str(out_file),
             )
 
         # For HTML-like paths, fetch and check for a login form
