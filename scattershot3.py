@@ -5733,7 +5733,8 @@ def _discover_chunk(
     discovery_min_rate: "int | None" = None,
     discovery_min_parallelism: "int | None" = None,
     timing_template: "str | None" = None,
-) -> "tuple[list[str], list[str]]":
+    timeout: int = 1200,
+) -> "tuple[list[str], list[str], bool]":
     """
     Run host discovery on one /20 chunk using direct nmap subprocess.
 
@@ -5742,7 +5743,7 @@ def _discover_chunk(
       2. Supplemental pass (-PS -PA -PR) for non-responsive hosts
       3. Per-chunk rustscan/nmap-Pn rescue for still-dead hosts
 
-    Returns (alive_ips, dead_ips) for this chunk.
+    Returns (alive_ips, dead_ips, timed_out) for this chunk.
     """
     scope_colour = Fore.GREEN if scope == "int" else Fore.YELLOW
     scope_label = f"{scope_colour}[{scope.upper()}]{Style.RESET_ALL}"
@@ -5781,7 +5782,7 @@ def _discover_chunk(
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True,
-            timeout=600, errors="replace",
+            timeout=timeout, errors="replace",
         )
         output_mgr.log_command(
             "nmap", nmap_path, cmd, oA_base.with_suffix(".xml"),
@@ -5805,21 +5806,31 @@ def _discover_chunk(
     except subprocess.TimeoutExpired:
         _tprint(
             f"  {Fore.RED}[!] Chunk {chunk_idx} ({chunk_spec}) "
-            f"timed out after 600s{Style.RESET_ALL}"
+            f"timed out after {timeout}s{Style.RESET_ALL}"
         )
         output_mgr.log_error(
             "nmap", nmap_path, cmd,
-            f"Discovery chunk {chunk_spec} timed out (600s)",
+            f"Discovery chunk {chunk_spec} timed out ({timeout}s)",
             extra={"target": chunk_spec, "scan_type": "chunk_discovery"},
         )
-        return [], []
+        _partial_xml = oA_base.with_suffix(".xml")
+        _partial_alive, _ = _parse_nmap_xml_alive(_partial_xml)
+        if _partial_alive:
+            _tprint(
+                f"  {Fore.YELLOW}[*] Salvaged {len(_partial_alive)} host(s) "
+                f"from partial nmap output before timeout{Style.RESET_ALL}"
+            )
+            for ip in _partial_alive:
+                _vc.target(ip=ip, hostname=None, scope=scope, alive=True,
+                           source="nmap")
+        return _partial_alive, [], True
     except OSError as exc:
         _tprint(f"  {Fore.RED}[!] nmap error for chunk {chunk_spec}: {exc}{Style.RESET_ALL}")
         output_mgr.log_error(
             "nmap", nmap_path, cmd, str(exc),
             extra={"target": chunk_spec, "scan_type": "chunk_discovery"},
         )
-        return [], []
+        return [], [], False
 
     # Parse XML for alive hosts
     xml_path = oA_base.with_suffix(".xml")
@@ -5929,7 +5940,7 @@ def _discover_chunk(
         f"({chunk_spec}): {count_tag}{Style.RESET_ALL}"
     )
 
-    return alive_ips, dead_ips
+    return alive_ips, dead_ips, False
 
 
 def _resolve_hostname_single(
@@ -32412,6 +32423,7 @@ def scan_scope(
 
         port_futures: dict = {}
         _nuclei_batch_ips: list = []
+        _timed_out_chunks: list[tuple[str, int]] = []
 
         _start_concurrency_monitor(_SCAN_SEM)
         _start_oom_watchdog()
@@ -32423,7 +32435,7 @@ def scan_scope(
 
                 _check_pause()
 
-                _ca, _cd = _discover_chunk(
+                _ca, _cd, _chunk_timed_out = _discover_chunk(
                     _cs, _ci, total_chunks,
                     output_mgr, nmap_path, scope,
                     supp_nmap_args=_1b_nmap_args,
@@ -32432,6 +32444,8 @@ def scan_scope(
                     discovery_min_parallelism=getattr(args, "discovery_min_parallelism", None),
                     timing_template=getattr(args, "timing_template", None),
                 )
+                if _chunk_timed_out:
+                    _timed_out_chunks.append((_cs, len(_ca)))
 
                 _check_pause()
 
@@ -32501,6 +32515,87 @@ def scan_scope(
                         f"{_ta} alive · {_in_flight} in-flight"
                     ),
                 )
+
+            # ── Retry timed-out chunks with aggressive flags ────────────
+            if _timed_out_chunks:
+                _n_retry = len(_timed_out_chunks)
+                print(
+                    f"\n{Fore.YELLOW}[*] {scope_label} Retrying "
+                    f"{_n_retry} timed-out chunk(s) with 2400s "
+                    f"timeout and aggressive flags...{Style.RESET_ALL}"
+                )
+                _vc.status(
+                    f"{scope}_p1_discovery",
+                    label="Phase 1: Host Discovery",
+                    status="running",
+                    step=f"Retrying {_n_retry} timed-out chunk(s)",
+                )
+                for _ri, (_rcs, _salvaged) in enumerate(
+                    _timed_out_chunks, 1
+                ):
+                    _check_pause()
+                    _tprint(
+                        f"  {Fore.CYAN}[>] Retry {_ri}/{_n_retry}: "
+                        f"{_rcs} ({_salvaged} salvaged from first "
+                        f"pass){Style.RESET_ALL}",
+                        flush=True,
+                    )
+                    _retry_args = (
+                        "-n -sn --reason -T5 "
+                        "-PE -PP -PM "
+                        "-PS21,22,80,443,445,3389,8080 "
+                        "--max-retries 1 --min-parallelism 50 "
+                        "--min-rate 300 --host-timeout 5s"
+                    )
+                    _rca, _rcd, _rto = _discover_chunk(
+                        _rcs, _ri, _n_retry,
+                        output_mgr, nmap_path, scope,
+                        nmap_args=_retry_args,
+                        supp_nmap_args=None,
+                        rustscan_path=rustscan_path,
+                        timeout=2400,
+                    )
+                    if _rto:
+                        _tprint(
+                            f"  {Fore.RED}[!] Chunk {_rcs} failed "
+                            f"retry — marking as coverage gap"
+                            f"{Style.RESET_ALL}"
+                        )
+                        output_mgr.log_error(
+                            "nmap", nmap_path, [],
+                            f"Discovery chunk {_rcs} failed retry at "
+                            f"2400s — coverage gap",
+                            extra={"target": _rcs,
+                                   "scan_type":
+                                   "chunk_discovery_retry"},
+                        )
+                    if _exclude or _exclude_nets:
+                        _rca = [ip for ip in _rca
+                                if not _is_excluded_ip(ip)]
+                    for ip in _rca:
+                        if ip not in alive_map:
+                            alive_map[ip] = True
+                            port_futures[pool.submit(
+                                _port_scan_worker,
+                                ip, None, args.fast,
+                                output_mgr, nmap_path, args,
+                                sslscan_path, testssl_path,
+                                snmpwalk_path, smbmap_path,
+                                enum4linux_path, adenum_path,
+                                scope, cred_store,
+                                gobuster_path, wpscan_path,
+                                webanalyze_path, shcheck_path,
+                                wpscan_token, showmount_path,
+                                ipmitool_path, rustscan_path,
+                                True, nmblookup_path,
+                                avahi_resolve_path, hostnames,
+                            )] = ip
+                    if _rca:
+                        _tprint(
+                            f"  {Fore.GREEN}[+] Retry rescued "
+                            f"{len(_rca)} host(s) from {_rcs}"
+                            f"{Style.RESET_ALL}"
+                        )
 
             # ── Discovery complete ────────────────────────────────────────
             alive_ips = sorted(
