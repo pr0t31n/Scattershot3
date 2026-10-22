@@ -5363,6 +5363,7 @@ def probe_http(ip: str, port: int, timeout: int = 4) -> dict:
             result["scheme"]      = scheme
             result["status_code"] = r.status_code
             result["server"]      = r.headers.get("Server", "")
+            result["www_auth"]    = r.headers.get("WWW-Authenticate", "")
             result["redirect"]    = str(r.url) if str(r.url) != url else None
             # Keep the first 16 KB — enough for default-page fingerprinting and
             # header extraction without buffering megabytes of response body.
@@ -7162,6 +7163,119 @@ def probe_uncertain_and_nonstandard_ports(
                                 f"Curl command: {_r['cmd']}"
                             ),
                             sources="fracture-recon-port",
+                            affected=f"{ip}:{_port}",
+                            output_file=str(_curl_path.relative_to(output_mgr.root)),
+                        )
+                    # Phase E.1: admin console / login page detection from curl body
+                    _ce_body = (_r.get("body") or "")[:8192]
+                    _ce_hdrs = (_r.get("headers") or "")
+                    _ce_title_m = re.search(r'<title[^>]*>([^<]{1,200})</title>',
+                                            _ce_body, re.IGNORECASE)
+                    _ce_title = _ce_title_m.group(1).strip() if _ce_title_m else ""
+                    _ce_server = ""
+                    for _ceh_line in _ce_hdrs.splitlines():
+                        if _ceh_line.lower().startswith("server:"):
+                            _ce_server = _ceh_line.split(":", 1)[1].strip()
+                            break
+                    _ce_cls = _classify_screenshot(
+                        _ce_title, _ce_server, _status_int,
+                        port=_port, body_snippet=_ce_body[:4096])
+                    if _ce_cls and _ce_cls in _ADMIN_CONSOLE_LABELS:
+                        output_mgr.log_finding(
+                            title="Discovery: Admin Console",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=_r["cmd"], risk="INFO",
+                            description=(
+                                f"An administrative console ({_ce_cls}) was "
+                                f"identified at {_r['url']} via curl probe. "
+                                "Admin consoles are high-value targets that may "
+                                "allow system configuration, user management, or "
+                                "access to sensitive operational data if accessed "
+                                "with valid or default credentials."
+                            ),
+                            output=(
+                                f"Classification: {_ce_cls}\n"
+                                f"URL: {_r['url']}\n"
+                                f"Title: {_ce_title}\n"
+                                f"Server: {_ce_server}\n"
+                                f"HTTP Status: {_status_int}"
+                            ),
+                            sources="scattershot3-curl-probe",
+                            affected=f"{ip}:{_port}",
+                            output_file=str(_curl_path.relative_to(output_mgr.root)),
+                        )
+                    elif _ce_cls and _ce_cls in ("Login Page", "Admin Page"):
+                        output_mgr.log_finding(
+                            title="Discovery: Login Page",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=_r["cmd"], risk="INFO",
+                            description=(
+                                f"A login page was identified at {_r['url']} "
+                                f"via curl probe page classification."
+                            ),
+                            output=(
+                                f"Classification: {_ce_cls}\n"
+                                f"URL: {_r['url']}\n"
+                                f"Title: {_ce_title}\n"
+                                f"HTTP Status: {_status_int}"
+                            ),
+                            sources="scattershot3-curl-probe",
+                            affected=f"{ip}:{_port}",
+                            output_file=str(_curl_path.relative_to(output_mgr.root)),
+                        )
+                    if re.search(
+                        r'<input[^>]+type=["\']password["\']',
+                        _ce_body, re.IGNORECASE,
+                    ):
+                        _has_user = bool(re.search(
+                            r'<input[^>]+(?:type=["\'](?:text|email)["\']|name=["\'](?:user|login|email|account))',
+                            _ce_body, re.IGNORECASE))
+                        if _has_user:
+                            output_mgr.log_finding(
+                                title="Discovery: Login Page",
+                                ip=ip, port=_port, hostname=hostname,
+                                command=_r["cmd"], risk="INFO",
+                                description=(
+                                    f"A login form with username and password "
+                                    f"fields was detected at {_r['url']} via "
+                                    f"curl probe body analysis."
+                                ),
+                                output=(
+                                    f"URL: {_r['url']}\n"
+                                    f"Title: {_ce_title}\n"
+                                    f"HTTP Status: {_status_int}\n"
+                                    f"Detection: password + username input fields"
+                                ),
+                                sources="scattershot3-curl-probe",
+                                affected=f"{ip}:{_port}",
+                                output_file=str(_curl_path.relative_to(output_mgr.root)),
+                            )
+                    # Phase E.2: HTTP 401 / WWW-Authenticate from curl headers
+                    if _status_int == 401:
+                        _ce_www_auth = ""
+                        for _ceh_line in _ce_hdrs.splitlines():
+                            if _ceh_line.lower().startswith("www-authenticate:"):
+                                _ce_www_auth = _ceh_line.split(":", 1)[1].strip()
+                                break
+                        _ce_auth_scheme = _ce_www_auth.split()[0] if _ce_www_auth else "Unknown"
+                        output_mgr.log_finding(
+                            title="Discovery: Login Page",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=_r["cmd"], risk="INFO",
+                            description=(
+                                f"The web service at {_r['url']} returned "
+                                f"HTTP 401 Unauthorized with "
+                                f"{_ce_auth_scheme} authentication. This "
+                                "indicates an active authentication gate "
+                                "protecting the resource."
+                            ),
+                            output=(
+                                f"URL: {_r['url']}\n"
+                                f"HTTP Status: 401\n"
+                                f"WWW-Authenticate: {_ce_www_auth or '(not present)'}\n"
+                                f"Auth Scheme: {_ce_auth_scheme}"
+                            ),
+                            sources="scattershot3-curl-probe",
                             affected=f"{ip}:{_port}",
                             output_file=str(_curl_path.relative_to(output_mgr.root)),
                         )
@@ -9114,6 +9228,84 @@ def _port_scan_worker(
                             )
                     except Exception:
                         pass
+
+                # ── Admin console detection from probe_http ───────────────
+                try:
+                    _ph_title = web_result.get("title", "")
+                    _ph_body = web_result.get("body", "")
+                    _ph_server = web_result.get("server", "")
+                    _ph_sc = web_result.get("status_code")
+                    _ph_cls = _classify_screenshot(
+                        _ph_title, _ph_server, _ph_sc,
+                        port=port, body_snippet=_ph_body[:4096])
+                    if _ph_cls and _ph_cls in _ADMIN_CONSOLE_LABELS:
+                        output_mgr.log_finding(
+                            title="Discovery: Admin Console",
+                            ip=ip, port=port, hostname=hostname,
+                            command=f"HTTP GET {_http_url}",
+                            risk="INFO",
+                            description=(
+                                f"An administrative console was identified: "
+                                f"{_ph_cls}. Administrative consoles are "
+                                "high-value targets that may allow system "
+                                "configuration, user management, or "
+                                "infrastructure control."
+                            ),
+                            output=f"Identified: {_ph_cls}\nURL: {_http_url}",
+                            sources="http-probe",
+                            affected=_http_url,
+                            output_file=str(_http_file),
+                        )
+                    if _ph_cls == "Login Page":
+                        output_mgr.log_finding(
+                            title="Discovery: Login Page",
+                            ip=ip, port=port, hostname=hostname,
+                            command=f"HTTP GET {_http_url}",
+                            risk="INFO",
+                            description=(
+                                "A login page was detected via page title "
+                                "analysis of the HTTP probe response."
+                            ),
+                            output=f"URL: {_http_url}\nTitle: {_ph_title}",
+                            sources="http-probe",
+                            affected=_http_url,
+                            output_file=str(_http_file),
+                        )
+                except Exception:
+                    pass
+
+                # ── HTTP 401 / Basic Auth detection ───────────────────────
+                if web_result.get("status_code") == 401:
+                    _www_auth = web_result.get("www_auth", "")
+                    _auth_scheme = "HTTP authentication"
+                    if _www_auth:
+                        _as_lo = _www_auth.lower()
+                        if "basic" in _as_lo:
+                            _auth_scheme = "HTTP Basic authentication"
+                        elif "digest" in _as_lo:
+                            _auth_scheme = "HTTP Digest authentication"
+                        elif "ntlm" in _as_lo or "negotiate" in _as_lo:
+                            _auth_scheme = "NTLM/Negotiate authentication"
+                    output_mgr.log_finding(
+                        title="Discovery: Login Page",
+                        ip=ip, port=port, hostname=hostname,
+                        command=f"HTTP GET {_http_url}",
+                        risk="INFO",
+                        description=(
+                            f"The web server returned HTTP 401 Unauthorized "
+                            f"with {_auth_scheme}, indicating a "
+                            "password-protected resource. This exposes an "
+                            "authentication endpoint susceptible to "
+                            "brute-force or credential-stuffing attacks."
+                        ),
+                        output=(
+                            f"URL: {_http_url}\n"
+                            f"HTTP Status: 401 Unauthorized\n"
+                            f"WWW-Authenticate: {_www_auth or '(not present)'}"
+                        ),
+                        sources="http-probe",
+                        affected=_http_url,
+                    )
 
                 # ── Cookie attribute checking ──────────────────────────────
                 _sc_cookies = web_result.get("set_cookies") or []
@@ -11493,6 +11685,53 @@ def run_nuclei(
                     affected=matched_at or (f"{ip}:{port}" if port else ip),
                     output_file=str(jsonl_out),
                 )
+
+                # Companion findings for exposed-panels / default-login nuclei tags
+                _nc_tag_list = tags if isinstance(tags, list) else [tags]
+                _nc_tag_set = {t.lower().strip() for t in _nc_tag_list if isinstance(t, str)}
+                if "exposed-panels" in _nc_tag_set:
+                    output_mgr.log_finding(
+                        title="Discovery: Admin Console",
+                        ip=ip, port=port, hostname=None,
+                        command=cmd, risk="INFO",
+                        description=(
+                            f"Nuclei template '{template_id}' (tagged "
+                            f"exposed-panels) identified an administrative "
+                            f"panel at {matched_at}. Admin panels are "
+                            "high-value targets that may allow system "
+                            "configuration or access to sensitive data."
+                        ),
+                        output=(
+                            f"Template: {template_id}\n"
+                            f"Name: {name}\n"
+                            f"Matched: {matched_at}\n"
+                            f"Tags: {', '.join(_nc_tag_list[:8])}"
+                        ),
+                        sources="nuclei",
+                        affected=matched_at or (f"{ip}:{port}" if port else ip),
+                        output_file=str(jsonl_out),
+                    )
+                if "default-login" in _nc_tag_set:
+                    output_mgr.log_finding(
+                        title="Discovery: Login Page",
+                        ip=ip, port=port, hostname=None,
+                        command=cmd, risk="INFO",
+                        description=(
+                            f"Nuclei template '{template_id}' (tagged "
+                            f"default-login) identified a login interface "
+                            f"at {matched_at} that may accept default "
+                            "credentials."
+                        ),
+                        output=(
+                            f"Template: {template_id}\n"
+                            f"Name: {name}\n"
+                            f"Matched: {matched_at}\n"
+                            f"Tags: {', '.join(_nc_tag_list[:8])}"
+                        ),
+                        sources="nuclei",
+                        affected=matched_at or (f"{ip}:{port}" if port else ip),
+                        output_file=str(jsonl_out),
+                    )
 
                 # Correlate into all_results if we have the live dict
                 if all_results and ip in all_results:
@@ -21555,6 +21794,56 @@ def check_default_webpage(
     # Check for login forms on every root page, regardless of default fingerprint
     detect_login_form(body, url, ip, port, hostname, output_mgr)
 
+    # Admin console detection from page title/body classification
+    _cdw_title_m = re.search(r'<title[^>]*>([^<]{1,200})</title>', body, re.IGNORECASE)
+    _cdw_title = _cdw_title_m.group(1).strip() if _cdw_title_m else ""
+    _cdw_cls = _classify_screenshot(
+        _cdw_title, server, resp.status_code,
+        port=port, body_snippet=body[:4096])
+    if _cdw_cls and _cdw_cls in _ADMIN_CONSOLE_LABELS:
+        output_mgr.log_finding(
+            title="Discovery: Admin Console",
+            ip=ip, port=port, hostname=hostname,
+            command=f"HTTP GET {url}",
+            risk="INFO",
+            description=(
+                f"An administrative console was identified at the root page: "
+                f"{_cdw_cls}. Administrative consoles are high-value targets "
+                "that may allow system configuration, user management, or "
+                "infrastructure control."
+            ),
+            output=f"Identified: {_cdw_cls}\nURL: {url}\nTitle: {_cdw_title}",
+            sources="http-fetch",
+            affected=url,
+        )
+
+    # HTTP 401 / Basic Auth on root page
+    if resp.status_code == 401:
+        _cdw_www_auth = resp.headers.get("WWW-Authenticate", "")
+        _cdw_auth_scheme = "HTTP authentication"
+        if _cdw_www_auth:
+            _as = _cdw_www_auth.lower()
+            if "basic" in _as: _cdw_auth_scheme = "HTTP Basic authentication"
+            elif "digest" in _as: _cdw_auth_scheme = "HTTP Digest authentication"
+            elif "ntlm" in _as or "negotiate" in _as: _cdw_auth_scheme = "NTLM/Negotiate authentication"
+        output_mgr.log_finding(
+            title="Discovery: Login Page",
+            ip=ip, port=port, hostname=hostname,
+            command=f"HTTP GET {url}",
+            risk="INFO",
+            description=(
+                f"The web server root returned HTTP 401 Unauthorized with "
+                f"{_cdw_auth_scheme}, indicating a password-protected "
+                "resource."
+            ),
+            output=(
+                f"URL: {url}\nHTTP Status: 401\n"
+                f"WWW-Authenticate: {_cdw_www_auth or '(not present)'}"
+            ),
+            sources="http-fetch",
+            affected=url,
+        )
+
     for body_re, srv_label, os_hint in _DEFAULT_PAGE_FINGERPRINTS:
         if body_re.search(body):
             matched_server = srv_label
@@ -22046,8 +22335,28 @@ def run_gobuster(
 
         found_url = url.rstrip("/") + path
 
-        # Skip access-control / not-found codes — not actionable findings
-        if status in (401, 403, 404, 405):
+        # Skip not-found / method-not-allowed / forbidden — not actionable
+        if status in (403, 404, 405):
+            continue
+
+        # HTTP 401 → authentication required → emit login page discovery
+        if status == 401:
+            output_mgr.log_finding(
+                title="Discovery: Login Page",
+                ip=ip, port=port, hostname=hostname,
+                command=" ".join(cmd), risk="INFO",
+                description=(
+                    f"The path {found_url} returned HTTP 401 "
+                    f"Unauthorized, indicating an authentication "
+                    "gate protects this resource. The path may be "
+                    "an admin panel, API endpoint, or restricted "
+                    "area that accepts credentials."
+                ),
+                output=f"Path: {path}\nURL: {found_url}\nHTTP Status: 401",
+                sources="gobuster",
+                affected=found_url,
+                output_file=str(out_file),
+            )
             continue
 
         _tprint(
