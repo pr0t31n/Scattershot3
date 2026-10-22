@@ -4148,6 +4148,177 @@ class OutputManager:
             except Exception:
                 pass
 
+        # ── Hostname Intelligence ─────────────────────────────────────
+        # Analyse every hostname for environment, applications, hardware
+        # models, and server roles from naming conventions.
+        _hi_hosts: list[dict] = []
+        _hi_env_counts: dict[str, int] = {}
+        _hi_app_counts: dict[str, int] = {}
+        _hi_hw_counts: dict[str, int] = {}
+        _hi_role_counts: dict[str, int] = {}
+        _hi_domains: dict[str, int] = {}
+        for _hip, h in hosts_map.items():
+            _hn = (h.get("hostname") or "").strip()
+            if not _hn:
+                continue
+            _hinf = _infer_from_hostname(_hn)
+            _hi_entry: dict = {
+                "ip":          _hip,
+                "hostname":    _hn,
+                "environment": _hinf["environment"],
+                "environment_evidence": _hinf["environment_evidence"],
+                "applications": _hinf["applications"],
+                "roles":       _hinf["roles"],
+                "hardware":    _hinf["hardware"],
+                "instance":    _hinf["instance"],
+                "domain":      _hinf["domain"],
+                "subdomain":   _hinf["subdomain"],
+            }
+            _hi_hosts.append(_hi_entry)
+            if _hinf["environment"]:
+                _hi_env_counts[_hinf["environment"]] = (
+                    _hi_env_counts.get(_hinf["environment"], 0) + 1
+                )
+            for _app in _hinf["applications"]:
+                _hi_app_counts[_app["name"]] = (
+                    _hi_app_counts.get(_app["name"], 0) + 1
+                )
+            if _hinf["hardware"]:
+                _hm = _hinf["hardware"]["model"]
+                _hi_hw_counts[_hm] = _hi_hw_counts.get(_hm, 0) + 1
+            for _r in _hinf["roles"]:
+                _hi_role_counts[_r["role"]] = (
+                    _hi_role_counts.get(_r["role"], 0) + 1
+                )
+            if _hinf["domain"]:
+                _hi_domains[_hinf["domain"]] = (
+                    _hi_domains.get(_hinf["domain"], 0) + 1
+                )
+
+        if _hi_hosts:
+            _hi_out = {
+                "generated":  datetime.now().isoformat(),
+                "total_hosts_analysed": len(_hi_hosts),
+                "summary": {
+                    "environments": dict(sorted(
+                        _hi_env_counts.items(), key=lambda x: -x[1]
+                    )),
+                    "applications": dict(sorted(
+                        _hi_app_counts.items(), key=lambda x: -x[1]
+                    )),
+                    "hardware_models": dict(sorted(
+                        _hi_hw_counts.items(), key=lambda x: -x[1]
+                    )),
+                    "server_roles": dict(sorted(
+                        _hi_role_counts.items(), key=lambda x: -x[1]
+                    )),
+                    "domains": dict(sorted(
+                        _hi_domains.items(), key=lambda x: -x[1]
+                    )),
+                },
+                "hosts": _hi_hosts,
+            }
+            _hip_path = self.root / "hostname_intelligence.json"
+            try:
+                _hit = _hip_path.with_suffix(".tmp")
+                _hit.write_text(
+                    json.dumps(_hi_out, indent=2), encoding="utf-8"
+                )
+                _hit.replace(_hip_path)
+            except Exception:
+                pass
+            _hi_rel = str(_hip_path.relative_to(self.root))
+
+            for _hie in _hi_hosts:
+                _hip2 = _hie["ip"]
+                _hn2 = _hie["hostname"]
+                if _hie["environment"]:
+                    self.log_finding(
+                        title=(
+                            f"Discovery: Environment Tier Inferred — "
+                            f"{_hie['environment']}"
+                        ),
+                        ip=_hip2, port=0, command=[], hostname=_hn2,
+                        risk="INFO",
+                        description=(
+                            f"Hostname naming convention indicates "
+                            f"{_hie['environment']} environment. "
+                            f"{_hie['environment_evidence']}"
+                        ),
+                        sources="scattershot3",
+                        output=(
+                            f"Hostname: {_hn2}\n"
+                            f"Environment: {_hie['environment']}\n"
+                            f"Evidence: {_hie['environment_evidence']}"
+                        ),
+                        affected=_hip2, output_file=_hi_rel,
+                    )
+                for _hia in _hie["applications"]:
+                    self.log_finding(
+                        title=(
+                            f"Discovery: Application Identified — "
+                            f"{_hia['name']}"
+                        ),
+                        ip=_hip2, port=0, command=[], hostname=_hn2,
+                        risk="INFO",
+                        description=(
+                            f"Hostname naming convention suggests "
+                            f"{_hia['name']} ({_hia['category']}). "
+                            f"{_hia['evidence']}"
+                        ),
+                        sources="scattershot3",
+                        output=(
+                            f"Hostname: {_hn2}\n"
+                            f"Application: {_hia['name']}\n"
+                            f"Category: {_hia['category']}\n"
+                            f"Evidence: {_hia['evidence']}"
+                        ),
+                        affected=_hip2, output_file=_hi_rel,
+                    )
+                if _hie["hardware"]:
+                    _hw = _hie["hardware"]
+                    self.log_finding(
+                        title=(
+                            f"Discovery: Hardware Model Identified — "
+                            f"{_hw['model']}"
+                        ),
+                        ip=_hip2, port=0, command=[], hostname=_hn2,
+                        risk="INFO",
+                        description=(
+                            f"Hostname naming convention indicates "
+                            f"hardware platform: {_hw['model']}. "
+                            f"{_hw['evidence']}"
+                        ),
+                        sources="scattershot3",
+                        output=(
+                            f"Hostname: {_hn2}\n"
+                            f"Hardware: {_hw['model']}\n"
+                            f"Manufacturer: {_hw['manufacturer']}\n"
+                            f"Evidence: {_hw['evidence']}"
+                        ),
+                        affected=_hip2, output_file=_hi_rel,
+                    )
+                for _hir in _hie["roles"]:
+                    self.log_finding(
+                        title=(
+                            f"Discovery: Server Role Inferred — "
+                            f"{_hir['role']}"
+                        ),
+                        ip=_hip2, port=0, command=[], hostname=_hn2,
+                        risk="INFO",
+                        description=(
+                            f"Hostname token analysis suggests server "
+                            f"role: {_hir['role']}. {_hir['evidence']}"
+                        ),
+                        sources="scattershot3",
+                        output=(
+                            f"Hostname: {_hn2}\n"
+                            f"Role: {_hir['role']}\n"
+                            f"Evidence: {_hir['evidence']}"
+                        ),
+                        affected=_hip2, output_file=_hi_rel,
+                    )
+
         targets = {"hosts": net_hosts}
         out_path = self.root / "targets.json"
         tmp = out_path.with_suffix(".tmp")
@@ -15601,6 +15772,422 @@ def _infer_host_roles(
     return roles
 
 
+# ── Hostname intelligence engine ─────────────────────────────────────
+# Infers environment tier, applications, server roles, and hardware
+# models from DNS hostnames using naming convention analysis.
+
+_ENV_TOKENS: dict[str, str] = {
+    "prd": "Production", "prod": "Production", "production": "Production",
+    "tst": "Test", "test": "Test", "testing": "Test",
+    "pprd": "Pre-Production", "pprod": "Pre-Production",
+    "preprod": "Pre-Production", "preproduction": "Pre-Production",
+    "stg": "Staging", "stage": "Staging", "staging": "Staging",
+    "dev": "Development", "develop": "Development",
+    "qa": "QA", "qual": "QA",
+    "uat": "UAT",
+    "dr": "Disaster Recovery", "drp": "Disaster Recovery",
+    "lab": "Lab", "sandbox": "Lab",
+    "dmz": "DMZ",
+    "perf": "Performance Test",
+    "trn": "Training", "train": "Training", "training": "Training",
+}
+
+_ENV_SUFFIX_RE = re.compile(
+    r"(?:^|[-_.])"
+    r"(p|t|pp|d)"
+    r"(\d{1,2})"
+    r"(?=[.\-_]|$)",
+    re.IGNORECASE,
+)
+_ENV_SUFFIX_MAP: dict[str, str] = {
+    "p": "Production", "t": "Test", "pp": "Pre-Production", "d": "Development",
+}
+
+_APP_SIGNATURES: list[tuple[str, str, str]] = [
+    (r"(?:^ban[-_]|^banner|^banadmin|^banapi|^banapp|^bandb|^bandgw|^banshare|^banbatch|^banesm|^bannfs|^banods|^banssb|^banweb|^banwork|^baneprint|^ban(?:batch|esm|nfs|ods|ssb|web|work))",
+     "Ellucian Banner", "ERP/SIS"),
+    (r"(?:^cognos|cognos\d)", "IBM Cognos", "Analytics/BI"),
+    (r"(?:sharepoint|^sp[-_]|^sps[-_])", "Microsoft SharePoint", "Collaboration"),
+    (r"(?:exchange|^exch[-_]|^cas[-_]|^mbx[-_]|^dag[-_]|^hub[-_]transport)",
+     "Microsoft Exchange", "Email"),
+    (r"(?:^sap[-_]|^s4hana|^hana[-_])", "SAP", "ERP"),
+    (r"(?:^oracle[-_]|^rac[-_]|^asm[-_])", "Oracle Database", "Database"),
+    (r"(?:^mysql[-_]|^maria[-_]|^mariadb)", "MySQL/MariaDB", "Database"),
+    (r"(?:^postgres|^pgsql|^pgpool)", "PostgreSQL", "Database"),
+    (r"(?:^mongo[-_]|^mongodb)", "MongoDB", "Database"),
+    (r"(?:^redis[-_])", "Redis", "Cache/Database"),
+    (r"(?:^elastic|^kibana|^logstash|^es[-_]node)", "Elastic Stack", "Search/Analytics"),
+    (r"(?:^splunk)", "Splunk", "SIEM/Analytics"),
+    (r"(?:^tableau)", "Tableau", "Analytics/BI"),
+    (r"(?:^powerbi|^pbi[-_])", "Power BI", "Analytics/BI"),
+    (r"(?:^jira|^confluence|^bitbucket|^bamboo|^crowd)",
+     "Atlassian Suite", "DevOps/Collaboration"),
+    (r"(?:^jenkins|^jenkins[-_])", "Jenkins", "CI/CD"),
+    (r"(?:^gitlab)", "GitLab", "CI/CD/SCM"),
+    (r"(?:^github)", "GitHub Enterprise", "SCM"),
+    (r"(?:^artifactory|^jfrog)", "JFrog Artifactory", "Artifact Repository"),
+    (r"(?:^nexus[-_.]|nexus(?:repo|rm))", "Sonatype Nexus", "Artifact Repository"),
+    (r"(?:^sonar|^sonarqube)", "SonarQube", "Code Quality"),
+    (r"(?:^ansible|^tower[-_]|^awx[-_])", "Ansible/AWX", "Automation"),
+    (r"(?:^puppet)", "Puppet", "Configuration Management"),
+    (r"(?:^chef[-_])", "Chef", "Configuration Management"),
+    (r"(?:^terraform)", "Terraform", "IaC"),
+    (r"(?:^docker[-_]|^portainer)", "Docker", "Containers"),
+    (r"(?:^k8s|^kube|^rancher|^openshift)", "Kubernetes", "Container Orchestration"),
+    (r"(?:^vcenter|^vcsa|^vrops|^vrealize|^nsx)", "VMware vCenter/vSphere", "Virtualization"),
+    (r"(?:^esxi)", "VMware ESXi", "Hypervisor"),
+    (r"(?:^hyperv|^hyper[-_]v)", "Microsoft Hyper-V", "Hypervisor"),
+    (r"(?:^proxmox|^pve[-_])", "Proxmox VE", "Hypervisor"),
+    (r"(?:^citrix|^xenapp|^xendesktop|^netscaler|^storefront)",
+     "Citrix", "VDI/Load Balancing"),
+    (r"(?:^vdi[-_]|^horizon[-_])", "VMware Horizon", "VDI"),
+    (r"(?:^nagios|^icinga)", "Nagios/Icinga", "Monitoring"),
+    (r"(?:^zabbix)", "Zabbix", "Monitoring"),
+    (r"(?:^grafana)", "Grafana", "Monitoring/Dashboards"),
+    (r"(?:^prometheus[-_])", "Prometheus", "Monitoring"),
+    (r"(?:^prtg)", "PRTG", "Monitoring"),
+    (r"(?:^solarwinds|^orion)", "SolarWinds", "Monitoring"),
+    (r"(?:^datadog)", "Datadog", "Monitoring"),
+    (r"(?:^forticollector|^fortigate|^fortimanager|^fortianalyzer|^fortisiem)",
+     "Fortinet", "Network Security"),
+    (r"(?:^paloalto|^panorama|^pa[-_]\d)", "Palo Alto Networks", "Network Security"),
+    (r"(?:^checkpoint|^smartcenter|^smartconsole)", "Check Point", "Network Security"),
+    (r"(?:^qualys)", "Qualys", "Vulnerability Management"),
+    (r"(?:^nessus|^tenable|^securitycenter)", "Tenable/Nessus", "Vulnerability Management"),
+    (r"(?:^rapid7|^insightvm|^nexpose)", "Rapid7", "Vulnerability Management"),
+    (r"(?:^crowdstrike|^falcon)", "CrowdStrike Falcon", "EDR"),
+    (r"(?:^carbonblack|^cb[-_])", "Carbon Black", "EDR"),
+    (r"(?:^sentinelone|^s1[-_])", "SentinelOne", "EDR"),
+    (r"(?:^ivanti)", "Ivanti", "ITSM/Endpoint"),
+    (r"(?:^manageengine|^servicedesk|^admanager|^adaudit|^adselfservice)",
+     "ManageEngine", "ITSM/AD Management"),
+    (r"(?:^sccm|^mecm|^configmgr|^scom|^wsus)", "Microsoft SCCM/MECM", "Systems Management"),
+    (r"(?:^adfs)", "AD FS", "Identity/Federation"),
+    (r"(?:^entra)", "Microsoft Entra", "Identity"),
+    (r"(?:^okta)", "Okta", "Identity"),
+    (r"(?:^ping[-_]|^pingfederate|^pingidentity)", "Ping Identity", "Identity"),
+    (r"(?:^duo[-_]|^duoprox)", "Cisco Duo", "MFA"),
+    (r"(?:^cyberark|^pvwa|^psm[-_]|^cpm[-_])", "CyberArk", "PAM"),
+    (r"(?:^sailpoint)", "SailPoint", "Identity Governance"),
+    (r"(?:^bookstack)", "BookStack", "Documentation/Wiki"),
+    (r"(?:^mediawiki|^wiki[-_])", "MediaWiki", "Documentation/Wiki"),
+    (r"(?:^moodle)", "Moodle", "LMS"),
+    (r"(?:^canvas[-_])", "Canvas LMS", "LMS"),
+    (r"(?:^blackboard|^bb[-_])", "Blackboard", "LMS"),
+    (r"(?:^cornerstone)", "Cornerstone OnDemand", "LMS/HCM"),
+    (r"(?:^workday)", "Workday", "HCM/Finance"),
+    (r"(?:^peoplesoft|^ps[-_]app|^psft)", "PeopleSoft", "ERP/HCM"),
+    (r"(?:^uniflow)", "uniFLOW", "Print Management"),
+    (r"(?:^papercut)", "PaperCut", "Print Management"),
+    (r"(?:^grooper)", "Grooper", "Document Processing"),
+    (r"(?:^kofax)", "Kofax", "Document Processing"),
+    (r"(?:^abbyy)", "ABBYY", "OCR/Document Processing"),
+    (r"(?:^venga)", "Venga", "Visitor Management"),
+    (r"(?:^envoy)", "Envoy", "Visitor Management"),
+    (r"(?:^impero)", "Impero", "Endpoint Monitoring"),
+    (r"(?:^djangocms|^django[-_])", "DjangoCMS", "CMS"),
+    (r"(?:^wordpress|^wp[-_])", "WordPress", "CMS"),
+    (r"(?:^drupal)", "Drupal", "CMS"),
+    (r"(?:^joomla)", "Joomla", "CMS"),
+    (r"(?:^tomcat)", "Apache Tomcat", "Application Server"),
+    (r"(?:^wildfly|^jboss)", "JBoss/WildFly", "Application Server"),
+    (r"(?:^weblogic|^wls[-_])", "Oracle WebLogic", "Application Server"),
+    (r"(?:^websphere|^was[-_])", "IBM WebSphere", "Application Server"),
+    (r"(?:^iis[-_])", "Microsoft IIS", "Web Server"),
+    (r"(?:^nginx)", "NGINX", "Web Server/Reverse Proxy"),
+    (r"(?:^haproxy)", "HAProxy", "Load Balancer"),
+    (r"(?:^f5[-_]|^bigip|^ltm[-_]|^gtm[-_])", "F5 BIG-IP", "Load Balancer"),
+    (r"(?:^netscaler|^adc[-_])", "Citrix ADC/NetScaler", "Load Balancer"),
+    (r"(?:^veeam)", "Veeam", "Backup"),
+    (r"(?:^commvault)", "Commvault", "Backup"),
+    (r"(?:^veritas|^netbackup)", "Veritas NetBackup", "Backup"),
+    (r"(?:^rubrik)", "Rubrik", "Backup"),
+    (r"(?:^cohesity)", "Cohesity", "Backup"),
+    (r"(?:^acronis)", "Acronis", "Backup"),
+    (r"(?:^avamar|^datadomain|^networker)", "Dell EMC Backup", "Backup"),
+    (r"(?:^nimble|^3par|^primera|^alletra)", "HPE Storage", "Storage"),
+    (r"(?:^netapp|^ontap|^filer)", "NetApp", "Storage"),
+    (r"(?:^pure[-_]|^flasharray)", "Pure Storage", "Storage"),
+    (r"(?:^compellent|^equallogic|^unity|^vnx|^vplex|^isilon|^powerstore|^powerscale)",
+     "Dell EMC Storage", "Storage"),
+    (r"(?:^mft[-_.]|^goanywhere|^moveit|^axway)", "Managed File Transfer", "File Transfer"),
+    (r"(?:^radius[-_]|^freeradius|^nps[-_])", "RADIUS", "Network Auth"),
+    (r"(?:^tacacs)", "TACACS+", "Network Auth"),
+    (r"(?:^rsa[-_]|^securid)", "RSA SecurID", "MFA"),
+    (r"(?:^archer[-_])", "RSA Archer", "GRC"),
+    (r"(?:^servicenow|^snow[-_])", "ServiceNow", "ITSM"),
+    (r"(?:^remedy|^bmc[-_])", "BMC Remedy", "ITSM"),
+    (r"(?:^evisions|^argos)", "Evisions ARGOS", "Reporting"),
+    (r"(?:^llama|^ollama)", "LLaMA/Ollama", "AI/LLM"),
+    (r"(?:^openai|^chatgpt)", "OpenAI", "AI"),
+    (r"(?:^compass[-_])", "Compass", "Navigation/Analytics"),
+]
+_APP_SIGNATURES_COMPILED = [
+    (re.compile(p, re.IGNORECASE), name, cat)
+    for p, name, cat in _APP_SIGNATURES
+]
+
+_HW_PATTERNS: list[tuple["re.Pattern[str]", str, str]] = [
+    # Dell PowerEdge
+    (re.compile(r"(?:^|[-_])r(\d{3,4})[a-z0-9]*(?:[-_.]|$)", re.I), "Dell", "PowerEdge R{}"),
+    (re.compile(r"(?:^|[-_])t(\d{3,4})[a-z0-9]*(?:[-_.]|$)", re.I), "Dell", "PowerEdge T{}"),
+    (re.compile(r"(?:^|[-_])m(\d{3,4})[a-z0-9]*(?:[-_.]|$)", re.I), "Dell", "PowerEdge M{}"),
+    (re.compile(r"(?:^|[-_])fc(\d{3,4})[a-z0-9]*(?:[-_.]|$)", re.I), "Dell", "PowerEdge FC{}"),
+    (re.compile(r"(?:^|[-_])c(\d{4})[a-z0-9]*(?:[-_.]|$)", re.I), "Dell", "PowerEdge C{}"),
+    (re.compile(r"(?:^|[-_])mx(\d{3,4})[a-z0-9]*(?:[-_.]|$)", re.I), "Dell", "PowerEdge MX{}"),
+    (re.compile(r"(?:^|[-_])xe(\d{4})[a-z0-9]*(?:[-_.]|$)", re.I), "Dell", "PowerEdge XE{}"),
+    (re.compile(r"(?:^|[-_])xr(\d{1,4})[a-z0-9]*(?:[-_.]|$)", re.I), "Dell", "PowerEdge XR{}"),
+    (re.compile(r"(?:^|[-_])hs(\d{4})[a-z0-9]*(?:[-_.]|$)", re.I), "Dell", "PowerEdge HS{}"),
+    # HPE ProLiant
+    (re.compile(r"(?:^|[-_])dl(\d{2,4})[a-z0-9]*(?:[-_.]|$)", re.I), "HPE", "ProLiant DL{}"),
+    (re.compile(r"(?:^|[-_])ml(\d{2,4})[a-z0-9]*(?:[-_.]|$)", re.I), "HPE", "ProLiant ML{}"),
+    (re.compile(r"(?:^|[-_])bl(\d{2,4})[a-z0-9]*(?:[-_.]|$)", re.I), "HPE", "ProLiant BL{}"),
+    (re.compile(r"(?:^|[-_])sl(\d{2,4})[a-z0-9]*(?:[-_.]|$)", re.I), "HPE", "ProLiant SL{}"),
+    (re.compile(r"(?:^|[-_])xl(\d{2,4})[a-z0-9]*(?:[-_.]|$)", re.I), "HPE", "ProLiant XL{}"),
+    (re.compile(r"(?:^|[-_])synergy[-_]?(\d+)?", re.I), "HPE", "Synergy{}"),
+    # Lenovo ThinkSystem
+    (re.compile(r"(?:^|[-_])sr(\d{3,4})[a-z0-9]*(?:[-_.]|$)", re.I), "Lenovo", "ThinkSystem SR{}"),
+    (re.compile(r"(?:^|[-_])st(\d{3,4})[a-z0-9]*(?:[-_.]|$)", re.I), "Lenovo", "ThinkSystem ST{}"),
+    (re.compile(r"(?:^|[-_])sd(\d{3,4})[a-z0-9]*(?:[-_.]|$)", re.I), "Lenovo", "ThinkSystem SD{}"),
+    (re.compile(r"(?:^|[-_])sn(\d{3,4})[a-z0-9]*(?:[-_.]|$)", re.I), "Lenovo", "ThinkSystem SN{}"),
+    # Cisco UCS
+    (re.compile(r"(?:^|[-_])ucs[-_]?([bcms]\d+)?", re.I), "Cisco", "UCS {}"),
+    # Supermicro
+    (re.compile(r"(?:^|[-_])smc[-_]|supermicro", re.I), "Supermicro", "Server"),
+    # IBM Power
+    (re.compile(r"(?:^|[-_])power(\d+)(?:[-_.]|$)", re.I), "IBM", "Power{}"),
+    (re.compile(r"(?:^|[-_])p(\d{3,4})s(?:[-_.]|$)", re.I), "IBM", "Power {} Scale"),
+    # Network appliances — switches/routers
+    (re.compile(r"(?:^|[-_])cat(\d{4})(?:[-_.]|$)", re.I), "Cisco", "Catalyst {}"),
+    (re.compile(r"(?:^|[-_])nexus[-_]?(\d+k?)?", re.I), "Cisco", "Nexus {}"),
+    (re.compile(r"(?:^|[-_])isr[-_]?(\d+)?", re.I), "Cisco", "ISR {}"),
+    (re.compile(r"(?:^|[-_])asr[-_]?(\d+)?", re.I), "Cisco", "ASR {}"),
+    (re.compile(r"(?:^|[-_])meraki", re.I), "Cisco", "Meraki"),
+    (re.compile(r"(?:^|[-_])aruba[-_]?(\d+)?", re.I), "HPE", "Aruba {}"),
+    (re.compile(r"(?:^|[-_])procurve", re.I), "HPE", "ProCurve"),
+    (re.compile(r"(?:^|[-_])juniper|(?:^|[-_])srx[-_]?(\d+)?|(?:^|[-_])ex[-_]?(\d{4})", re.I),
+     "Juniper", "{}"),
+    (re.compile(r"(?:^|[-_])fortigate[-_]?(\d+)?", re.I), "Fortinet", "FortiGate {}"),
+    # Storage
+    (re.compile(r"(?:^|[-_])fas(\d+)(?:[-_.]|$)", re.I), "NetApp", "FAS{}"),
+    (re.compile(r"(?:^|[-_])aff[-_]?([ac]\d+)?", re.I), "NetApp", "AFF {}"),
+    (re.compile(r"(?:^|[-_])vnx(\d+)?", re.I), "Dell EMC", "VNX {}"),
+    (re.compile(r"(?:^|[-_])vmax(\d+)?", re.I), "Dell EMC", "VMAX {}"),
+    (re.compile(r"(?:^|[-_])unity[-_]?(\d+)?", re.I), "Dell EMC", "Unity {}"),
+    (re.compile(r"(?:^|[-_])powerstore[-_]?(\d+)?", re.I), "Dell", "PowerStore {}"),
+    (re.compile(r"(?:^|[-_])nimble[-_]?", re.I), "HPE", "Nimble"),
+    (re.compile(r"(?:^|[-_])3par[-_]?(\d+)?", re.I), "HPE", "3PAR {}"),
+    # Wireless
+    (re.compile(r"(?:^|[-_])wlc[-_]?(\d+)?", re.I), "Cisco", "WLC {}"),
+    (re.compile(r"(?:^|[-_])ap[-_]?\d", re.I), "", "Wireless Access Point"),
+]
+
+_HOSTNAME_ROLE_TOKENS: dict[str, str] = {
+    "sql":       "Database Server",
+    "db":        "Database Server",
+    "mysql":     "Database Server",
+    "postgres":  "Database Server",
+    "pgsql":     "Database Server",
+    "oracle":    "Database Server",
+    "mongo":     "Database Server",
+    "redis":     "Cache Server",
+    "memcache":  "Cache Server",
+    "api":       "API Server",
+    "app":       "Application Server",
+    "web":       "Web Server",
+    "www":       "Web Server",
+    "proxy":     "Proxy Server",
+    "haproxy":   "Load Balancer",
+    "lb":        "Load Balancer",
+    "nlb":       "Load Balancer",
+    "nginx":     "Web Server / Reverse Proxy",
+    "mail":      "Mail Server",
+    "smtp":      "Mail Relay",
+    "relay":     "Relay Server",
+    "imap":      "Mail Server",
+    "mx":        "Mail Server",
+    "dns":       "DNS Server",
+    "ns":        "DNS Server",
+    "dhcp":      "DHCP Server",
+    "ntp":       "NTP Server",
+    "ldap":      "Directory Server",
+    "ad":        "Domain Controller",
+    "dc":        "Domain Controller",
+    "pdc":       "Domain Controller",
+    "bdc":       "Domain Controller",
+    "gc":        "Global Catalog Server",
+    "nfs":       "File Server (NFS)",
+    "nas":       "NAS / File Server",
+    "san":       "Storage Server",
+    "iscsi":     "iSCSI Target",
+    "ftp":       "FTP Server",
+    "sftp":      "SFTP Server",
+    "mft":       "Managed File Transfer",
+    "vpn":       "VPN Gateway",
+    "fw":        "Firewall",
+    "waf":       "Web Application Firewall",
+    "ids":       "IDS/IPS",
+    "ips":       "IDS/IPS",
+    "siem":      "SIEM",
+    "log":       "Log Server",
+    "syslog":    "Syslog Server",
+    "collector": "Log/Data Collector",
+    "monitor":   "Monitoring Server",
+    "mgmt":      "Management Server",
+    "mgt":       "Management Server",
+    "admin":     "Administration Server",
+    "jump":      "Jump Host / Bastion",
+    "bastion":   "Bastion Host",
+    "gw":        "Gateway",
+    "gateway":   "Gateway",
+    "batch":     "Batch Processing Server",
+    "etl":       "ETL Server",
+    "dw":        "Data Warehouse",
+    "bi":        "Business Intelligence Server",
+    "sso":       "SSO Server",
+    "idm":       "Identity Management Server",
+    "idp":       "Identity Provider",
+    "pki":       "PKI / Certificate Authority",
+    "ca":        "Certificate Authority",
+    "radius":    "RADIUS Server",
+    "tacacs":    "TACACS Server",
+    "print":     "Print Server",
+    "scan":      "Scanner",
+    "cam":       "Camera / Surveillance",
+    "cctv":      "Camera / Surveillance",
+    "vsm":       "Video Surveillance",
+    "voip":      "VoIP Server",
+    "sip":       "VoIP / SIP Server",
+    "pbx":       "PBX",
+    "tel":       "Telephony Server",
+    "backup":    "Backup Server",
+    "bak":       "Backup Server",
+    "dr":        "DR Server",
+    "repo":      "Repository Server",
+    "docker":    "Container Host",
+    "k8s":       "Kubernetes Node",
+    "kube":      "Kubernetes Node",
+    "worker":    "Worker Node",
+    "node":      "Cluster Node",
+    "master":    "Cluster Master",
+    "control":   "Control Plane",
+    "build":     "Build Server",
+    "ci":        "CI/CD Server",
+    "cd":        "CI/CD Server",
+    "deploy":    "Deployment Server",
+    "hub":       "Hub Server",
+    "portal":    "Portal Server",
+    "eprint":    "Electronic Print/Delivery",
+    "share":     "File Share Server",
+    "nfs":       "NFS Server",
+    "cifs":      "CIFS/SMB File Server",
+    "webfiles":  "Web File Server",
+}
+
+_HOSTNAME_ROLE_SKIP = frozenset({
+    "com", "edu", "org", "net", "gov", "mil", "int", "co", "uk", "us",
+    "io", "local", "internal", "corp", "lan",
+})
+
+
+def _infer_from_hostname(
+    hostname: str,
+) -> dict:
+    """Analyse a hostname for environment, applications, roles, and hardware.
+
+    Returns a dict with keys: environment, environment_evidence, applications,
+    roles, hardware, instance, domain, subdomain.
+    """
+    result: dict = {
+        "environment": None,
+        "environment_evidence": None,
+        "applications": [],
+        "roles": [],
+        "hardware": None,
+        "instance": None,
+        "domain": None,
+        "subdomain": None,
+    }
+    if not hostname:
+        return result
+
+    lower = hostname.lower().strip().rstrip(".")
+    parts = lower.split(".")
+    host_part = parts[0] if parts else lower
+
+    # ── Domain hierarchy ──────────────────────────────────────────
+    if len(parts) >= 2:
+        result["domain"] = ".".join(parts[-2:])
+        if len(parts) >= 3:
+            result["subdomain"] = ".".join(parts[:-2])
+
+    # ── Split host part into tokens ───────────────────────────────
+    tokens = re.split(r"[-_]", host_part)
+
+    # ── Environment detection ─────────────────────────────────────
+    for tok in tokens:
+        base = re.sub(r"\d+$", "", tok)
+        if base in _ENV_TOKENS:
+            result["environment"] = _ENV_TOKENS[base]
+            result["environment_evidence"] = f"'{tok}' segment in hostname"
+            break
+    if not result["environment"]:
+        m = _ENV_SUFFIX_RE.search(lower)
+        if m:
+            prefix = m.group(1).lower()
+            num = m.group(2)
+            env = _ENV_SUFFIX_MAP.get(prefix)
+            if env:
+                result["environment"] = env
+                result["environment_evidence"] = (
+                    f"'{m.group(0).lstrip('-_.')}' instance suffix in hostname"
+                )
+                result["instance"] = num
+
+    # ── Application identification ────────────────────────────────
+    for pat, app_name, category in _APP_SIGNATURES_COMPILED:
+        if pat.search(host_part):
+            result["applications"].append({
+                "name": app_name,
+                "category": category,
+                "evidence": f"Pattern match in hostname '{host_part}'",
+            })
+
+    # ── Server role from hostname tokens ──────────────────────────
+    seen_roles: set[str] = set()
+    for tok in tokens:
+        base = re.sub(r"\d+$", "", tok)
+        if base in _HOSTNAME_ROLE_SKIP or len(base) < 2:
+            continue
+        role = _HOSTNAME_ROLE_TOKENS.get(base)
+        if role and role not in seen_roles:
+            seen_roles.add(role)
+            result["roles"].append({
+                "role": role,
+                "evidence": f"'{tok}' token in hostname",
+            })
+
+    # ── Hardware model detection ──────────────────────────────────
+    for pat, manufacturer, model_tmpl in _HW_PATTERNS:
+        m = pat.search(lower)
+        if m:
+            num = ""
+            for g in m.groups():
+                if g:
+                    num = g
+                    break
+            model = model_tmpl.format(num).strip()
+            mfr_label = f"{manufacturer} " if manufacturer else ""
+            result["hardware"] = {
+                "manufacturer": manufacturer,
+                "model": f"{mfr_label}{model}",
+                "evidence": f"'{m.group(0).strip('-_.')}' in hostname",
+            }
+            break
+
+    return result
+
+
 def check_os_eol(
     output_mgr: "OutputManager",
     ip: str,
@@ -16629,7 +17216,7 @@ def record_software(
         _sw_label = f"{_sw_label} {clean_ver}"
     _src = method.split()[0].lower()
     _sw_inv_rel = str(output_mgr.software_inventory.relative_to(output_mgr.root))
-    _sw_title_prefix = "Software Version Detected"
+    _sw_title_prefix = "Software Version Detected" if clean_ver else "Software Detected"
     output_mgr.log_finding(
         title=f"{_sw_title_prefix}: {_sw_label}",
         ip=ip,
