@@ -16086,7 +16086,7 @@ def record_software(
         _sw_label = f"{_sw_label} {clean_ver}"
     _src = method.split()[0].lower()
     _sw_inv_rel = str(output_mgr.software_inventory.relative_to(output_mgr.root))
-    _sw_title_prefix = "Software Version Detected" if clean_ver else "Software Identified"
+    _sw_title_prefix = "Software Version Detected"
     output_mgr.log_finding(
         title=f"{_sw_title_prefix}: {_sw_label}",
         ip=ip,
@@ -19762,8 +19762,8 @@ def run_enum4linux(
         if _os_m:
             os_ver = _os_m.group(1).strip()
             if os_ver and len(os_ver) > 2:
-                _ef("OS Version Identified", "INFO",
-                    f"Operating system version identified on {ip}: {os_ver}.",
+                _ef(f"OS Version Detected: {os_ver}", "INFO",
+                    f"Operating system version detected on {ip}: {os_ver}.",
                     f"OS: {os_ver}")
                 # Record in software inventory
                 record_software(
