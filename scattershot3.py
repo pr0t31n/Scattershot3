@@ -33992,7 +33992,6 @@ def _passive_seed_thread(
 
     cmd = [
         tcpdump_path, "-i", iface, "-w", str(pcap_path),
-        "-c", "0",
         "not", "host", server_ip,
     ]
     try:
@@ -34013,11 +34012,22 @@ def _passive_seed_thread(
                    step=str(exc))
         return
 
+    td_stderr = ""
+    if proc.stderr:
+        try:
+            td_stderr = proc.stderr.read().decode("utf-8", errors="replace").strip()
+        except Exception:
+            pass
+
     if not pcap_path.exists() or pcap_path.stat().st_size == 0:
-        _vc.log("[passive-seed] capture empty — skipping analysis", "WARN")
+        err_detail = f" — stderr: {td_stderr}" if td_stderr else ""
+        _vc.log(f"[passive-seed] capture empty — skipping analysis{err_detail}", "WARN")
         _vc.status("passive_seed", label="Passive Seed", status="complete",
                    step="no packets captured")
         return
+
+    if td_stderr:
+        _vc.log(f"[passive-seed] tcpdump stderr: {td_stderr}", "INFO")
 
     _vc.log(f"[passive-seed] capture complete — "
             f"{pcap_path.stat().st_size:,} bytes")
