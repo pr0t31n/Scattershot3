@@ -3450,7 +3450,7 @@ class OutputManager:
                         if is_weak:
                             vulns.append({
                                 "title":    f"Weak Cipher Accepted: {cipher['cipher']}",
-                                "severity": "HIGH",
+                                "severity": "HIGH" if self.scope == "ext" else "MEDIUM",
                                 "detail":   f"{cipher.get('bits','?')} bits",
                             })
 
@@ -12505,15 +12505,16 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                 cat_status = cipher_sev.group(2).strip().lower()  # "offered" / "not offered"
                 cat_note   = cipher_sev.group(3).strip()
                 if cat_status == "offered":
+                    _ts_scope_risk = "HIGH" if (output_mgr and output_mgr.scope == "ext") else "MEDIUM"
                     result["ciphers_severity"].append({
-                        "severity": "HIGH",
+                        "severity": _ts_scope_risk,
                         "detail":   f"{cat_name} offered",
                     })
                     if output_mgr:
                         output_mgr.log_finding(
                             title="Weak Cipher Identified",
                             ip=ip, port=port, command=cmd, hostname=hostname,
-                            risk="HIGH",
+                            risk=_ts_scope_risk,
                             description=f"Weak cipher category offered on {ip}:{port}: {cat_name}",
                             sources="testssl",
                             output=f"Cipher category: {cat_name}\nStatus: {cat_status}\nDetail: {cat_note}",
@@ -12532,12 +12533,16 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                     or key_bits < 128
                 )
                 if is_weak:
+                    _ts_is_ext = (output_mgr and output_mgr.scope == "ext")
+                    if _ts_is_ext:
+                        sev = "HIGH" if key_bits < 112 else "MEDIUM"
+                    else:
+                        sev = "MEDIUM" if key_bits < 112 else "LOW"
                     result["ciphers_severity"].append({
-                        "severity": "HIGH" if key_bits < 112 else "MEDIUM",
+                        "severity": sev,
                         "detail":   cipher_name,
                     })
                     if output_mgr:
-                        sev = "HIGH" if key_bits < 112 else "MEDIUM"
                         output_mgr.log_finding(
                             title="Weak Cipher Identified",
                             ip=ip, port=port, command=cmd, hostname=hostname,
