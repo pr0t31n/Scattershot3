@@ -1075,13 +1075,14 @@ import uuid as _uuid
 # Detect when running as a managed subprocess under Vantage
 _CRUCIBLE_MANAGED = os.environ.get("CRUCIBLE_MANAGED", "") == "1"
 
-_CP_LOG    = "__CRUCIBLE_LOG__:"
-_CP_ERR    = "__CRUCIBLE_ERR__:"
-_CP_PROMPT = "__CRUCIBLE_PROMPT__:"
-_CP_STATUS = "__CRUCIBLE_STATUS__:"
-_CP_TARGET = "__CRUCIBLE_TARGET__:"
-_CP_PORT   = "__CRUCIBLE_PORT__:"
-_CP_ACTION = "__CRUCIBLE_ACTION_ITEM__:"
+_CP_LOG     = "__CRUCIBLE_LOG__:"
+_CP_ERR     = "__CRUCIBLE_ERR__:"
+_CP_PROMPT  = "__CRUCIBLE_PROMPT__:"
+_CP_STATUS  = "__CRUCIBLE_STATUS__:"
+_CP_TARGET  = "__CRUCIBLE_TARGET__:"
+_CP_PORT    = "__CRUCIBLE_PORT__:"
+_CP_ACTION  = "__CRUCIBLE_ACTION_ITEM__:"
+_CP_FINDING = "__CRUCIBLE_FINDING__:"
 
 
 class VantageConsole:
@@ -2906,6 +2907,24 @@ class OutputManager:
                     writer = csv.DictWriter(f, fieldnames=self.FINDINGS_CSV_FIELDS,
                                             extrasaction="ignore")
                     writer.writerow(csv_entry)
+
+        if _CRUCIBLE_MANAGED:
+            try:
+                _finding_payload = json.dumps({
+                    "title": title, "ip": ip, "port": port,
+                    "hostname": hostname or "", "risk": risk or "INFO",
+                    "description": description or "",
+                    "sources": sources or "",
+                    "service": service or "",
+                    "affected": affected or "",
+                    "cves": cves or "",
+                    "output_file": output_file or "",
+                    "confidence": confidence or "",
+                    "remediation": remediation or "",
+                }, ensure_ascii=False)
+                print(f"{_CP_FINDING}{_finding_payload}", flush=True)
+            except Exception:
+                pass
 
     # ── Action items ─────────────────────────────────────────────────────────
 
@@ -8329,55 +8348,53 @@ def port_scan(
                             script_output, cmd_list,
                         )
                     # Record nmap -sV software identifications.
-                    # ONLY record when nmap has a confirmed version string — a
-                    # product name without a version means nmap is guessing
-                    # based solely on the port number (e.g. "Microsoft Windows
-                    # RPC", "Microsoft Terminal Services", "tcpwrapped").
-                    # Port-number-based guesses must not create software
-                    # inventory entries; only plugin/probe-confirmed detections
-                    # (product + version together) are recorded.
+                    # nmap sets product when a probe response matches a
+                    # signature — it is a real detection, not a port-number
+                    # guess.  Record both versioned and versionless products
+                    # so every identified service appears in the findings
+                    # (versioned → "Software Version Detected", versionless
+                    # → "Software Detected").  EOL/vuln checks still require
+                    # a version string.
                     product = port_data.get("product", "")
                     version = port_data.get("version", "")
-                    if output_mgr and product and version:
-                        _nmap_ev_line = (
-                            f"{port}/{proto}  open  "
-                            f"{port_data.get('name', ''):<16}  "
-                            f"{product} {version}"
-                            + (f"  ({port_data.get('extrainfo', '')})" if port_data.get("extrainfo") else "")
-                        ).rstrip()
+                    if output_mgr and product:
+                        _nmap_ev_parts = [
+                            f"{port}/{proto}  open  ",
+                            f"{port_data.get('name', ''):<16}  ",
+                            product,
+                        ]
+                        if version:
+                            _nmap_ev_parts.append(f" {version}")
+                        if port_data.get("extrainfo"):
+                            _nmap_ev_parts.append(f"  ({port_data['extrainfo']})")
+                        _nmap_ev_line = "".join(_nmap_ev_parts).rstrip()
                         record_software(
                             output_mgr, ip, port, hostname,
                             software_name=product,
-                            version=version,
+                            version=version or None,
                             os_info=None,
                             method="nmap -sV",
                             extrainfo=port_data.get("extrainfo") or None,
                             evidence_line=_nmap_ev_line,
                         )
-                        check_eol_and_vulns(
-                            output_mgr, ip, port, hostname,
-                            software_name=product,
-                            version=version,
-                            method="nmap -sV",
-                        )
-                        # If nmap detected an OS hint alongside the version, check EOL.
-                        # Prefer the parsed OS suffix (e.g. "Ubuntu 3ubuntu0.6") from
-                        # the version field over the generic extrainfo string, so that
-                        # _resolve_ssh_os() can map it to the canonical OS label.
-                        _, _nm_parsed_os, _ = _parse_nmap_version_field(version, "")
-                        _nm_os_hint = _nm_parsed_os or port_data.get("extrainfo", "") or ""
-                        if _nm_os_hint:
-                            # Convert nmap "Ubuntu 3ubuntu0.6" → "Ubuntu-3ubuntu0.6"
-                            # to match _SSH_OS_BANNER_COMPILED patterns and get a real
-                            # version label, avoiding vague strings like "Ubuntu Linux"
-                            _nm_resolved, _ = _resolve_ssh_os(_nm_os_hint.replace(" ", "-"))
-                            if _nm_resolved:
-                                _nm_os_hint = _nm_resolved
-                            check_os_eol(
+                        if version:
+                            check_eol_and_vulns(
                                 output_mgr, ip, port, hostname,
-                                os_name=_nm_os_hint,
+                                software_name=product,
+                                version=version,
                                 method="nmap -sV",
                             )
+                            _, _nm_parsed_os, _ = _parse_nmap_version_field(version, "")
+                            _nm_os_hint = _nm_parsed_os or port_data.get("extrainfo", "") or ""
+                            if _nm_os_hint:
+                                _nm_resolved, _ = _resolve_ssh_os(_nm_os_hint.replace(" ", "-"))
+                                if _nm_resolved:
+                                    _nm_os_hint = _nm_resolved
+                                check_os_eol(
+                                    output_mgr, ip, port, hostname,
+                                    os_name=_nm_os_hint,
+                                    method="nmap -sV",
+                                )
 
         # ── Phase B: targeted NSE second pass ────────────────────────────────
         # Run service-specific scripts only against the ports that actually have
