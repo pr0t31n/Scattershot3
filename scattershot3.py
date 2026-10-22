@@ -8394,13 +8394,14 @@ def port_scan(
                 # firewalls may silently drop RustScan's connect() probes
                 # while still allowing SYN-scan through — fall back to nmap.
                 if scope != "ext":
-                    return {}, None
+                    return {}, None, {"open": 0, "closed": 0, "filtered": 0, "scanned": 0, "rustscan_zero": True}
                 _tprint(f"  {Fore.YELLOW}    rustscan: 0 ports on {ip} "
                         f"(external, falling back to nmap -sS){Style.RESET_ALL}")
         except (subprocess.TimeoutExpired, OSError, ValueError):
             pass  # fall back to full nmap scan
 
     results: dict[int, dict] = {}
+    _port_states: dict[str, int] = {"open": 0, "closed": 0, "filtered": 0, "scanned": 0}
 
     try:
         # ── Phase A: base scan via python-nmap (parses XML from its own pipe) ─
@@ -8443,14 +8444,22 @@ def port_scan(
             )
 
         if ip not in nm.all_hosts():
-            return results  # host went down between discovery and port scan
+            return results, None, {"open": 0, "closed": 0, "filtered": 0, "scanned": 0}
 
         for proto in nm[ip].all_protocols():
             for port in sorted(nm[ip][proto].keys()):
                 port_data = nm[ip][proto][port]
+                _ps = port_data["state"]
+                _port_states["scanned"] += 1
+                if _ps.startswith("open"):
+                    _port_states["open"] += 1
+                elif _ps == "closed":
+                    _port_states["closed"] += 1
+                elif "filtered" in _ps:
+                    _port_states["filtered"] += 1
                 # startswith("open") catches both "open" and "open|filtered"
                 # without admitting "closed" or "filtered".
-                if port_data["state"].startswith("open"):
+                if _ps.startswith("open"):
                     # Collect NSE script output for this port
                     script_output: dict = {}
                     raw_scripts = port_data.get("script", {})
@@ -8866,7 +8875,7 @@ def port_scan(
                 extra={"target": ip},
             )
 
-    return results, out_path
+    return results, out_path, _port_states
 
 
 def _port_scan_worker(
@@ -8939,7 +8948,7 @@ def _port_scan_worker(
 
     _tprint(f"  {Fore.WHITE}[>] Scanning {ip}...{Style.RESET_ALL}", flush=True)
 
-    open_ports, _ps_out_path = port_scan(
+    open_ports, _ps_out_path, _port_states = port_scan(
         ip,
         fast=fast,
         output_mgr=output_mgr,
@@ -9029,6 +9038,89 @@ def _port_scan_worker(
     _uf_count = len(_udp_unconfirmed)
     if not open_ports and not _uf_count:
         _tprint(f"  {Fore.YELLOW}    {ip} — no open ports found.{Style.RESET_ALL}")
+        if output_mgr and _port_states.get("scanned", 0) > 0:
+            _ps_filtered = _port_states.get("filtered", 0)
+            _ps_closed   = _port_states.get("closed", 0)
+            _ps_scanned  = _port_states["scanned"]
+            _ps_filt_pct = (_ps_filtered / _ps_scanned * 100) if _ps_scanned else 0
+            if _ps_filt_pct >= 90:
+                _tprint(
+                    f"  {Fore.YELLOW}    {ip} — {_ps_filtered}/{_ps_scanned} ports "
+                    f"filtered ({_ps_filt_pct:.0f}%) — possible segmentation"
+                    f"{Style.RESET_ALL}"
+                )
+                output_mgr.log_finding(
+                    title="Discovery: Live Host — Filtered (Possible Segmentation)",
+                    ip=ip, port=0,
+                    command=f"nmap -sV {ip}",
+                    hostname=hostname,
+                    risk="INFO",
+                    description=(
+                        f"Host {ip} responded to discovery probes (confirmed alive) but "
+                        f"{_ps_filtered} of {_ps_scanned} scanned ports ({_ps_filt_pct:.0f}%) "
+                        f"are filtered — probes received no response. This indicates a "
+                        f"firewall or ACL is actively dropping traffic to this host. "
+                        f"When an entire subnet exhibits this behavior while adjacent "
+                        f"subnets respond normally, it is strong evidence of network "
+                        f"segmentation enforcement. Compare against other scanned ranges "
+                        f"to identify segmentation boundaries."
+                    ),
+                    sources="nmap",
+                    output=(
+                        f"Port scan summary for {ip}:\n"
+                        f"  Scanned : {_ps_scanned}\n"
+                        f"  Open    : {_port_states.get('open', 0)}\n"
+                        f"  Closed  : {_ps_closed}\n"
+                        f"  Filtered: {_ps_filtered} ({_ps_filt_pct:.0f}%)"
+                    ),
+                    affected=ip,
+                    output_file=str(_ps_out_path) if _ps_out_path else None,
+                )
+            else:
+                output_mgr.log_finding(
+                    title="Discovery: Live Host — No Services Exposed",
+                    ip=ip, port=0,
+                    command=f"nmap -sV {ip}",
+                    hostname=hostname,
+                    risk="INFO",
+                    description=(
+                        f"Host {ip} responded to discovery probes (confirmed alive) but "
+                        f"no open TCP or UDP ports were identified. Of {_ps_scanned} "
+                        f"ports scanned, {_ps_closed} returned RST (closed) and "
+                        f"{_ps_filtered} were filtered. A majority-closed response "
+                        f"indicates the host is genuinely reachable with no exposed "
+                        f"services — it may be a network device, a hardened endpoint, "
+                        f"or a host with services on non-standard ports outside the "
+                        f"scanned range."
+                    ),
+                    sources="nmap",
+                    output=(
+                        f"Port scan summary for {ip}:\n"
+                        f"  Scanned : {_ps_scanned}\n"
+                        f"  Open    : 0\n"
+                        f"  Closed  : {_ps_closed}\n"
+                        f"  Filtered: {_ps_filtered}"
+                    ),
+                    affected=ip,
+                    output_file=str(_ps_out_path) if _ps_out_path else None,
+                )
+        elif output_mgr and _port_states.get("rustscan_zero"):
+            output_mgr.log_finding(
+                title="Discovery: Live Host — No Services Exposed",
+                ip=ip, port=0,
+                command=f"rustscan -a {ip} -p 1-65535",
+                hostname=hostname,
+                risk="INFO",
+                description=(
+                    f"Host {ip} responded to discovery probes (confirmed alive) but "
+                    f"RustScan's full TCP connect scan (ports 1-65535) found no open "
+                    f"ports. The host may be a network device, a hardened endpoint, "
+                    f"or running services only on UDP."
+                ),
+                sources="rustscan",
+                output=f"RustScan: 0 open ports on {ip} (full range 1-65535)",
+                affected=ip,
+            )
     else:
         _parts = []
         if open_ports:
@@ -9122,6 +9214,7 @@ def _port_scan_worker(
         "web_services":      [],
         "ssl_results":       {},
         "web_files":         {},    # port → list[str] of downloaded file paths
+        "port_states":       dict(_port_states),      # open/closed/filtered/scanned counts
     }
     # Internal mutable state shared between nested closures (Python 3 nonlocal)
     hbp: dict[int, str] = {}        # hostnames_by_port accumulator
@@ -33793,6 +33886,22 @@ def scan_scope(
     except Exception as exc:
         print(f"\r{Fore.RED}[!] correlated report failed: {exc}{Style.RESET_ALL}")
 
+    # ── Network posture (per-subnet segmentation analysis) ────────────────────
+    try:
+        _posture = _build_network_posture(all_results, scope)
+        if _posture["subnets"]:
+            _posture_path = output_mgr.root / "network_posture.json"
+            save_json(_posture, str(_posture_path))
+            _seg_count = sum(1 for s in _posture["subnets"] if s.get("segmented"))
+            print(
+                f"{Fore.GREEN}[+] network_posture.json written: "
+                f"{len(_posture['subnets'])} subnet(s)"
+                f"{', ' + str(_seg_count) + ' segmented' if _seg_count else ''}"
+                f"{Style.RESET_ALL}"
+            )
+    except Exception as exc:
+        print(f"{Fore.YELLOW}[!] network posture generation failed: {exc}{Style.RESET_ALL}")
+
     # ── Findings summary (reflects all passes including Nuclei web-URL) ───────
     try:
         n = _count_findings(output_mgr.findings_json)
@@ -35771,6 +35880,68 @@ def run_brutespray(
         _tprint(f"  {Fore.YELLOW}[~] brutespray error: {exc}{Style.RESET_ALL}")
 
     _vc.status(f"{scope}_p6b_brutespray", label="Phase 6b: BruteSpray", status="done")
+
+
+def _build_network_posture(all_results: dict, scope: str) -> dict:
+    """Build per-subnet network posture summary from port scan state counts."""
+    subnet_map: dict[str, list] = {}
+    for ip, hr in all_results.items():
+        ps = hr.get("port_states", {})
+        if not ps or ps.get("scanned", 0) == 0:
+            continue
+        try:
+            addr = ipaddress.ip_address(ip)
+            net = ipaddress.ip_network(f"{ip}/24", strict=False)
+            cidr = str(net)
+        except ValueError:
+            continue
+        _scanned  = ps.get("scanned", 0)
+        _open     = ps.get("open", 0)
+        _closed   = ps.get("closed", 0)
+        _filtered = ps.get("filtered", 0)
+        _filt_pct = (_filtered / _scanned * 100) if _scanned else 0
+        if _open > 0:
+            posture = "open"
+        elif _filt_pct >= 90:
+            posture = "filtered"
+        else:
+            posture = "closed"
+        subnet_map.setdefault(cidr, []).append({
+            "ip":        ip,
+            "hostname":  hr.get("hostname") or "",
+            "posture":   posture,
+            "open":      _open,
+            "closed":    _closed,
+            "filtered":  _filtered,
+            "scanned":   _scanned,
+            "open_port_count": len(hr.get("open_ports", {})),
+        })
+
+    subnets = []
+    for cidr in sorted(subnet_map, key=lambda c: int(ipaddress.ip_network(c).network_address)):
+        hosts = subnet_map[cidr]
+        total     = len(hosts)
+        n_open    = sum(1 for h in hosts if h["posture"] == "open")
+        n_filtered = sum(1 for h in hosts if h["posture"] == "filtered")
+        n_closed  = sum(1 for h in hosts if h["posture"] == "closed")
+        segmented = (n_filtered > 0 and n_filtered == total)
+        subnets.append({
+            "cidr":       cidr,
+            "host_count": total,
+            "open_hosts": n_open,
+            "filtered_hosts": n_filtered,
+            "closed_hosts":   n_closed,
+            "segmented":      segmented,
+            "hosts":          hosts,
+        })
+
+    seg_count = sum(1 for s in subnets if s["segmented"])
+    return {
+        "scope":          scope,
+        "subnet_count":   len(subnets),
+        "segmented_count": seg_count,
+        "subnets":        subnets,
+    }
 
 
 def _count_findings(findings_json_path) -> int:
