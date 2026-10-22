@@ -17330,35 +17330,183 @@ def _overlay_url_bar(img_path, url):
         pass
 
 
-def _classify_screenshot(title, server, status_code):
+_RE_BODY_SERVER = re.compile(
+    r'(?:Apache Tomcat|Apache|Nginx|Microsoft-IIS|LiteSpeed|Caddy|Jetty|'
+    r'WildFly|GlassFish|Oracle HTTP Server|IBM HTTP Server|Lighttpd|Cherokee|'
+    r'OpenResty|Tengine|Gunicorn|Uvicorn|Puma|Phusion Passenger)'
+    r'[/ ]*[\d]+(?:\.[\d]+)*',
+    re.IGNORECASE
+)
+
+
+def _extract_server_from_body(body_snippet):
+    """Extract a server/version string from page body when the Server header
+    is missing. Returns the first match or empty string."""
+    if not body_snippet:
+        return ""
+    m = _RE_BODY_SERVER.search(body_snippet)
+    return m.group(0) if m else ""
+
+
+def _classify_screenshot(title, server, status_code, *, port=0,
+                         body_snippet=""):
     t = (title or "").lower()
     s = (server or "").lower()
+    b = (body_snippet or "").lower()
     sc = status_code or 0
-    if sc == 400: return "Bad Request (400)"
-    if sc == 401: return "Unauthorized (401)"
-    if sc == 403: return "Forbidden (403)"
-    if sc == 404 or "404" in t: return "Not Found (404)"
-    if sc == 405: return "Method Not Allowed (405)"
-    if sc == 429: return "Too Many Requests (429)"
-    if sc == 500: return "Internal Server Error (500)"
-    if sc == 502: return "Bad Gateway (502)"
-    if sc == 503: return "Service Unavailable (503)"
-    if 400 <= sc < 500: return f"Client Error ({sc})"
-    if 500 <= sc < 600: return f"Server Error ({sc})"
+    p = port or 0
+    # ── Identify server from body when header is missing ──
+    _body_server = _extract_server_from_body(body_snippet) if not s else ""
+    _srv_label = ""
+    _all_server = s or _body_server.lower()
+    if "tomcat" in _all_server: _srv_label = "Tomcat"
+    elif "iis" in _all_server or "microsoft" in _all_server: _srv_label = "IIS"
+    elif "nginx" in _all_server or "openresty" in _all_server or "tengine" in _all_server: _srv_label = "Nginx"
+    elif "apache" in _all_server: _srv_label = "Apache"
+    elif "jetty" in _all_server: _srv_label = "Jetty"
+    elif "wildfly" in _all_server or "glassfish" in _all_server: _srv_label = "Java App Server"
+    elif "litespeed" in _all_server: _srv_label = "LiteSpeed"
+    elif "caddy" in _all_server: _srv_label = "Caddy"
+    # ── Appliance / service fingerprints (before generic error codes) ──
+    if "the requested url was rejected" in b and "support id" in b:
+        return "WAF Block Page (F5 BIG-IP)"
+    if "the agent does not service request submitted" in b:
+        return "Oracle EM Agent"
+    if "oracle enterprise manager" in b or "enterprise manager" in t:
+        return "Oracle Enterprise Manager"
+    if "vcenter" in t or "vmware vsphere" in t: return "VMware vCenter"
+    if "esxi" in t or "vmware esxi" in t or "esxi host client" in b or (
+            "vmware" in b and "esxi" in b): return "VMware ESXi"
+    # SOAP faults — identify the service from the fault body
+    if "soap-env:fault" in b or "soap:fault" in b or "soap-env:envelope" in b:
+        if "bibustkserver" in b or "cognos" in b: return "IBM Cognos BI Server (SOAP)"
+        if "sharepoint" in b: return "SharePoint (SOAP)"
+        if "exchange" in b: return "Exchange (SOAP)"
+        return "SOAP Service"
+    # Elasticsearch — JSON info endpoint with iconic tagline
+    if "you know, for search" in b or ('"lucene_version"' in b and '"cluster_name"' in b):
+        return "Elasticsearch"
+    # JSON API error responses
+    if b.lstrip().startswith("{") and (
+            '"errorkey"' in b or '"error_code"' in b
+            or ('"message"' in b and '"unhandled' in b)):
+        return "API Error Response (JSON)"
+    # Raw XML responses (Chrome's built-in XML viewer)
+    if "this xml file does not appear to have any style information" in b:
+        return "XML Service Endpoint"
+    # Sentinel Protection Server (SafeNet/Thales license manager)
+    if "sentinelprotectionserver" in s or "sentinel" in s and "protection" in s:
+        return "Sentinel License Server"
+    # Legacy Java applet pages
+    if "<applet>" in b and ("ignoring the <applet> tag" in b
+                            or "isn't running the applet" in b):
+        if "sentinelprotectionserver" in s: return "Sentinel License Server"
+        return "Legacy Java Applet Page"
+    # Jenkins — body check before error codes (Jenkins login returns 403)
+    if "sign in to jenkins" in b or "dashboard [jenkins]" in b or (
+            "jenkins" in b and ("sign in" in b or "login" in b) and "jenkins" in t):
+        return "Jenkins"
+    if "prtg" in t: return "PRTG Network Monitor"
+    if "solarwinds" in t or "orion" in t: return "SolarWinds Orion"
+    if "splunk" in t or "splunk" in b: return "Splunk Web"
+    if "fortigate" in t or "fortinet" in b: return "FortiGate"
+    if "palo alto" in t or "globalprotect" in t: return "Palo Alto Networks"
+    if "sonicwall" in t: return "SonicWall"
+    if "zabbix" in t: return "Zabbix"
+    if "nagios" in t: return "Nagios"
+    if "grafana" in t: return "Grafana"
+    if "kibana" in t: return "Kibana"
+    if "jenkins" in t or "sign in to jenkins" in b or "dashboard [jenkins]" in b: return "Jenkins"
+    if "gitlab" in t: return "GitLab"
+    if "jira" in t or "atlassian" in t: return "Atlassian Jira"
+    if "confluence" in t: return "Atlassian Confluence"
+    if "bitbucket" in t: return "Atlassian Bitbucket"
+    if "phpmyadmin" in t: return "phpMyAdmin"
+    if "pgadmin" in t: return "pgAdmin"
+    if "roundcube" in t: return "Roundcube Webmail"
+    if "zimbra" in t: return "Zimbra"
+    if "nextcloud" in t: return "Nextcloud"
+    if "owncloud" in t: return "ownCloud"
+    if "minio" in t or "minio" in b: return "MinIO Console"
+    if "proxmox" in t: return "Proxmox VE"
+    if "unifi" in t: return "Ubiquiti UniFi"
+    if "opnsense" in t: return "OPNsense"
+    if "pfsense" in t: return "pfSense"
+    if "keycloak" in t: return "Keycloak"
+    # ── Default server pages (before error codes — these often return 403/404) ──
+    if ("test the proper operation of the apache" in b
+            or "test page" in t or ("apache" in t and "test page" in t)
+            or ("powered by" in b and "apache httpd server" in b)):
+        return "Default Apache Page"
+    if ("successfully installed tomcat" in b or "congratulations" in b
+            and "tomcat" in b):
+        return "Default Tomcat Page"
+    if "welcome to nginx" in b or ("nginx" in t and "welcome" in t):
+        return "Default Nginx Page"
+    if ("internet information services" in b
+            and ("welcome" in b or "iis" in t)):
+        return "Default IIS Page"
+    # ── HTTP error codes ──
+    _err_map = {400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
+                404: "Not Found", 405: "Method Not Allowed",
+                429: "Too Many Requests", 500: "Internal Server Error",
+                502: "Bad Gateway", 503: "Service Unavailable"}
+    if sc in _err_map or "404" in t:
+        _ecode = _err_map.get(sc, "Not Found") if sc in _err_map else "Not Found"
+        _ec = sc if sc in _err_map else 404
+        if _srv_label:
+            return f"{_srv_label} — {_ecode} ({_ec})"
+        return f"{_ecode} ({_ec})"
+    if 400 <= sc < 500:
+        return f"{_srv_label + ' — ' if _srv_label else ''}Client Error ({sc})"
+    if 500 <= sc < 600:
+        return f"{_srv_label + ' — ' if _srv_label else ''}Server Error ({sc})"
+    # ── Body-based error detection (catches 200-status error pages) ──
+    _err_phrases = ("http error 4", "http error 5",
+                    "403 - forbidden", "500 - internal server error",
+                    "the resource cannot be found",
+                    "the requested resource is not found")
+    for _ep in _err_phrases:
+        if _ep in b:
+            return f"{_srv_label + ' — ' if _srv_label else ''}Error Page"
+    # ── Management consoles ──
+    if "cockpit" in t or "cockpit" in b or (
+            p == 9090 and ("log in with your server" in b
+                           or "log in with your browser" in b)):
+        return "Cockpit Web Console"
+    if "idrac" in t: return "iDRAC Management Console"
+    if "ilo" in t: return "iLO Management Console"
+    if "webmin" in t or "webmin" in b: return "Webmin Console"
+    # ── Auth pages ──
     if "login" in t or "sign in" in t or "log in" in t or "signin" in t: return "Login Page"
     if "dashboard" in t: return "Dashboard / Admin Panel"
     if "wordpress" in t or "wp-" in t: return "WordPress Site"
-    if "iis" in t and ("windows" in t or "default" in t): return "Default IIS Page"
+    # ── Default server pages ──
+    if t.strip() in ("iis", "iis windows server", "iis windows",
+                      "iis 10", "iis 8", "iis 7"):
+        if "welcome" in b or "internet information services" in b: return "Default IIS Page"
+        return "IIS Error Page"
+    if "tomcat" in t:
+        if ("apache tomcat/" in t or "successfully installed" in b
+                or "congratulations" in b): return "Default Tomcat Page"
     if "apache" in t and ("it works" in t or "test page" in t or "default" in t): return "Default Apache Page"
     if "nginx" in t and ("welcome" in t or "default" in t): return "Default Nginx Page"
     if "default" in t or "welcome" in t or "placeholder" in t: return "Default Web Page"
     if "index of" in t: return "Directory Listing"
     if "api" in t or "swagger" in t or "openapi" in t: return "API Documentation"
     if "error" in t or "exception" in t: return "Error Page"
+    # ── Plain text / minimal body responses ──
+    _b_stripped = (body_snippet or "").strip()
+    if _b_stripped and len(_b_stripped) <= 80 and "<" not in _b_stripped:
+        _b_oneline = " ".join(_b_stripped.split())
+        if _b_oneline:
+            _trunc = _b_oneline[:60] + ("..." if len(_b_oneline) > 60 else "")
+            return f"Plain Text Response: {_trunc}"
     if not title or title.strip() == "":
         if sc and 200 <= sc < 300: return "Web Page (no title)"
         if sc and 300 <= sc < 400: return f"Redirect ({sc})"
         return "Blank / Minimal Response"
+    if "tomcat" in s: return "Web Page (Tomcat)"
     if "apache" in s: return "Web Page (Apache)"
     if "nginx" in s: return "Web Page (Nginx)"
     if "iis" in s or "microsoft" in s: return "Web Page (IIS)"
@@ -17404,7 +17552,8 @@ def _register_screenshot(root: Path, png_path, url: str = "",
                 if not dest.exists():
                     break
         shutil.copy2(str(src), str(dest))
-        _cls = classification or _classify_screenshot(page_title, server, status_code)
+        _cls = classification or _classify_screenshot(page_title, server, status_code,
+                                                      port=int(port) if port else 0)
         sidecar = {
             "url": url, "ip": ip, "port": int(port) if port else 0,
             "hostname": hostname,
@@ -17508,8 +17657,13 @@ def take_web_screenshot(
                         f"— capturing partial screenshot for {ip}:{port}{Style.RESET_ALL}")
             final_url = driver.current_url or url
             _page_title = ""
+            _body_snippet = ""
             try:
                 _page_title = driver.title or ""
+            except Exception:
+                pass
+            try:
+                _body_snippet = (driver.find_element("tag name", "body").text or "")[:1024]
             except Exception:
                 pass
             # Expand window to full page height for a full-page-equivalent capture
@@ -17539,7 +17693,245 @@ def take_web_screenshot(
             _sc_server = _sc_r.headers.get("Server", "")
         except Exception:
             pass
-        _sc_cls = _classify_screenshot(_page_title, _sc_server, _sc_status)
+        _body_server = ""
+        if not _sc_server and _body_snippet:
+            _body_server = _extract_server_from_body(_body_snippet)
+            _sc_server = _body_server
+        _sc_cls = _classify_screenshot(_page_title, _sc_server, _sc_status,
+                                       port=port, body_snippet=_body_snippet)
+
+        # Feed body-detected software into the standard inventory pipeline
+        if _body_server:
+            _bs_m = re.match(r'^(.+?)[/ ]([\d][\d.]+.*)$', _body_server)
+            if _bs_m:
+                record_software(output_mgr, ip, port, hostname or None,
+                                software_name=_bs_m.group(1).strip(),
+                                version=_bs_m.group(2).strip(),
+                                os_info=None,
+                                method="screenshot-body",
+                                evidence_line=_body_server)
+            else:
+                record_software(output_mgr, ip, port, hostname or None,
+                                software_name=_body_server.strip(),
+                                version=None, os_info=None,
+                                method="screenshot-body",
+                                evidence_line=_body_server)
+        # Detect OS/service/appliance identity from page body
+        if _body_snippet:
+            _b_low = _body_snippet.lower()
+            _os_m = re.search(
+                r'(Oracle Linux Server|Red Hat Enterprise Linux|'
+                r'CentOS (?:Stream )?[\d.]*|Rocky Linux[\d. ]*|'
+                r'AlmaLinux[\d. ]*|Fedora[\d ]*|Ubuntu[\d. ]*|'
+                r'Debian GNU/Linux[\d. ]*|SUSE Linux[\w ]*)',
+                _body_snippet, re.IGNORECASE)
+            if _os_m:
+                record_software(output_mgr, ip, port, hostname or None,
+                                software_name=_os_m.group(0).strip(),
+                                version=None,
+                                os_info=_os_m.group(0).strip(),
+                                method="screenshot-body",
+                                evidence_line=_os_m.group(0))
+            _SVC_FINGERPRINTS = [
+                ("the requested url was rejected" in _b_low and "support id" in _b_low,
+                 "F5 BIG-IP ASM", None),
+                ("the agent does not service request submitted" in _b_low,
+                 "Oracle EM Agent", None),
+                ("log in with your server" in _b_low and port == 9090,
+                 "Cockpit", None),
+                ("esxi host client" in _b_low or ("vmware" in _b_low and "esxi" in _b_low),
+                 "VMware ESXi", None),
+                (("bibustkserver" in _b_low or "cognos" in _b_low) and (
+                    "soap-env" in _b_low or "soap:" in _b_low),
+                 "IBM Cognos BI Server", None),
+                ("sign in to jenkins" in _b_low or "dashboard [jenkins]" in _b_low,
+                 "Jenkins", None),
+            ]
+            # Elasticsearch version extraction from JSON body
+            if "you know, for search" in _b_low or (
+                    '"lucene_version"' in _b_low and '"cluster_name"' in _b_low):
+                _es_m = re.search(r'"number"\s*:\s*"([\d.]+)"', _body_snippet)
+                record_software(output_mgr, ip, port, hostname or None,
+                                software_name="Elasticsearch",
+                                version=_es_m.group(1) if _es_m else None,
+                                os_info=None,
+                                method="screenshot-body",
+                                evidence_line="Elasticsearch")
+            # Server-header-based software detection (not body, but still screenshot path)
+            _sc_srv_low = (_sc_server or "").lower()
+            if "sentinelprotectionserver" in _sc_srv_low:
+                _sp_m = re.search(r'SentinelProtectionServer[/ ]*([\d.]+)',
+                                  _sc_server or "", re.IGNORECASE)
+                record_software(output_mgr, ip, port, hostname or None,
+                                software_name="Sentinel Protection Server",
+                                version=_sp_m.group(1) if _sp_m else None,
+                                os_info=None,
+                                method="screenshot-header",
+                                evidence_line=_sc_server)
+            for _cond, _svc_name, _svc_ver in _SVC_FINGERPRINTS:
+                if _cond:
+                    record_software(output_mgr, ip, port, hostname or None,
+                                    software_name=_svc_name,
+                                    version=_svc_ver, os_info=None,
+                                    method="screenshot-body",
+                                    evidence_line=_svc_name)
+
+        # ── Information Disclosure findings from page body/header ──
+        _out_rel = _s3_rel_output_file(str(out_path), output_mgr.root)
+        if _body_snippet:
+            _b_low = _body_snippet.lower()
+            # Elasticsearch: version, cluster, build type, unauthenticated
+            if "you know, for search" in _b_low or (
+                    '"lucene_version"' in _b_low and '"cluster_name"' in _b_low):
+                _es_ver_m = re.search(r'"number"\s*:\s*"([\d.]+)"', _body_snippet)
+                _es_clust = re.search(r'"cluster_name"\s*:\s*"([^"]+)"', _body_snippet)
+                _es_build = re.search(r'"build_type"\s*:\s*"([^"]+)"', _body_snippet)
+                _es_node = re.search(r'"name"\s*:\s*"([^"]+)"', _body_snippet)
+                _es_parts = []
+                if _es_ver_m: _es_parts.append(f"Version: {_es_ver_m.group(1)}")
+                if _es_clust: _es_parts.append(f"Cluster: {_es_clust.group(1)}")
+                if _es_build: _es_parts.append(f"Build type: {_es_build.group(1)}")
+                if _es_node: _es_parts.append(f"Node: {_es_node.group(1)}")
+                output_mgr.log_finding(
+                    title="Information Disclosure: Elasticsearch Instance Details Exposed",
+                    ip=ip, port=port, hostname=hostname,
+                    command=f"screenshot {url}", risk="INFO",
+                    description=(
+                        "The Elasticsearch root endpoint responds with full cluster "
+                        "metadata without authentication. This reveals the exact version, "
+                        "cluster topology, build type, and node names — enabling targeted "
+                        "CVE exploitation and confirming unauthenticated access to the "
+                        "cluster API."
+                    ),
+                    output="\n".join(_es_parts) if _es_parts else _body_snippet[:512],
+                    sources="screenshot-body",
+                    affected=f"{ip}:{port}",
+                    output_file=_out_rel,
+                )
+            # SOAP fault with internal details
+            if ("soap-env:fault" in _b_low or "soap:fault" in _b_low) and (
+                    "faultstring" in _b_low or "faultcode" in _b_low):
+                _soap_fc = re.search(r'<faultcode>([^<]+)</faultcode>', _body_snippet, re.I)
+                _soap_fs = re.search(r'<faultstring>([^<]+)</faultstring>', _body_snippet, re.I)
+                _soap_parts = []
+                if _soap_fc: _soap_parts.append(f"Fault code: {_soap_fc.group(1)}")
+                if _soap_fs: _soap_parts.append(f"Fault string: {_soap_fs.group(1)}")
+                _soap_svc = "SOAP Service"
+                if "bibustkserver" in _b_low or "cognos" in _b_low:
+                    _soap_svc = "IBM Cognos BI Server"
+                output_mgr.log_finding(
+                    title=f"Information Disclosure: {_soap_svc} Internal Error Details",
+                    ip=ip, port=port, hostname=hostname,
+                    command=f"screenshot {url}", risk="INFO",
+                    description=(
+                        "The SOAP endpoint returns detailed fault information including "
+                        "internal service names, error codes, and path configuration. "
+                        "This information aids an attacker in mapping the application "
+                        "stack and targeting known vulnerabilities."
+                    ),
+                    output="\n".join(_soap_parts) if _soap_parts else _body_snippet[:512],
+                    sources="screenshot-body",
+                    affected=f"{ip}:{port}",
+                    output_file=_out_rel,
+                )
+            # VMware ESXi management interface
+            if "esxi host client" in _b_low or ("vmware" in _b_low and "esxi" in _b_low):
+                output_mgr.log_finding(
+                    title="Information Disclosure: VMware ESXi Management Interface Exposed",
+                    ip=ip, port=port, hostname=hostname,
+                    command=f"screenshot {url}", risk="INFO",
+                    description=(
+                        "The VMware ESXi Host Client management interface is accessible "
+                        "on the network. This reveals the hypervisor platform and provides "
+                        "a login target for credential attacks against ESXi."
+                    ),
+                    output=_body_snippet[:512],
+                    sources="screenshot-body",
+                    affected=f"{ip}:{port}",
+                    output_file=_out_rel,
+                )
+            # Jenkins CI/CD
+            if "sign in to jenkins" in _b_low or "dashboard [jenkins]" in _b_low:
+                output_mgr.log_finding(
+                    title="Information Disclosure: Jenkins CI/CD Server Exposed",
+                    ip=ip, port=port, hostname=hostname,
+                    command=f"screenshot {url}", risk="INFO",
+                    description=(
+                        "A Jenkins CI/CD server is accessible on the network. Jenkins "
+                        "instances often contain source code, credentials, and build "
+                        "pipeline secrets. Default or weak credentials may allow full "
+                        "server compromise via Script Console."
+                    ),
+                    output=_body_snippet[:512],
+                    sources="screenshot-body",
+                    affected=f"{ip}:{port}",
+                    output_file=_out_rel,
+                )
+            # Cockpit management console
+            if "log in with your server" in _b_low or (
+                    "cockpit" in _b_low and port == 9090):
+                output_mgr.log_finding(
+                    title="Information Disclosure: System Management Console (Cockpit) Exposed",
+                    ip=ip, port=port, hostname=hostname,
+                    command=f"screenshot {url}", risk="INFO",
+                    description=(
+                        "The Cockpit web console is accessible, providing a browser-based "
+                        "system administration interface with terminal, log, and service "
+                        "management capabilities. Valid OS credentials grant full system "
+                        "control."
+                    ),
+                    output=_body_snippet[:512],
+                    sources="screenshot-body",
+                    affected=f"{ip}:{port}",
+                    output_file=_out_rel,
+                )
+            # Oracle EM Agent
+            if "the agent does not service request submitted" in _b_low:
+                output_mgr.log_finding(
+                    title="Information Disclosure: Oracle EM Agent Exposed",
+                    ip=ip, port=port, hostname=hostname,
+                    command=f"screenshot {url}", risk="INFO",
+                    description=(
+                        "An Oracle Enterprise Manager Agent endpoint is accessible on the "
+                        "network, revealing the Oracle management infrastructure."
+                    ),
+                    output=_body_snippet[:512],
+                    sources="screenshot-body",
+                    affected=f"{ip}:{port}",
+                    output_file=_out_rel,
+                )
+            # F5 BIG-IP WAF
+            if "the requested url was rejected" in _b_low and "support id" in _b_low:
+                output_mgr.log_finding(
+                    title="Information Disclosure: WAF Technology Identified (F5 BIG-IP)",
+                    ip=ip, port=port, hostname=hostname,
+                    command=f"screenshot {url}", risk="INFO",
+                    description=(
+                        "The block page reveals an F5 BIG-IP ASM Web Application Firewall. "
+                        "The support ID format and page template are distinctive F5 "
+                        "fingerprints, confirming WAF technology to an attacker."
+                    ),
+                    output=_body_snippet[:512],
+                    sources="screenshot-body",
+                    affected=f"{ip}:{port}",
+                    output_file=_out_rel,
+                )
+        # Sentinel from server header
+        if "sentinelprotectionserver" in (_sc_server or "").lower():
+            output_mgr.log_finding(
+                title="Information Disclosure: License Server Exposed (Sentinel)",
+                ip=ip, port=port, hostname=hostname,
+                command=f"screenshot {url}", risk="INFO",
+                description=(
+                    "A SafeNet/Thales Sentinel Protection Server is accessible on the "
+                    "network. License servers manage software dongles and activation; "
+                    "exposure reveals the licensing infrastructure."
+                ),
+                output=f"Server: {_sc_server}",
+                sources="screenshot-header",
+                affected=f"{ip}:{port}",
+                output_file=_out_rel,
+            )
 
         _tprint(
             f"  {Fore.GREEN}[+] Screenshot: {ip}:{port} → {out_path.name}{Style.RESET_ALL}"
@@ -19750,8 +20142,13 @@ def check_tomcat_manager(
                             pass
                         _tc_final_url = driver.current_url or url
                         _tc_ptitle = ""
+                        _tc_body = ""
                         try:
                             _tc_ptitle = driver.title or ""
+                        except Exception:
+                            pass
+                        try:
+                            _tc_body = (driver.find_element("tag name", "body").text or "")[:1024]
                         except Exception:
                             pass
                         driver.save_screenshot(str(shot_path))
@@ -19763,7 +20160,8 @@ def check_tomcat_manager(
                         _tc_cls = _classify_screenshot(
                             _tc_ptitle,
                             resp.headers.get("Server", ""),
-                            resp.status_code)
+                            resp.status_code,
+                            port=port, body_snippet=_tc_body)
                         _register_screenshot(output_mgr.root, shot_path, url=_tc_final_url,
                                              ip=ip, port=port, hostname=hostname or "",
                                              scheme=scheme,
