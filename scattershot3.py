@@ -459,7 +459,7 @@ def _probe_ss3_login_default_creds(
             )
         if auth_method:
             output_mgr.log_finding(
-                title="Authentication Method Identified",
+                title="Discovery: Authentication Method Identified",
                 ip=ip, port=port, hostname=hostname,
                 command=f"authprobe --url {url} --json",
                 risk="INFO",
@@ -492,7 +492,7 @@ def _probe_ss3_login_default_creds(
                 f"{uname!r}/{pwd!r}{Style.RESET_ALL}"
             )
             output_mgr.log_finding(
-                title="Weak or Default Credentials Accepted",
+                title="Authentication: Default Credentials Accepted",
                 ip=ip, port=port, hostname=hostname,
                 command=f"authprobe --url {url} --username {uname!r} --password {pwd!r}",
                 risk="CRITICAL",
@@ -3436,7 +3436,7 @@ class OutputManager:
                         hb = ssl_result["heartbleed"]
                         if "vulnerable" in hb:
                             vulns.append({
-                                "title":    "Heartbleed (CVE-2014-0160)",
+                                "title":    "SSL/TLS Vulnerability: Heartbleed (CVE-2014-0160)",
                                 "severity": "CRITICAL",
                                 "detail":   hb,
                             })
@@ -6110,7 +6110,7 @@ def _parse_nse_findings(
                 else:
                     risk = "LOW"
                 output_mgr.log_finding(
-                    title=f"Vulners: {cve_id} (CVSS {score})",
+                    title=f"Software Version Detected: Vulners: {cve_id} (CVSS {score})",
                     ip=ip, port=port, command=cmd, hostname=hostname, risk=risk,
                     description=f"Nmap Vulners NSE detected {cve_id} (CVSS score {score}) on this service.",
                     sources="nmap-nse", cves=cve_id,
@@ -6188,7 +6188,7 @@ def _parse_nse_findings(
                 f"{ip}:{port}{Style.RESET_ALL}"
             )
             output_mgr.log_finding(
-                title="EternalBlue (MS17-010) — Host Confirmed Vulnerable",
+                title="SMB Vulnerability: EternalBlue (MS17-010) — Host Confirmed Vulnerable",
                 ip=ip, port=port, command=cmd, hostname=hostname, risk="CRITICAL",
                 description=(
                     "The host is confirmed vulnerable to MS17-010 (EternalBlue). "
@@ -6203,7 +6203,7 @@ def _parse_nse_findings(
             )
         elif re.search(r"LIKELY VULNERABLE", ms17_out, re.IGNORECASE):
             output_mgr.log_finding(
-                title="EternalBlue (MS17-010) — Likely Vulnerable (SMBv1 + Unpatched)",
+                title="SMB Vulnerability: EternalBlue (MS17-010) — Likely Vulnerable (SMBv1 + Unpatched)",
                 ip=ip, port=port, command=cmd, hostname=hostname, risk="CRITICAL",
                 description=(
                     "SMBv1 is enabled and the host has not been confirmed patched "
@@ -6263,7 +6263,7 @@ def _parse_nse_findings(
     rdp_vuln_out = scripts.get("rdp-vuln-ms12-020", "")
     if rdp_vuln_out and re.search(r"VULNERABLE", rdp_vuln_out, re.IGNORECASE):
         output_mgr.log_finding(
-            title="MS12-020 RDP Vulnerability Detected",
+            title="RDP: RDP Without NLA (BlueKeep) (MS12-020)",
             ip=ip, port=port, command=cmd, hostname=hostname, risk="HIGH",
             description=(
                 "The RDP service appears vulnerable to MS12-020, a remote DoS and "
@@ -6282,7 +6282,7 @@ def _parse_nse_findings(
         if re.search(r"ENCRYPTION_LEVEL_NONE|ENCRYPTION_LEVEL_LOW|CredSSP.*not supported",
                      rdp_enc_out, re.IGNORECASE):
             output_mgr.log_finding(
-                title="RDP Weak or No Encryption Configured",
+                title="RDP: RDP Weak or No Encryption Configured",
                 ip=ip, port=port, command=cmd, hostname=hostname, risk="HIGH",
                 description=(
                     "RDP is configured with None or Low encryption, allowing "
@@ -6311,7 +6311,7 @@ def _parse_nse_findings(
             f"{ip}:{port}{Style.RESET_ALL}"
         )
         output_mgr.log_finding(
-            title="IPMI 2.0 Cipher Suite 0 — Authentication Bypass and Hash Capture",
+            title="Authentication Bypass: IPMI 2.0 Cipher Suite 0 — Authentication Bypass and Hash Capture",
             ip=ip, port=port, command=cmd, hostname=hostname, risk="CRITICAL",
             description=(
                 "IPMI 2.0 accepts Cipher Suite 0 (NULL authentication), allowing any "
@@ -6569,7 +6569,7 @@ def _parse_nse_findings(
                 f"on {ip}:{port}{Style.RESET_ALL}"
             )
             output_mgr.log_finding(
-                title="SMB Signing Disabled or Not Required",
+                title="SMB Vulnerability: SMB Signing Not Required",
                 ip=ip, port=port, command=cmd, hostname=hostname, risk="HIGH",
                 description=(
                     "SMB packet signing is not enforced on the server, allowing an attacker "
@@ -6605,7 +6605,7 @@ def _parse_nse_findings(
             )
         if re.search(r"authentication_level:\s*share", smb_secmode_out, re.IGNORECASE):
             output_mgr.log_finding(
-                title="SMB Share-Level Authentication (No User-Level Auth)",
+                title="SMB Vulnerability: SMB Share-Level Authentication (No User-Level Auth)",
                 ip=ip, port=port, command=cmd, hostname=hostname, risk="MEDIUM",
                 description=(
                     "The SMB server uses share-level authentication (pre-NT style). "
@@ -6628,7 +6628,7 @@ def _parse_nse_findings(
             f"on {ip}:{port}{Style.RESET_ALL}"
         )
         output_mgr.log_finding(
-            title="MySQL Unauthenticated Access — Root with No Password",
+            title="Unauthenticated Access: MySQL Unauthenticated Access — Root with No Password",
             ip=ip, port=port, command=cmd, hostname=hostname, risk="CRITICAL",
             description=(
                 "MySQL accepted root login with no password. This grants complete "
@@ -7406,7 +7406,7 @@ def probe_uncertain_and_nonstandard_ports(
                     if _od_indicators:
                         _od_ind_str = "; ".join(_od_indicators)
                         output_mgr.log_finding(
-                            title="Unnecessary/Outdated Website Available",
+                            title="Out of Date Software: Unnecessary/Outdated Website Available",
                             ip=ip, port=_port, hostname=hostname,
                             command=_r["cmd"], risk="INFO",
                             description=(
@@ -7433,7 +7433,7 @@ def probe_uncertain_and_nonstandard_ports(
                         _git_body = _git_r.stdout.decode("utf-8", errors="replace").strip()
                         if "ref: refs/" in _git_body:
                             output_mgr.log_finding(
-                                title="Git Repository Exposed via Web",
+                                title="Sensitive File Exposed: Git Repository Exposed via Web",
                                 ip=ip, port=_port, hostname=hostname,
                                 command=f"curl -sk {_scheme}://{_curl_host}:{_port}/.git/HEAD",
                                 risk="HIGH",
@@ -7528,7 +7528,7 @@ def probe_uncertain_and_nonstandard_ports(
                                     ("Server Version" in _ss_body or "Current Time" in _ss_body
                                      or "Scoreboard" in _ss_body or "Server Built" in _ss_body)):
                                 output_mgr.log_finding(
-                                    title=f"{_status_label} Page Exposed",
+                                    title=f"Sensitive File Exposed: {_status_label} Page Exposed",
                                     ip=ip, port=_port, hostname=hostname,
                                     command=f"curl -sk {_scheme}://{_curl_host}:{_port}{_status_ep}",
                                     risk="MEDIUM",
@@ -7637,7 +7637,7 @@ def probe_uncertain_and_nonstandard_ports(
                                 if _php_vm:
                                     _php_ver = _php_vm.group(1)
                                 output_mgr.log_finding(
-                                    title="PHP Info Page Exposed",
+                                    title="Sensitive File Exposed: PHP Info Page Exposed",
                                     ip=ip, port=_port, hostname=hostname,
                                     command=f"curl -sk {_scheme}://{_curl_host}:{_port}{_php_ep}",
                                     risk="HIGH",
@@ -8486,7 +8486,7 @@ def port_scan(
                     # signature — it is a real detection, not a port-number
                     # guess.  Record both versioned and versionless products
                     # so every identified service appears in the findings
-                    # (versioned → "Software Version Detected", versionless
+                    # (versioned → "Software Version Detected: Software Version Detected", versionless
                     # → "Software Detected").  EOL/vuln checks still require
                     # a version string.
                     product = port_data.get("product", "")
@@ -11771,7 +11771,7 @@ def run_nuclei(
                 full_desc = " | ".join(desc_parts)
 
                 output_mgr.log_finding(
-                    title=f"[Nuclei] {title}",
+                    title=f"Uncategorized: [Nuclei] {title}",
                     ip=ip,
                     port=port,
                     command=cmd,
@@ -12104,7 +12104,7 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
             # Heartbleed
             if result.get("heartbleed") and "vulnerable" in result["heartbleed"]:
                 output_mgr.log_finding(
-                    title="Heartbleed (CVE-2014-0160) Vulnerability Detected",
+                    title="SSL/TLS Vulnerability: Heartbleed (CVE-2014-0160) Vulnerability Detected",
                     ip=ip, port=port, command=cmd, hostname=hostname, risk="CRITICAL",
                     description="sslscan: Heartbleed (CVE-2014-0160) detected — remote memory disclosure possible",
                     sources="sslscan", cves="CVE-2014-0160",
@@ -12194,7 +12194,7 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
                             )
                             continue
                         output_mgr.log_finding(
-                            title=f"Deprecated Protocol Enabled: {proto}",
+                            title=f"Insecure Protocol Detected: Deprecated Protocol Enabled: {proto}",
                             ip=ip, port=port, command=cmd, hostname=hostname,
                             risk=_proto_risk(proto),
                             description=f"sslscan: {proto} is enabled on {ip}:{port}",
@@ -12727,7 +12727,7 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                         "TLSv1.1": "TLS 1.1 is deprecated (RFC 8996) and lacks the cipher suite improvements of TLS 1.2. Industry standards (PCI-DSS, NIST SP 800-52r2) require disabling TLS 1.1.",
                     }
                     output_mgr.log_finding(
-                        title=f"Deprecated Protocol Enabled: {_norm_proto}",
+                        title=f"Insecure Protocol Detected: Deprecated Protocol Enabled: {_norm_proto}",
                         ip=ip, port=port, command=cmd, hostname=hostname,
                         risk=_proto_risk(proto_name),
                         description=_PROTO_DESCS.get(_norm_proto, f"{_norm_proto} is a deprecated protocol version that is no longer considered secure. Disable it and enforce TLS 1.2 or higher."),
@@ -16667,7 +16667,7 @@ def check_os_eol(
         if ext_eol and today <= ext_eol:
             # Past standard EOL but within extended/LTS support
             output_mgr.log_finding(
-                title=f"OS End-of-Life (Extended Support): {label}",
+                title=f"EOL Software: OS End-of-Life (Extended Support): {label}",
                 ip=ip, port=port, hostname=hostname, command=method,
                 risk="MEDIUM",
                 description=(
@@ -16688,7 +16688,7 @@ def check_os_eol(
         else:
             # Fully EOL (past both standard and extended support)
             output_mgr.log_finding(
-                title=f"OS End-of-Life: {label}",
+                title=f"EOL Software: OS End-of-Life: {label}",
                 ip=ip, port=port, hostname=hostname, command=method,
                 risk="HIGH",
                 description=(
@@ -17651,7 +17651,7 @@ def record_software(
         _sw_label = f"{_sw_label} {clean_ver}"
     _src = method.split()[0].lower()
     _sw_inv_rel = str(output_mgr.software_inventory.relative_to(output_mgr.root))
-    _sw_title_prefix = "Software Version Detected" if clean_ver else "Software Detected"
+    _sw_title_prefix = "Software Version Detected: Software Version Detected" if clean_ver else "Software Detected"
     output_mgr.log_finding(
         title=f"{_sw_title_prefix}: {_sw_label}",
         ip=ip,
@@ -17667,7 +17667,7 @@ def record_software(
     )
     if final_os:
         output_mgr.log_finding(
-            title=f"OS Version Detected: {final_os}",
+            title=f"Software Version Detected: OS Version Detected: {final_os}",
             ip=ip,
             port=port,
             command=[],
@@ -17858,7 +17858,7 @@ def check_eol_and_vulns(
                 f"Security patches are limited to the extended support programme. "
                 f"Plan for migration before extended support ends."
             )
-            _eol_title = f"EOL Software (Extended Support): {software_name} {version}"
+            _eol_title = f"EOL Software: EOL Software (Extended Support): {software_name} {version}"
             _eol_risk  = "MEDIUM"
         else:
             _eol_description = (
@@ -17928,7 +17928,7 @@ def check_eol_and_vulns(
                 _vuln_src = method.split()[0].lower() if method else "nmap"
                 _vuln_inv_rel = _eol_evidence_file(output_mgr, ip, port)
                 output_mgr.log_finding(
-                    title=f"Known Vulnerability: {software_name} {version} — {cve_desc}",
+                    title=f"Software Version Detected: Known Vulnerability: {software_name} {version} — {cve_desc}",
                     ip=ip, port=port, hostname=hostname,
                     command=method, risk="CRITICAL",
                     description=cve_desc,
@@ -20004,7 +20004,7 @@ def run_snmp_checks(
             )
             risk = "HIGH" if scope == "ext" else "MEDIUM"
             output_mgr.log_finding(
-                title="SNMP Default Community String Accepted",
+                title="SNMP: SNMP Default Community String Accepted",
                 ip=ip, port=port,
                 command=cmd_ref,
                 hostname=hostname,
@@ -20106,7 +20106,7 @@ def run_ftp_anon_check(
         except Exception:
             _ftp_rel = None
         output_mgr.log_finding(
-            title="FTP Anonymous Login Permitted",
+            title="FTP: FTP Anonymous Login Permitted",
             ip=ip, port=port,
             command=cmd_ref,
             hostname=hostname,
@@ -20291,7 +20291,7 @@ def _detect_ftp_rate_limit(
                 f"{detail}{Style.RESET_ALL}")
     else:
         output_mgr.log_finding(
-            title="FTP Brute Force Protection Not Detected",
+            title="Authentication: FTP Brute Force Protection Not Detected",
             ip=ip, port=port, hostname=hostname,
             command=cmd_ref, risk="LOW",
             description=(
@@ -20501,7 +20501,7 @@ def run_smb_null_session(
                 _share_table = _smbmap_extract_share_table(raw)
                 _share_affected = _smbmap_shares_affected(raw)
                 output_mgr.log_finding(
-                    title="SMB Null Session Permitted",
+                    title="SMB Vulnerability: SMB Null Session Permitted",
                     ip=ip, port=port,
                     command=cmd,
                     hostname=hostname,
@@ -20581,7 +20581,7 @@ def run_smb_null_session(
                 )
                 risk = "HIGH" if scope == "ext" else "MEDIUM"
                 output_mgr.log_finding(
-                    title="SMB Null Session Permitted",
+                    title="SMB Vulnerability: SMB Null Session Permitted",
                     ip=ip, port=port,
                     command=cmd,
                     hostname=hostname,
@@ -20803,7 +20803,7 @@ def _parse_smbmap_output(
                 f"{current_ip}:{port} (user={username}){Style.RESET_ALL}"
             )
             output_mgr.log_finding(
-                title="SMB Administrative Access via Credentials",
+                title="SMB Vulnerability: SMB Administrative Access via Credentials",
                 ip=current_ip, port=port, command=_cmd_str,
                 hostname=hostname,
                 risk="CRITICAL",
@@ -20842,7 +20842,7 @@ def _parse_smbmap_output(
             # Determine finding risk level and title
             if "WRITE" in permissions:
                 risk  = "CRITICAL" if is_admin else "HIGH"
-                title = "SMB Share Identified with WRITE Permissions"
+                title = "SMB Vulnerability: SMB Share Identified with WRITE Permissions"
                 desc  = (
                     f"User '{username}' has WRITE access to share '{share_name}' "
                     f"on {current_ip}:{port}."
@@ -20851,7 +20851,7 @@ def _parse_smbmap_output(
                 )
             elif "READ" in permissions:
                 risk  = "MEDIUM"
-                title = f"SMB Share Read Access: {share_name}"
+                title = f"SMB Vulnerability: SMB Share Read Access"
                 desc  = (
                     f"User '{username}' has READ-ONLY access to share '{share_name}' "
                     f"on {current_ip}:{port}. All data in this share is readable."
@@ -20860,7 +20860,7 @@ def _parse_smbmap_output(
             else:
                 # NO ACCESS — still informational; confirms share exists
                 risk  = "INFO"
-                title = f"SMB Share Exists (No Access): {share_name}"
+                title = f"SMB Vulnerability: SMB Share Exists (No Access)"
                 desc  = (
                     f"Share '{share_name}' exists on {current_ip}:{port} but "
                     f"user '{username}' has no access."
@@ -24216,7 +24216,7 @@ def log_responder_findings(
 
         # ── Finding 1: NetBIOS/LLMNR Poisoning Confirmed ──────────────────
         _write_finding({
-            "title":    "LLMNR/NBT-NS Broadcast Poisoning Possible",
+            "title":    "Network Misconfiguration: LLMNR/NBT-NS Broadcast Poisoning Possible",
             "datetime": ts, "ip": "", "port": 0, "hostname": "",
             "risk":     "HIGH",
             "command":  resp_cmd,
@@ -24235,7 +24235,7 @@ def log_responder_findings(
         # ── Finding 2: Per-type aggregate hash findings ────────────────────
         for ht, lines in type_buckets.items():
             _write_finding({
-                "title":    f"Responder Captured {ht} Hashes",
+                "title":    f"Network Misconfiguration: Responder Captured {ht} Hashes",
                 "datetime": ts, "ip": "", "port": 0, "hostname": "",
                 "risk":     _HASH_TYPE_RISK.get(ht, "HIGH"),
                 "command":  resp_cmd,
@@ -24267,7 +24267,7 @@ def log_responder_findings(
             if proto == "SMB":
                 continue   # SMB hashes already covered by per-type findings above
             _write_finding({
-                "title":    f"Responder Captured {proto} Credentials",
+                "title":    f"Network Misconfiguration: Responder Captured {proto} Credentials",
                 "datetime": ts, "ip": "", "port": 0, "hostname": "",
                 "risk":     _PROTO_RISK.get(proto.upper(), "HIGH"),
                 "command":  resp_cmd,
@@ -24282,7 +24282,7 @@ def log_responder_findings(
         # ── Finding 5: Plaintext credentials ──────────────────────────────
         if cred_lines:
             _write_finding({
-                "title":    "Responder Captured Plaintext Credentials",
+                "title":    "Network Misconfiguration: Responder Captured Plaintext Credentials",
                 "datetime": ts, "ip": "", "port": 0, "hostname": "",
                 "risk":     "CRITICAL",
                 "command":  resp_cmd,
@@ -24570,7 +24570,7 @@ def run_libssh_check(
         except Exception:
             _libssh_rel = None
         output_mgr.log_finding(
-            title=f"libSSH Authentication Bypass (CVE-2018-10933) — v{ver}",
+            title=f"SSH Vulnerability: libSSH Authentication Bypass (CVE-2018-10933) — v{ver}",
             ip=ip, port=port,
             command="Scattershot-SSH-Banner-Analysis",
             hostname=hostname, risk="CRITICAL",
@@ -24673,7 +24673,7 @@ def run_smtp_checks(
             # relay weighs availability/reputation harm rather than direct C/I
             # impact on the target — MEDIUM is the calibrated risk.
             output_mgr.log_finding(
-                title="SMTP Open Mail Relay Detected",
+                title="Network Misconfiguration: SMTP Open Mail Relay Detected",
                 ip=ip, port=port,
                 command=f"Scattershot-SMTP-Relay-Test (two-probe gated)",
                 hostname=hostname, risk="MEDIUM",
@@ -24819,7 +24819,7 @@ def _check_docker_api(
                 if isinstance(data, list):
                     label = "containers" if "containers" in endpoint else "images"
                     output_mgr.log_finding(
-                        title="Unauthenticated Docker API Exposed",
+                        title="Unauthenticated Access: Unauthenticated Docker API Exposed",
                         ip=ip, port=port, hostname=hostname,
                         command=f"curl -sk http://{ip}:{port}{endpoint}",
                         risk="CRITICAL",
@@ -24886,7 +24886,7 @@ def _check_postgres_trust(
             auth_type = struct.unpack("!I", resp[5:9])[0]
             if auth_type == 0:  # AuthenticationOk
                 output_mgr.log_finding(
-                    title="PostgreSQL Trust Authentication Enabled",
+                    title="Authentication Bypass: PostgreSQL Trust Authentication Enabled",
                     ip=ip, port=port, hostname=hostname,
                     command=f"pg-startup-msg user=postgres db=postgres -> {ip}:{port}",
                     risk="CRITICAL",
@@ -24950,7 +24950,7 @@ def _check_couchdb_unauth(
             if isinstance(dbs, list) and len(dbs) > 0:
                 db_list = ", ".join(str(d) for d in dbs[:20])
                 output_mgr.log_finding(
-                    title="Unauthenticated CouchDB Access",
+                    title="Unauthenticated Access: Unauthenticated CouchDB Access",
                     ip=ip, port=port, hostname=hostname,
                     command=f"curl -sk http://{ip}:{port}/_all_dbs",
                     risk="HIGH",
@@ -25011,7 +25011,7 @@ def _check_grafana_unauth(
                 data = {}
             if "name" in data and "id" in data:
                 output_mgr.log_finding(
-                    title="Grafana Unauthenticated API Access",
+                    title="Unauthenticated Access: Grafana Unauthenticated API Access",
                     ip=ip, port=port, hostname=hostname,
                     command=f"curl -sk http://{ip}:{port}/api/org",
                     risk="HIGH",
@@ -25116,7 +25116,7 @@ def _check_kibana_unauth(
                 elif isinstance(data.get("version"), str):
                     ver = data["version"]
                 output_mgr.log_finding(
-                    title="Unauthenticated Kibana Access",
+                    title="Unauthenticated Access: Unauthenticated Kibana Access",
                     ip=ip, port=port, hostname=hostname,
                     command=f"curl -sk -H 'kbn-xsrf: true' http://{ip}:{port}/api/status",
                     risk="HIGH",
@@ -25166,7 +25166,7 @@ def _check_cassandra_unauth(
             resp_opcode = resp[4]
             if resp_opcode == 0x02:  # READY — no auth needed
                 output_mgr.log_finding(
-                    title="Cassandra Unauthenticated CQL Access",
+                    title="Unauthenticated Access: Cassandra Unauthenticated CQL Access",
                     ip=ip, port=port, hostname=hostname,
                     command=f"cql-native-v4-startup -> {ip}:{port}",
                     risk="HIGH",
@@ -25246,7 +25246,7 @@ def _check_mongodb_native(
             if doc.get("ismaster") or doc.get("isMaster") or doc.get("isWritablePrimary"):
                 ver = doc.get("version", "unknown")
                 output_mgr.log_finding(
-                    title="MongoDB Unauthenticated Access",
+                    title="Unauthenticated Access: MongoDB Unauthenticated Access",
                     ip=ip, port=port, hostname=hostname,
                     command=f"mongodb-op-query isMaster -> {ip}:{port}",
                     risk="HIGH",
@@ -25374,7 +25374,7 @@ def _check_upnp_ssdp(
             if locations:
                 detail_lines.append("Locations: " + "; ".join(sorted(locations)[:5]))
             output_mgr.log_finding(
-                title="UPnP/SSDP Service Responding",
+                title="Network Misconfiguration: UPnP/SSDP Service Responding",
                 ip=ip, port=port, hostname=hostname,
                 command=f"ssdp-m-search ssdp:all -> {ip}:{port}",
                 risk="MEDIUM",
@@ -25504,7 +25504,7 @@ def run_mysql_auth_check(
                     (maj == 5 and mino == 6 and patch < 6) or
                     (maj == 5 and mino in (1, 2, 3))):
                 output_mgr.log_finding(
-                    title=f"MySQL CVE-2012-2122 Authentication Bypass Risk (v{server_ver})",
+                    title=f"Database: MySQL CVE-2012-2122 Authentication Bypass Risk (v{server_ver})",
                     ip=ip, port=port,
                     command="Scattershot-MySQL-Auth-Check",
                     hostname=hostname, risk="HIGH",
@@ -25554,7 +25554,7 @@ def run_mysql_auth_check(
                     f"{ip}:{port}{Style.RESET_ALL}"
                 )
                 output_mgr.log_finding(
-                    title="MySQL Unauthenticated Access — Root with No Password",
+                    title="Unauthenticated Access: MySQL Unauthenticated Access — Root with No Password",
                     ip=ip, port=port,
                     command="Scattershot-MySQL-Null-Auth",
                     hostname=hostname, risk="CRITICAL",
@@ -26479,7 +26479,7 @@ def run_nfs_enum(
         out_file.write_text(_formatted_evidence, encoding="utf-8")
 
         output_mgr.log_finding(
-            title=f"NFS: Export Accessible"
+            title=f"Unauthenticated Access: NFS: Export Accessible"
                   f"{' — World-Readable' if world else ''}",
             ip=ip, port=port,
             command=" ".join(cmd),
@@ -26713,7 +26713,7 @@ def run_printer_enum(
 
             _risk = "HIGH" if _fs_access else "MEDIUM"
             output_mgr.log_finding(
-                title=f"JetDirect / PJL Printer Accessible"
+                title=f"Network Misconfiguration: JetDirect / PJL Printer Accessible"
                       f"{'  — Filesystem Access' if _fs_access else ''}"
                       f"{'  — ' + model_info if model_info else ''}",
                 ip=ip, port=port,
@@ -27576,7 +27576,7 @@ def check_esxi_fingerprint(
     except Exception:
         _esxi_rel = None
     output_mgr.log_finding(
-        title=f"VMware ESXi Management Interface Exposed{ver_str}{build_str}",
+        title=f"Debug Endpoint Exposed: VMware ESXi Management Interface Exposed{ver_str}{build_str}",
         ip=ip, port=port,
         command=f"Scattershot-ESXi-Fingerprint {scheme}://{ip}:{port}/ui/",
         hostname=hostname, risk=risk,
@@ -27667,7 +27667,7 @@ def run_ipmi_check(
                     f"on {ip}:{port} user={user}{Style.RESET_ALL}"
                 )
                 output_mgr.log_finding(
-                    title=f"IPMI Cipher Suite 0 Auth Bypass Confirmed — user={user}",
+                    title=f"Authentication Bypass: IPMI Cipher Suite 0 Auth Bypass Confirmed — user={user}",
                     ip=ip, port=port,
                     command=" ".join(cmd),
                     hostname=hostname, risk="CRITICAL",
@@ -27928,7 +27928,7 @@ def run_vnc_check(
                             f"({Path(_vnc_screenshot).name})."
                         )
                     output_mgr.log_finding(
-                        title="VNC: No Authentication Required",
+                        title="Unauthenticated Access: VNC: No Authentication Required",
                         ip=ip, port=port,
                         command="Scattershot-VNC-Handshake",
                         hostname=hostname, risk="CRITICAL",
@@ -28048,7 +28048,7 @@ def run_winrm_check(
 
         if status in (200, 202) and "Identify" in resp.text:
             output_mgr.log_finding(
-                title="WinRM: No Authentication Required",
+                title="Unauthenticated Access: WinRM: No Authentication Required",
                 ip=ip, port=port,
                 command=f"HTTP POST {url}",
                 hostname=hostname, risk="CRITICAL",
@@ -28241,7 +28241,7 @@ def run_telnet_check(
         ntlm_hint = " Microsoft Telnet (NTLM info may leak domain/hostname data)."
 
     output_mgr.log_finding(
-        title="Telnet Service Exposed — Cleartext Protocol",
+        title="Insecure Protocol Detected: Telnet Service Exposed — Cleartext Protocol",
         ip=ip, port=port,
         command=f"Scattershot-Telnet-Banner {ip}:{port}",
         hostname=hostname, risk=risk,
@@ -28338,7 +28338,7 @@ def run_k8s_check(
                 lines.append(f"/pods status: {pods_resp.status_code}")
                 if pods_resp.status_code == 200:
                     output_mgr.log_finding(
-                        title="Kubelet API: Unauthenticated Access",
+                        title="Unauthenticated Access: Kubelet API: Unauthenticated Access",
                         ip=ip, port=port,
                         command=f"HTTP GET {base_url}/pods",
                         hostname=hostname, risk="CRITICAL",
@@ -28428,7 +28428,7 @@ def run_k8s_check(
                         pass
 
                     output_mgr.log_finding(
-                        title="Kubernetes API: Unauthenticated Access",
+                        title="Unauthenticated Access: Kubernetes API: Unauthenticated Access",
                         ip=ip, port=port,
                         command=f"HTTP GET {base_url}/api",
                         hostname=hostname, risk="CRITICAL",
@@ -28470,7 +28470,7 @@ def run_k8s_check(
                         pass
                 elif api_resp.status_code in (401, 403):
                     output_mgr.log_finding(
-                        title="Kubernetes API Endpoint Detected",
+                        title="Discovery: Kubernetes API Endpoint Detected",
                         ip=ip, port=port,
                         command=f"HTTP GET {base_url}/version",
                         hostname=hostname, risk="INFO",
@@ -28585,7 +28585,7 @@ def run_rsync_check(
                         f"  Test write: rsync -av testfile rsync://{ip}:{port}/<module>/"
                     ),
                     hostname=hostname,
-                    source_finding="Rsync: Anonymous Module Access",
+                    source_finding="Unauthenticated Access: Rsync: Anonymous Module Access",
                     priority="HIGH",
                 )
             except Exception:
@@ -28639,7 +28639,7 @@ def run_rmi_check(
                 f"  {Fore.YELLOW}[!] Java RMI registry exposed on {ip}:{port}{Style.RESET_ALL}"
             )
             output_mgr.log_finding(
-                title="Java RMI Registry Exposed",
+                title="Network Misconfiguration: Java RMI Registry Exposed",
                 ip=ip, port=port,
                 command="Scattershot-RMI-Handshake",
                 hostname=hostname, risk="HIGH",
@@ -28732,7 +28732,7 @@ def run_x11_check(
                 lines.append("VULNERABLE: X11 display accepts unauthenticated connections")
                 lines.append(result.stdout[:2000])
                 output_mgr.log_finding(
-                    title="Unauthenticated X11 Display Access",
+                    title="Unauthenticated Access: Unauthenticated X11 Display Access",
                     ip=ip, port=port,
                     command=f"xdpyinfo -display {ip}:{display_num}",
                     hostname=hostname, risk="HIGH",
@@ -28799,7 +28799,7 @@ def run_x11_check(
                 lines.append("VULNERABLE: X11 display accepted connection without authentication")
                 lines.append(f"Handshake response ({len(resp)} bytes): {resp[:64].hex()}")
                 output_mgr.log_finding(
-                    title="Unauthenticated X11 Display Access",
+                    title="Unauthenticated Access: Unauthenticated X11 Display Access",
                     ip=ip, port=port,
                     command="X11-Protocol-Handshake",
                     hostname=hostname, risk="HIGH",
@@ -28843,7 +28843,7 @@ def run_x11_check(
             elif resp and resp[0] == 0:  # Failed — auth required
                 lines.append("X11 display requires authentication (connection rejected)")
                 output_mgr.log_finding(
-                    title="X11 Display Detected (Authentication Required)",
+                    title="Discovery: X11 Display Detected (Authentication Required)",
                     ip=ip, port=port,
                     command="X11-Protocol-Handshake",
                     hostname=hostname, risk="INFO",
@@ -28861,7 +28861,7 @@ def run_x11_check(
             elif resp and resp[0] == 2:  # Authenticate — server wants auth data
                 lines.append("X11 display demands authentication exchange")
                 output_mgr.log_finding(
-                    title="X11 Display Detected (Authentication Required)",
+                    title="Discovery: X11 Display Detected (Authentication Required)",
                     ip=ip, port=port,
                     command="X11-Protocol-Handshake",
                     hostname=hostname, risk="INFO",
@@ -29217,7 +29217,7 @@ def run_mqtt_check(
                     f"  {Fore.RED}[!!] MQTT NO AUTH on {ip}:{port}{Style.RESET_ALL}"
                 )
                 output_mgr.log_finding(
-                    title="MQTT Broker: No Authentication Required",
+                    title="IoT Protocol: MQTT Broker: No Authentication Required",
                     ip=ip, port=port,
                     command="Scattershot-MQTT-CONNECT",
                     hostname=hostname, risk="HIGH",
@@ -29257,7 +29257,7 @@ def run_mqtt_check(
                     pass
             else:
                 output_mgr.log_finding(
-                    title="MQTT Broker Detected",
+                    title="IoT Protocol: MQTT Broker Detected",
                     ip=ip, port=port,
                     command="Scattershot-MQTT-CONNECT",
                     hostname=hostname, risk="INFO",
@@ -29826,7 +29826,7 @@ def run_jenkins_unauth_check(
                 f"  {Fore.RED}[!!] Jenkins Groovy Console OPEN on {base_url}/script{Style.RESET_ALL}"
             )
             output_mgr.log_finding(
-                title="Jenkins: Unauthenticated Groovy Console (RCE)",
+                title="Unauthenticated Access: Jenkins: Unauthenticated Groovy Console (RCE)",
                 ip=ip, port=port,
                 command=f"HTTP GET {base_url}/script",
                 hostname=hostname, risk="CRITICAL",
@@ -29937,7 +29937,7 @@ def run_jenkins_unauth_check(
 
         if manage_resp.status_code == 200 and "manage" in manage_resp.text.lower():
             output_mgr.log_finding(
-                title="Jenkins: Unauthenticated Management Console",
+                title="Unauthenticated Access: Jenkins: Unauthenticated Management Console",
                 ip=ip, port=port,
                 command=f"HTTP GET {base_url}/manage",
                 hostname=hostname, risk="HIGH",
@@ -30504,7 +30504,7 @@ def run_sploitus(cves: "list[str]", output_mgr: "OutputManager", scope: str) -> 
                     "origin":    ex.get("source", ""),
                 }
                 output_mgr.log_finding(
-                    title=f"Public Exploit Available: {cve}",
+                    title=f"Software Version Detected: Public Exploit Available: {cve}",
                     ip="", port=0,
                     command=f"sploitus API: {cve}",
                     risk="HIGH",
@@ -30739,7 +30739,7 @@ def run_metasploit_search(
             )
 
         output_mgr.log_finding(
-            title=f"Metasploit Module Available: {cve}",
+            title=f"Software Version Detected: Metasploit Module Available: {cve}",
             ip="", port=0,
             command=" ".join(cmd),
             risk="HIGH",
@@ -31058,7 +31058,7 @@ def _run_odat(ip, port, output_mgr, odat_path, hostname=None, username=None, pas
         out_file.write_text(raw, encoding="utf-8")
         if re.search(r'CVE-|vulnerable|xterm|OK\b', raw, re.I):
             output_mgr.log_finding(
-                title="Oracle Database Vulnerability (odat)", ip=ip, port=port, hostname=hostname,
+                title="Oracle: Oracle Database Vulnerability", ip=ip, port=port, hostname=hostname,
                 command=" ".join(cmd), risk="HIGH",
                 description=(
                     "odat identified an Oracle Database vulnerability or "
@@ -31093,7 +31093,7 @@ def _run_msdat(ip, port, output_mgr, msdat_path, hostname=None, username=None, p
         out_file.write_text(raw, encoding="utf-8")
         if re.search(r'vulnerable|xp_cmdshell|EXECUTE|pwned', raw, re.I):
             output_mgr.log_finding(
-                title="MSSQL Vulnerability (msdat)", ip=ip, port=port, hostname=hostname,
+                title="MSSQL: MSSQL Vulnerability", ip=ip, port=port, hostname=hostname,
                 command=" ".join(cmd), risk="HIGH",
                 description=(
                     "msdat identified a MSSQL vulnerability or exploitable "

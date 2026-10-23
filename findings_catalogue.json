@@ -111,7 +111,7 @@
     },
     {
       "id": "SS3-003",
-      "title": "TLS 1.0 Enabled",
+      "title": "Insecure Protocol Detected: TLS 1.0 Enabled",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -169,7 +169,7 @@
     },
     {
       "id": "SS3-004",
-      "title": "TLS 1.1 Enabled",
+      "title": "Insecure Protocol Detected: TLS 1.1 Enabled",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -225,7 +225,7 @@
     },
     {
       "id": "SS3-005",
-      "title": "SSLv2 Enabled",
+      "title": "Insecure Protocol Detected: SSLv2 Enabled",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -283,7 +283,7 @@
     },
     {
       "id": "SS3-006",
-      "title": "SSLv3 Enabled",
+      "title": "Insecure Protocol Detected: SSLv3 Enabled",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -341,7 +341,7 @@
     },
     {
       "id": "SS3-007",
-      "title": "Weak Cipher Suite Enabled",
+      "title": "SSL/TLS Ciphers: Weak Cipher Suite Enabled",
       "aliases": [
         "EXPORT Cipher Supported",
         "Weak SSL Cipher",
@@ -453,7 +453,7 @@
     },
     {
       "id": "SS3-008",
-      "title": "Self-Signed TLS Certificate",
+      "title": "SSL/TLS Certificate: Self-Signed TLS Certificate",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -509,7 +509,7 @@
     },
     {
       "id": "SS3-009",
-      "title": "Expired TLS Certificate",
+      "title": "SSL/TLS Certificate: Expired TLS Certificate",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -563,7 +563,7 @@
     },
     {
       "id": "SS3-010",
-      "title": "TLS Heartbleed Vulnerability",
+      "title": "SSL/TLS Vulnerability: TLS Heartbleed Vulnerability",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -624,7 +624,7 @@
     },
     {
       "id": "SS3-011",
-      "title": "SMB Signing Disabled",
+      "title": "SMB Vulnerability: SMB Signing Not Required",
       "aliases": [
         "NTLM Relay via Unsigned SMB",
         "SMB Signing Not Required",
@@ -728,7 +728,7 @@
     },
     {
       "id": "SS3-012",
-      "title": "SMB Share Accessible (No Authentication)",
+      "title": "SMB Vulnerability: SMB Share Accessible (No Authentication)",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -788,7 +788,7 @@
     },
     {
       "id": "SS3-013",
-      "title": "SMB Share Accessible (Authenticated)",
+      "title": "SMB Vulnerability: SMB Share Accessible (Authenticated)",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -846,7 +846,7 @@
     },
     {
       "id": "SS3-014",
-      "title": "LLMNR/NBT-NS Response Captured (Responder)",
+      "title": "Network Misconfiguration: LLMNR/NBT-NS Response Captured (Responder)",
       "aliases": [
         "LLMNR/NBT-NS Response Captured (Responder)",
         "NTLM Hash Captured via Responder",
@@ -962,7 +962,7 @@
     },
     {
       "id": "SS3-015",
-      "title": "NTLMv1 Hash Captured",
+      "title": "Network Misconfiguration: NTLMv1 Hash Captured",
       "aliases": [
         "LLMNR/NBT-NS Response Captured (Responder)",
         "NTLM Hash Captured via Responder",
@@ -1078,7 +1078,7 @@
     },
     {
       "id": "SS3-016",
-      "title": "NTLMv2 Hash Captured",
+      "title": "Network Misconfiguration: NTLMv2 Hash Captured",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -1136,7 +1136,7 @@
     },
     {
       "id": "SS3-017",
-      "title": "Default Credentials Accepted",
+      "title": "Authentication: Default Credentials Accepted",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -1195,7 +1195,7 @@
     },
     {
       "id": "SS3-018",
-      "title": "SSH Brute-Force Credentials Valid",
+      "title": "Authentication: Working Credentials Found via Brute Force",
       "aliases": [
         "Default Credentials Accepted on API Login Endpoint",
         "SSH Brute-Force Credentials Valid",
@@ -1307,7 +1307,7 @@
     },
     {
       "id": "SS3-019",
-      "title": "FTP Anonymous Login Enabled",
+      "title": "FTP: FTP Anonymous Login Enabled",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -1365,7 +1365,7 @@
     },
     {
       "id": "SS3-020",
-      "title": "Nuclei: Known CVE Vulnerability Detected",
+      "title": "Software Version Detected: Known CVE Vulnerability Detected",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -1419,7 +1419,7 @@
     },
     {
       "id": "SS3-021",
-      "title": "Nuclei: Exposed Admin Panel",
+      "title": "Debug Endpoint Exposed: Exposed Admin Panel",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -1475,7 +1475,7 @@
     },
     {
       "id": "SS3-022",
-      "title": "Nuclei: Default Login Accepted",
+      "title": "Authentication: Default Credentials Accepted",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -1587,7 +1587,7 @@
     },
     {
       "id": "SS3-024",
-      "title": "HTTP Security Header Missing",
+      "title": "Missing Security Header: HTTP Security Header Missing",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -1913,7 +1913,7 @@
     },
     {
       "id": "SS3-029",
-      "title": "SNMP Community String Exposed",
+      "title": "SNMP: SNMP Community String Exposed",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -1974,7 +1974,7 @@
     },
     {
       "id": "SS3-030",
-      "title": "LDAP Anonymous Bind Permitted",
+      "title": "LDAP: LDAP Anonymous Bind Permitted",
       "aliases": [
         "LDAP Domain Users Enumerated",
         "Valid Kerberos Usernames Enumerated",
@@ -2129,7 +2129,7 @@
     },
     {
       "id": "SS3-032",
-      "title": "Kerberoastable Service Account Identified",
+      "title": "Active Directory: Kerberoastable Service Account Identified",
       "aliases": [
         "Kerberoast Attack Surface",
         "Kerberoastable Service Account Identified"
@@ -2226,7 +2226,7 @@
     },
     {
       "id": "SS3-033",
-      "title": "AS-REP Roastable Account Identified",
+      "title": "Active Directory: AS-REP Roastable Account Identified",
       "aliases": [
         "AS-REP Roastable Account Identified",
         "Kerberos Pre-Auth Not Required",
@@ -2317,7 +2317,7 @@
     },
     {
       "id": "SS3-034",
-      "title": "BloodHound: Attack Path to Domain Admin Found",
+      "title": "Active Directory: BloodHound: Attack Path to Domain Admin Found",
       "aliases": [
         "BloodHound AD Graph Data Collected",
         "BloodHound: Attack Path to Domain Admin Found",
@@ -2428,7 +2428,7 @@
     },
     {
       "id": "SS3-035",
-      "title": "NFS: Export Accessible",
+      "title": "Unauthenticated Access: NFS: Export Accessible",
       "aliases": [
         "NFS Export Accessible Without Authentication",
         "NFS Export Accessible",
@@ -2490,7 +2490,7 @@
     },
     {
       "id": "SS3-036",
-      "title": "RDP Exposed to Network",
+      "title": "RDP: RDP Exposed to Network",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -2553,7 +2553,7 @@
     },
     {
       "id": "SS3-037",
-      "title": "Telnet Service Exposed",
+      "title": "Insecure Protocol Detected: Telnet Service Exposed",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -2611,7 +2611,7 @@
     },
     {
       "id": "SS3-038",
-      "title": "FTP Cleartext Credentials",
+      "title": "FTP: FTP Cleartext Credentials",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -2669,7 +2669,7 @@
     },
     {
       "id": "SS3-039",
-      "title": "VNC Accessible Without Authentication",
+      "title": "Authentication Bypass: VNC Accessible Without Authentication",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -2931,7 +2931,7 @@
     },
     {
       "id": "SS3-042",
-      "title": "IPMI Authentication Bypass",
+      "title": "Authentication Bypass: IPMI Authentication Bypass",
       "aliases": [
         "IPMI 2.0 Cipher Suite 0 — Authentication Bypass and Hash Capture",
         "IPMI Cipher Suite 0 Auth Bypass Confirmed",
@@ -3051,7 +3051,7 @@
     },
     {
       "id": "SS3-043",
-      "title": "Oracle Database Default Credentials (ODAT)",
+      "title": "Authentication: Default Credentials Accepted",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -3109,7 +3109,7 @@
     },
     {
       "id": "SS3-044",
-      "title": "MSSQL Default Credentials (msdat)",
+      "title": "Authentication: Default Credentials Accepted",
       "aliases": [
         "SQL Server Default Credentials",
         "MSSQL Default Credentials (msdat)",
@@ -3219,7 +3219,7 @@
     },
     {
       "id": "SS3-045",
-      "title": "Sploitus: Public Exploit Available for Detected Version",
+      "title": "Software Version Detected: Public Exploit Available for Detected Version",
       "aliases": [
         "Sploitus: Public Exploit Available for Detected Version",
         "Metasploit Module Available",
@@ -3314,7 +3314,7 @@
     },
     {
       "id": "SS3-046",
-      "title": "Metasploit Module Available for Detected Vulnerability",
+      "title": "Software Version Detected: Metasploit Module Available for Detected Vulnerability",
       "aliases": [
         "Sploitus: Public Exploit Available for Detected Version",
         "Metasploit Module Available",
@@ -3411,7 +3411,7 @@
     },
     {
       "id": "SS3-047",
-      "title": "EternalBlue (MS17-010) — Host Confirmed Vulnerable",
+      "title": "SMB Vulnerability: EternalBlue (MS17-010) — Host Confirmed Vulnerable",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -3484,7 +3484,7 @@
     },
     {
       "id": "SS3-048",
-      "title": "EternalBlue (MS17-010) — Likely Vulnerable (SMBv1 + Unpatched)",
+      "title": "SMB Vulnerability: EternalBlue (MS17-010) — Likely Vulnerable (SMBv1 + Unpatched)",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -3550,7 +3550,7 @@
     },
     {
       "id": "SS3-049",
-      "title": "SMBv1 Protocol Enabled (EternalBlue Risk)",
+      "title": "SMB Vulnerability: SMBv1 Protocol Enabled (EternalBlue Risk)",
       "aliases": [
         "SMBv1 Protocol in Use",
         "SMBv1 Protocol Enabled (EternalBlue risk)"
@@ -3661,7 +3661,7 @@
     },
     {
       "id": "SS3-050",
-      "title": "IPMI 2.0 Cipher Suite 0 — Authentication Bypass and Hash Capture",
+      "title": "Authentication Bypass: IPMI 2.0 Cipher Suite 0 — Authentication Bypass and Hash Capture",
       "aliases": [
         "IPMI 2.0 Cipher Suite 0 — Authentication Bypass and Hash Capture",
         "IPMI Cipher Suite 0 Auth Bypass Confirmed",
@@ -4100,7 +4100,7 @@
     },
     {
       "id": "SS3-054",
-      "title": "MS12-020 RDP Vulnerability Detected",
+      "title": "RDP: RDP Without NLA (BlueKeep) (MS12-020)",
       "aliases": [
         "RDP Without NLA (Network Level Authentication) — BlueKeep Exposure",
         "MS12-020 RDP Vulnerability Detected",
@@ -4220,7 +4220,7 @@
     },
     {
       "id": "SS3-055",
-      "title": "RDP Weak or No Encryption Configured",
+      "title": "RDP: RDP Weak or No Encryption Configured",
       "aliases": [
         "RDP Without NLA (Network Level Authentication) — BlueKeep Exposure",
         "MS12-020 RDP Vulnerability Detected",
@@ -4333,7 +4333,7 @@
     },
     {
       "id": "SS3-056",
-      "title": "RDP Without NLA (Network Level Authentication) — BlueKeep Exposure",
+      "title": "RDP: RDP Without NLA (BlueKeep) (MS12-020)",
       "aliases": [
         "RDP Without NLA (Network Level Authentication) — BlueKeep Exposure",
         "MS12-020 RDP Vulnerability Detected",
@@ -4449,7 +4449,7 @@
     },
     {
       "id": "SS3-057",
-      "title": "NFS Export Points Enumerated — Potentially Unauthenticated Access",
+      "title": "Enumeration: NFS Export Points Enumerated — Potentially Unauthenticated Access",
       "aliases": [
         "NFS Share Exposed",
         "NFS World-Readable Export",
@@ -4569,7 +4569,7 @@
     },
     {
       "id": "SS3-058",
-      "title": "NFS Directory Listing Accessible",
+      "title": "Unauthenticated Access: NFS Directory Listing Accessible",
       "aliases": [
         "NFS Share Exposed",
         "NFS World-Readable Export",
@@ -4689,7 +4689,7 @@
     },
     {
       "id": "SS3-059",
-      "title": "SMTP Open Mail Relay Detected",
+      "title": "Network Misconfiguration: SMTP Open Mail Relay Detected",
       "aliases": [
         "SMTP Open Mail Relay Detected",
         "Open Mail Relay"
@@ -4793,7 +4793,7 @@
     },
     {
       "id": "SS3-060",
-      "title": "SMTP User Enumeration Possible via VRFY",
+      "title": "Enumeration: SMTP User Enumeration Possible via VRFY",
       "aliases": [
         "SMTP User Enumeration Possible via VRFY",
         "SMTP VRFY Enumeration"
@@ -4887,7 +4887,7 @@
     },
     {
       "id": "SS3-061",
-      "title": "SIP Extension / User Enumeration",
+      "title": "Enumeration: SIP Extension / User Enumeration",
       "aliases": [
         "SIP User Enumeration",
         "SIP Extension / User Enumeration"
@@ -5089,7 +5089,7 @@
     },
     {
       "id": "SS3-063",
-      "title": "JetDirect / PJL Printer Accessible",
+      "title": "Network Misconfiguration: JetDirect / PJL Printer Accessible",
       "aliases": [
         "JetDirect / PJL Printer Accessible",
         "Printer JetDirect Service Accessible",
@@ -5193,7 +5193,7 @@
     },
     {
       "id": "SS3-064",
-      "title": "Redis Unauthenticated Access",
+      "title": "Unauthenticated Access: Redis Unauthenticated Access",
       "aliases": [
         "Redis Authentication Disabled",
         "Redis No Auth",
@@ -5304,7 +5304,7 @@
     },
     {
       "id": "SS3-065",
-      "title": "MySQL Unauthenticated Access — Root with No Password",
+      "title": "Unauthenticated Access: MySQL Unauthenticated Access — Root with No Password",
       "aliases": [
         "MySQL Unauthenticated Access — Root with No Password",
         "MySQL Root No Password",
@@ -5413,7 +5413,7 @@
     },
     {
       "id": "SS3-066",
-      "title": "MySQL CVE-2012-2122 Authentication Bypass Risk",
+      "title": "Database: MySQL CVE-2012-2122 Authentication Bypass Risk",
       "aliases": [
         "MySQL Authentication Bypass",
         "MySQL CVE-2012-2122 Authentication Bypass Risk"
@@ -5523,7 +5523,7 @@
     },
     {
       "id": "SS3-067",
-      "title": "VMware ESXi Management Interface Exposed",
+      "title": "Debug Endpoint Exposed: VMware ESXi Management Interface Exposed",
       "aliases": [
         "ESXi Host Accessible",
         "VMware vSphere Exposed",
@@ -5647,7 +5647,7 @@
     },
     {
       "id": "SS3-068",
-      "title": "RPC Null Session Permitted",
+      "title": "RPC: RPC Null Session Permitted",
       "aliases": [
         "RPC Null Session Permitted",
         "SMB Share-Level Authentication (No User-Level Auth)",
@@ -5758,7 +5758,7 @@
     },
     {
       "id": "SS3-069",
-      "title": "SMB Null Session Permitted",
+      "title": "SMB Vulnerability: SMB Null Session Permitted",
       "aliases": [
         "RPC Null Session Permitted",
         "SMB Share-Level Authentication (No User-Level Auth)",
@@ -5871,7 +5871,7 @@
     },
     {
       "id": "SS3-070",
-      "title": "SMB Administrative Access via Credentials",
+      "title": "SMB Vulnerability: SMB Administrative Access via Credentials",
       "aliases": [
         "SMB Share Identified with WRITE Permissions",
         "SMB Administrative Access via Credentials",
@@ -5978,7 +5978,7 @@
     },
     {
       "id": "SS3-071",
-      "title": "SMB Share Identified with WRITE Permissions",
+      "title": "SMB Vulnerability: SMB Share Identified with WRITE Permissions",
       "aliases": [
         "SMB Share Identified with WRITE Permissions",
         "SMB Administrative Access via Credentials",
@@ -6084,7 +6084,7 @@
     },
     {
       "id": "SS3-072",
-      "title": "SMB Share-Level Authentication (No User-Level Auth)",
+      "title": "SMB Vulnerability: SMB Share-Level Authentication (No User-Level Auth)",
       "aliases": [
         "RPC Null Session Permitted",
         "SMB Share-Level Authentication (No User-Level Auth)",
@@ -6194,7 +6194,7 @@
     },
     {
       "id": "SS3-073",
-      "title": "BloodHound AD Graph Data Collected",
+      "title": "Active Directory: BloodHound AD Graph Data Collected",
       "aliases": [
         "BloodHound AD Graph Data Collected",
         "BloodHound: Attack Path to Domain Admin Found",
@@ -6305,7 +6305,7 @@
     },
     {
       "id": "SS3-074",
-      "title": "LDAP Domain Users Enumerated",
+      "title": "Enumeration: LDAP Domain Users Enumerated",
       "aliases": [
         "LDAP Domain Users Enumerated",
         "Valid Kerberos Usernames Enumerated",
@@ -6411,7 +6411,7 @@
     },
     {
       "id": "SS3-075",
-      "title": "Valid Kerberos Usernames Enumerated",
+      "title": "Enumeration: Valid Kerberos Usernames Enumerated",
       "aliases": [
         "LDAP Domain Users Enumerated",
         "Valid Kerberos Usernames Enumerated",
@@ -6516,7 +6516,7 @@
     },
     {
       "id": "SS3-076",
-      "title": "Domain Accounts with Password Not Required",
+      "title": "Authentication: Domain Accounts with Password Not Required",
       "aliases": [
         "PASSWD_NOTREQD Flag Set",
         "Kerberos Account No Pre-Auth",
@@ -6612,7 +6612,7 @@
     },
     {
       "id": "SS3-077",
-      "title": "Privileged Domain Accounts Identified",
+      "title": "Active Directory: Privileged Domain Accounts Identified",
       "aliases": [
         "SMB Share Identified with WRITE Permissions",
         "SMB Administrative Access via Credentials",
@@ -7056,7 +7056,7 @@
     },
     {
       "id": "SS3-081",
-      "title": "WordPress User Enumeration",
+      "title": "Enumeration: WordPress User Enumeration",
       "aliases": [
         "WordPress Plugin Vulnerability",
         "WordPress Vulnerability Detected (WPScan)",
@@ -7562,7 +7562,7 @@
     },
     {
       "id": "SS3-086",
-      "title": "Authentication Method Identified",
+      "title": "Discovery: Authentication Method Identified",
       "aliases": [
         "Default Page Detected",
         "Default Webpage Detected",
@@ -7674,7 +7674,7 @@
     },
     {
       "id": "SS3-087",
-      "title": "Valid Credentials via Brute Force",
+      "title": "Authentication: Working Credentials Found via Brute Force",
       "aliases": [
         "Default Credentials Accepted on API Login Endpoint",
         "SSH Brute-Force Credentials Valid",
@@ -7784,7 +7784,7 @@
     },
     {
       "id": "SS3-088",
-      "title": "Public Exploit Available",
+      "title": "Software Version Detected: Public Exploit Available",
       "aliases": [
         "Sploitus: Public Exploit Available for Detected Version",
         "Metasploit Module Available",
@@ -7881,7 +7881,7 @@
     },
     {
       "id": "SS3-089",
-      "title": "Metasploit Module Available",
+      "title": "Software Version Detected: Metasploit Module Available",
       "aliases": [
         "Sploitus: Public Exploit Available for Detected Version",
         "Metasploit Module Available",
@@ -8091,7 +8091,7 @@
     },
     {
       "id": "SS3-091",
-      "title": "Deprecated Protocol Enabled",
+      "title": "Insecure Protocol Detected: Deprecated Protocol Enabled",
       "aliases": [
         "Plaintext Credential Captured",
         "Unencrypted Protocol Detected",
@@ -9509,7 +9509,7 @@
     },
     {
       "id": "SS3-105",
-      "title": "OS Version Detected",
+      "title": "Software Version Detected: OS Version Detected",
       "aliases": [
         "Software Version Detected",
         "Service Banner",
@@ -9608,7 +9608,7 @@
     },
     {
       "id": "SS3-106",
-      "title": "OS End-of-Life",
+      "title": "EOL Software: OS End-of-Life",
       "aliases": [
         "OS End-of-Life",
         "OS End-of-Life (Extended Support)",
@@ -9712,7 +9712,7 @@
     },
     {
       "id": "SS3-107",
-      "title": "OS End-of-Life (Extended Support)",
+      "title": "EOL Software: OS End-of-Life (Extended Support)",
       "aliases": [
         "OS End-of-Life",
         "OS End-of-Life (Extended Support)",
@@ -9816,7 +9816,7 @@
     },
     {
       "id": "SS3-108",
-      "title": "Software Version Detected",
+      "title": "Software Version Detected: Software Version Detected",
       "aliases": [
         "Software Version Detected",
         "Service Banner",
@@ -9916,7 +9916,7 @@
     },
     {
       "id": "SS3-109",
-      "title": "Known Vulnerability",
+      "title": "Software Version Detected: Known Vulnerability",
       "aliases": [
         "Nessus Critical Vulnerability",
         "Nessus High Vulnerability",
@@ -10016,7 +10016,7 @@
     },
     {
       "id": "SS3-110",
-      "title": "Vulners CVE Match",
+      "title": "Software Version Detected: Vulners CVE Match",
       "aliases": [
         "Nessus Critical Vulnerability",
         "Nessus High Vulnerability",
@@ -10116,7 +10116,7 @@
     },
     {
       "id": "SS-001",
-      "title": "[Nuclei] {title}",
+      "title": "Uncategorized: [Nuclei] {title}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10235,7 +10235,7 @@
     },
     {
       "id": "SS-004",
-      "title": "Deprecated Protocol Enabled: {_norm_proto}",
+      "title": "Insecure Protocol Detected: Deprecated Protocol Enabled: {_norm_proto}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10274,7 +10274,7 @@
     },
     {
       "id": "SS-005",
-      "title": "Deprecated Protocol Enabled: {_TESTSSL_PROTO_IDS[_tsf_id]}",
+      "title": "Insecure Protocol Detected: Deprecated Protocol Enabled: {_TESTSSL_PROTO_IDS[_tsf_id]}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10313,7 +10313,7 @@
     },
     {
       "id": "SS-006",
-      "title": "Deprecated Protocol Enabled: {proto}",
+      "title": "Insecure Protocol Detected: Deprecated Protocol Enabled: {proto}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10352,7 +10352,7 @@
     },
     {
       "id": "SS-007",
-      "title": "EOL Software (Extended Support): {software_name} {version}",
+      "title": "EOL Software: EOL Software (Extended Support): {software_name} {version}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10469,7 +10469,7 @@
     },
     {
       "id": "SS-010",
-      "title": "IPMI Cipher Suite 0 Auth Bypass Confirmed — user={user}",
+      "title": "Authentication Bypass: IPMI Cipher Suite 0 Auth Bypass Confirmed — user={user}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10508,7 +10508,7 @@
     },
     {
       "id": "SS-011",
-      "title": "Known Vulnerability: {software_name} {version} — {cve_desc}",
+      "title": "Software Version Detected: Known Vulnerability: {software_name} {version} — {cve_desc}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10547,7 +10547,7 @@
     },
     {
       "id": "SS-012",
-      "title": "libSSH Authentication Bypass (CVE-2018-10933) — v{ver}",
+      "title": "SSH Vulnerability: libSSH Authentication Bypass (CVE-2018-10933) — v{ver}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10586,7 +10586,7 @@
     },
     {
       "id": "SS-013",
-      "title": "Metasploit Module Available: {cve}",
+      "title": "Software Version Detected: Metasploit Module Available: {cve}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10664,7 +10664,7 @@
     },
     {
       "id": "SS-015",
-      "title": "MySQL CVE-2012-2122 Authentication Bypass Risk (v{server_ver})",
+      "title": "Database: MySQL CVE-2012-2122 Authentication Bypass Risk (v{server_ver})",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10703,7 +10703,7 @@
     },
     {
       "id": "SS-016",
-      "title": "NFS Export Enumerated: {_export_path}",
+      "title": "Enumeration: NFS Export Enumerated: {_export_path}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10742,7 +10742,7 @@
     },
     {
       "id": "SS-017",
-      "title": "OS End-of-Life (Extended Support): {label}",
+      "title": "EOL Software: OS End-of-Life (Extended Support): {label}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10781,7 +10781,7 @@
     },
     {
       "id": "SS-018",
-      "title": "OS End-of-Life: {label}",
+      "title": "EOL Software: OS End-of-Life: {label}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10820,7 +10820,7 @@
     },
     {
       "id": "SS-019",
-      "title": "OS Version Detected: {final_os}",
+      "title": "Software Version Detected: OS Version Detected: {final_os}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10859,7 +10859,7 @@
     },
     {
       "id": "SS-020",
-      "title": "Public Exploit Available: {cve}",
+      "title": "Software Version Detected: Public Exploit Available: {cve}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10898,7 +10898,7 @@
     },
     {
       "id": "SS-021",
-      "title": "Responder Captured {ht} Hashes",
+      "title": "Network Misconfiguration: Responder Captured {ht} Hashes",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10937,7 +10937,7 @@
     },
     {
       "id": "SS-022",
-      "title": "Responder Captured {proto} Credentials",
+      "title": "Network Misconfiguration: Responder Captured {proto} Credentials",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10976,7 +10976,7 @@
     },
     {
       "id": "SS-023",
-      "title": "SMB Share Enumerated: \\\\\\\\{ip}\\\\{share}",
+      "title": "SMB Vulnerability: SMB Share Enumerated",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -11015,7 +11015,7 @@
     },
     {
       "id": "SS-024",
-      "title": "SMB Share Exists (No Access): {share_name}",
+      "title": "SMB Vulnerability: SMB Share Exists (No Access)",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -11054,7 +11054,7 @@
     },
     {
       "id": "SS-025",
-      "title": "SMB Share Read Access: {share_name}",
+      "title": "SMB Vulnerability: SMB Share Read Access",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -11290,7 +11290,7 @@
     },
     {
       "id": "SS-031",
-      "title": "Valid Credentials via Brute Force ({svc.upper()})",
+      "title": "Authentication: Working Credentials Found via Brute Force",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -11329,7 +11329,7 @@
     },
     {
       "id": "SS-032",
-      "title": "VMware ESXi Management Interface Exposed{ver_str}{build_str}",
+      "title": "Debug Endpoint Exposed: VMware ESXi Management Interface Exposed{ver_str}{build_str}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -11368,7 +11368,7 @@
     },
     {
       "id": "SS-033",
-      "title": "Vulners: {cve_id} (CVSS {score})",
+      "title": "Software Version Detected: Vulners: {cve_id} (CVSS {score})",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -11524,7 +11524,7 @@
     },
     {
       "id": "SS-037",
-      "title": "FTP Anonymous Login Permitted",
+      "title": "FTP: FTP Anonymous Login Permitted",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -11563,7 +11563,7 @@
     },
     {
       "id": "SS-038",
-      "title": "Heartbleed (CVE-2014-0160)",
+      "title": "SSL/TLS Vulnerability: Heartbleed (CVE-2014-0160)",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -11602,7 +11602,7 @@
     },
     {
       "id": "SS-039",
-      "title": "Heartbleed (CVE-2014-0160) Vulnerability Detected",
+      "title": "SSL/TLS Vulnerability: Heartbleed (CVE-2014-0160) Vulnerability Detected",
       "aliases": [
         "Heartbleed",
         "SSL/TLS Vulnerability: Heartbleed",
@@ -11819,7 +11819,7 @@
     },
     {
       "id": "SS-041",
-      "title": "LLMNR/NBT-NS Broadcast Poisoning Possible",
+      "title": "Network Misconfiguration: LLMNR/NBT-NS Broadcast Poisoning Possible",
       "aliases": [
         "LLMNR/NBT-NS Response Captured (Responder)",
         "NTLM Hash Captured via Responder",
@@ -12383,7 +12383,7 @@
     },
     {
       "id": "SS-046",
-      "title": "Missing Security Headers",
+      "title": "Missing Security Header: Missing Security Headers",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -12422,7 +12422,7 @@
     },
     {
       "id": "SS-047",
-      "title": "MSSQL Vulnerability (msdat)",
+      "title": "MSSQL: MSSQL Vulnerability",
       "aliases": [
         "SQL Server Default Credentials",
         "MSSQL Default Credentials (msdat)",
@@ -12633,7 +12633,7 @@
     },
     {
       "id": "SS-050",
-      "title": "Oracle Database Vulnerability (odat)",
+      "title": "Oracle: Oracle Database Vulnerability",
       "aliases": [
         "Oracle Database Vulnerability (odat)",
         "Oracle Default Credentials (ODAT)"
@@ -12934,7 +12934,7 @@
     },
     {
       "id": "SS-053",
-      "title": "Responder Captured Plaintext Credentials",
+      "title": "Network Misconfiguration: Responder Captured Plaintext Credentials",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -12973,7 +12973,7 @@
     },
     {
       "id": "SS-054",
-      "title": "SMB Signing Disabled or Not Required",
+      "title": "SMB Vulnerability: SMB Signing Not Required",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -13012,7 +13012,7 @@
     },
     {
       "id": "SS-055",
-      "title": "SNMP Default Community String Accepted",
+      "title": "SNMP: SNMP Default Community String Accepted",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -13609,7 +13609,7 @@
     },
     {
       "id": "SS-066",
-      "title": "Weak Cipher Category Offered",
+      "title": "SSL/TLS Ciphers: Weak Cipher Category Offered",
       "aliases": [
         "Weak Cipher Identified",
         "SSL/TLS Cipher: No Cipher Order Configured",
@@ -13857,7 +13857,7 @@
     },
     {
       "id": "SS-068",
-      "title": "Weak or Default Credentials Accepted",
+      "title": "Authentication: Default Credentials Accepted",
       "aliases": [
         "Default Admin Credentials",
         "Default Username and Password",
@@ -14084,7 +14084,7 @@
     },
     {
       "id": "SS3-181",
-      "title": "VNC: No Authentication Required",
+      "title": "Unauthenticated Access: VNC: No Authentication Required",
       "aliases": [
         "VNC No Auth",
         "VNC Security Type None"
@@ -14208,7 +14208,7 @@
     },
     {
       "id": "SS3-183",
-      "title": "WinRM: No Authentication Required",
+      "title": "Unauthenticated Access: WinRM: No Authentication Required",
       "aliases": [
         "WinRM No Auth",
         "WS-Management Unauthenticated"
@@ -14399,7 +14399,7 @@
     },
     {
       "id": "SS3-186",
-      "title": "Telnet Service Exposed — Cleartext Protocol",
+      "title": "Insecure Protocol Detected: Telnet Service Exposed — Cleartext Protocol",
       "aliases": [
         "Telnet Exposed",
         "Telnet Cleartext"
@@ -14475,7 +14475,7 @@
     },
     {
       "id": "SS3-187",
-      "title": "Kubernetes API: Unauthenticated Access",
+      "title": "Unauthenticated Access: Kubernetes API: Unauthenticated Access",
       "aliases": [
         "K8s Unauthenticated",
         "Kubernetes No Auth"
@@ -14555,7 +14555,7 @@
     },
     {
       "id": "SS3-188",
-      "title": "Kubelet API: Unauthenticated Access",
+      "title": "Unauthenticated Access: Kubelet API: Unauthenticated Access",
       "aliases": [
         "Kubelet No Auth",
         "Kubelet Unauthenticated"
@@ -14619,7 +14619,7 @@
     },
     {
       "id": "SS3-189",
-      "title": "Kubernetes API Endpoint Detected",
+      "title": "Discovery: Kubernetes API Endpoint Detected",
       "aliases": [
         "K8s Detected",
         "Kubernetes Endpoint"
@@ -14664,7 +14664,7 @@
     },
     {
       "id": "SS3-190",
-      "title": "Rsync: Anonymous Module Access",
+      "title": "Unauthenticated Access: Rsync: Anonymous Module Access",
       "aliases": [
         "Rsync No Auth",
         "Rsync Anonymous"
@@ -14736,7 +14736,7 @@
     },
     {
       "id": "SS3-191",
-      "title": "Java RMI Registry Exposed",
+      "title": "Network Misconfiguration: Java RMI Registry Exposed",
       "aliases": [
         "RMI Registry",
         "Java RMI Exposed"
@@ -14956,7 +14956,7 @@
     },
     {
       "id": "SS3-194",
-      "title": "MQTT Broker: No Authentication Required",
+      "title": "IoT Protocol: MQTT Broker: No Authentication Required",
       "aliases": [
         "MQTT No Auth",
         "MQTT Open Broker"
@@ -15023,7 +15023,7 @@
     },
     {
       "id": "SS3-195",
-      "title": "MQTT Broker Detected",
+      "title": "IoT Protocol: MQTT Broker Detected",
       "aliases": [
         "MQTT Detected",
         "MQTT Service"
@@ -15067,7 +15067,7 @@
     },
     {
       "id": "SS3-196",
-      "title": "RabbitMQ: Default Credentials (guest/guest)",
+      "title": "Authentication: Default Credentials Accepted",
       "aliases": [
         "RabbitMQ Default Creds",
         "RabbitMQ guest:guest"
@@ -15136,7 +15136,7 @@
     },
     {
       "id": "SS3-197",
-      "title": "RabbitMQ Management UI Exposed",
+      "title": "Web Misconfiguration: RabbitMQ Management UI Exposed",
       "aliases": [
         "RabbitMQ Management",
         "RabbitMQ UI"
@@ -15225,7 +15225,7 @@
     },
     {
       "id": "SS3-199",
-      "title": "POP3: STARTTLS Not Supported",
+      "title": "Insecure Protocol Detected: POP3: STARTTLS Not Supported",
       "aliases": [
         "POP3 No STARTTLS",
         "POP3 Cleartext"
@@ -15291,7 +15291,7 @@
     },
     {
       "id": "SS3-200",
-      "title": "IMAP: STARTTLS Not Supported",
+      "title": "Insecure Protocol Detected: IMAP: STARTTLS Not Supported",
       "aliases": [
         "IMAP No STARTTLS",
         "IMAP Cleartext"
@@ -15429,7 +15429,7 @@
     },
     {
       "id": "SS3-202",
-      "title": "Jenkins: Unauthenticated Groovy Console (RCE)",
+      "title": "Unauthenticated Access: Jenkins: Unauthenticated Groovy Console (RCE)",
       "aliases": [
         "Jenkins Script Console",
         "Jenkins RCE"
@@ -15508,7 +15508,7 @@
     },
     {
       "id": "SS3-203",
-      "title": "Jenkins: Unauthenticated Management Console",
+      "title": "Unauthenticated Access: Jenkins: Unauthenticated Management Console",
       "aliases": [
         "Jenkins Manage",
         "Jenkins Admin Console"
@@ -15576,7 +15576,7 @@
     },
     {
       "id": "SS3-204",
-      "title": "Kerberoastable Service Accounts Identified",
+      "title": "Active Directory: Kerberoastable Service Accounts Identified",
       "aliases": [
         "Kerberoasting",
         "SPN Roasting"
@@ -15723,7 +15723,7 @@
     },
     {
       "id": "SS3-206",
-      "title": "SMBv3 Remote Code Execution (CVE-2020-0796)",
+      "title": "SMB Vulnerability: SMBv3 Remote Code Execution (CVE-2020-0796)",
       "aliases": [
         "SMBGhost",
         "CoronaBlue",
@@ -15801,7 +15801,7 @@
     },
     {
       "id": "SS3-207",
-      "title": "FTP Default Credentials Accepted",
+      "title": "Authentication: Default Credentials Accepted",
       "aliases": [
         "FTP Weak Credentials",
         "FTP Factory Credentials"
@@ -15885,7 +15885,7 @@
     },
     {
       "id": "SS3-208",
-      "title": "FTP Brute Force Protection Not Detected",
+      "title": "Authentication: FTP Brute Force Protection Not Detected",
       "aliases": [
         "FTP No Rate Limiting",
         "FTP No Account Lockout",
@@ -16018,7 +16018,7 @@
     },
     {
       "id": "SS-070",
-      "title": "Unnecessary/Outdated Website Available",
+      "title": "Out of Date Software: Unnecessary/Outdated Website Available",
       "aliases": [
         "Outdated Website Detected",
         "Default Web Page Detected",
@@ -16080,7 +16080,7 @@
     },
     {
       "id": "SS-071",
-      "title": "Unauthenticated Docker API Exposed",
+      "title": "Unauthenticated Access: Unauthenticated Docker API Exposed",
       "aliases": [
         "Docker API Accessible Without Authentication",
         "Unauthenticated Docker API Accessible"
@@ -16160,7 +16160,7 @@
     },
     {
       "id": "SS-072",
-      "title": "PostgreSQL Trust Authentication Enabled",
+      "title": "Authentication Bypass: PostgreSQL Trust Authentication Enabled",
       "aliases": [
         "PostgreSQL No Password Required",
         "PostgreSQL Trust Auth"
@@ -16240,7 +16240,7 @@
     },
     {
       "id": "SS-073",
-      "title": "Unauthenticated CouchDB Access",
+      "title": "Unauthenticated Access: Unauthenticated CouchDB Access",
       "aliases": [
         "CouchDB Unauthenticated Database Listing",
         "CouchDB No Auth"
@@ -16318,7 +16318,7 @@
     },
     {
       "id": "SS-074",
-      "title": "Grafana Unauthenticated API Access",
+      "title": "Unauthenticated Access: Grafana Unauthenticated API Access",
       "aliases": [
         "Grafana API Accessible Without Authentication",
         "Grafana Anonymous Access"
@@ -16390,7 +16390,7 @@
     },
     {
       "id": "SS-075",
-      "title": "Grafana Default Credentials (admin:admin)",
+      "title": "Authentication: Default Credentials Accepted",
       "aliases": [
         "Grafana Default Password"
       ],
@@ -16462,7 +16462,7 @@
     },
     {
       "id": "SS-076",
-      "title": "Unauthenticated Kibana Access",
+      "title": "Unauthenticated Access: Unauthenticated Kibana Access",
       "aliases": [
         "Kibana API Accessible Without Authentication"
       ],
@@ -16537,7 +16537,7 @@
     },
     {
       "id": "SS-077",
-      "title": "Cassandra Unauthenticated CQL Access",
+      "title": "Unauthenticated Access: Cassandra Unauthenticated CQL Access",
       "aliases": [
         "Cassandra Native Protocol Accessible Without Authentication",
         "Cassandra No Auth"
@@ -16609,7 +16609,7 @@
     },
     {
       "id": "SS-078",
-      "title": "Git Repository Exposed via Web",
+      "title": "Sensitive File Exposed: Git Repository Exposed via Web",
       "aliases": [
         ".git Exposure",
         "Git Directory Accessible"
@@ -16836,7 +16836,7 @@
     },
     {
       "id": "SS-081",
-      "title": "{_status_label} Page Exposed",
+      "title": "Sensitive File Exposed: {_status_label} Page Exposed",
       "aliases": [
         "Apache Server Status Exposed",
         "Apache Server Info Exposed",
@@ -17057,7 +17057,7 @@
     },
     {
       "id": "SS-084",
-      "title": "PHP Info Page Exposed",
+      "title": "Sensitive File Exposed: PHP Info Page Exposed",
       "aliases": [
         "phpinfo() Accessible",
         "PHP Information Disclosure"
@@ -17205,7 +17205,7 @@
     },
     {
       "id": "SS-086",
-      "title": "SMTP Mailing List Enumeration via EXPN",
+      "title": "Enumeration: SMTP Mailing List Enumeration via EXPN",
       "aliases": [
         "SMTP EXPN Enabled",
         "SMTP Mailing List Disclosure"
@@ -17469,7 +17469,7 @@
     },
     {
       "id": "SS-090",
-      "title": "UPnP/SSDP Service Responding",
+      "title": "Network Misconfiguration: UPnP/SSDP Service Responding",
       "aliases": [
         "UPnP Exposed",
         "SSDP Discovery Response"
@@ -17545,7 +17545,7 @@
     },
     {
       "id": "SS-091",
-      "title": "MongoDB Unauthenticated Access",
+      "title": "Unauthenticated Access: MongoDB Unauthenticated Access",
       "aliases": [
         "MongoDB No Auth",
         "MongoDB Open Access"
@@ -18116,7 +18116,7 @@
     },
     {
       "id": "SS3-215",
-      "title": "Unauthenticated X11 Display Access",
+      "title": "Unauthenticated Access: Unauthenticated X11 Display Access",
       "aliases": [
         "X11 Open Display",
         "X Window System Unauthenticated Access"
@@ -18203,7 +18203,7 @@
     },
     {
       "id": "SS3-216",
-      "title": "X11 Display Detected (Authentication Required)",
+      "title": "Discovery: X11 Display Detected (Authentication Required)",
       "aliases": [
         "X Window System Detected"
       ],
@@ -18245,7 +18245,7 @@
     },
     {
       "id": "SS3-217",
-      "title": "Default Credentials: {SERVICE}",
+      "title": "Authentication: Default Credentials Accepted",
       "aliases": [
         "BruteSpray Default Credentials",
         "Service Default Password"
@@ -18328,7 +18328,7 @@
     },
     {
       "id": "SS3-218",
-      "title": "Weak Credentials: {SERVICE}",
+      "title": "Authentication: Weak Credentials: {SERVICE}",
       "aliases": [
         "BruteSpray Weak Credentials",
         "Service Weak Password"
@@ -19241,7 +19241,7 @@
       "validation_tools": [],
       "_template": true,
       "id": "SS3-236",
-      "title": "Software Detected: {_sw_label}",
+      "title": "Software Version Detected: Software Detected: {_sw_label}",
       "description": "Software product identified on a host without a specific version number. While the product name is known, the absence of version information limits vulnerability assessment.",
       "impact": "Identified software presence reveals the technology stack in use. Without version information, targeted CVE matching is not possible, but the product category still aids attack surface mapping.",
       "remediation_brief": "Restrict service banner exposure and unnecessary protocol responses to limit software fingerprinting opportunities."
