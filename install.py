@@ -56,6 +56,27 @@ def detect_os():
 OS = detect_os()
 
 # ---------------------------------------------------------------------------
+# Distro identification (Kali vs Ubuntu vs generic Debian)
+# ---------------------------------------------------------------------------
+def _read_os_release():
+    _info = {}
+    try:
+        with open("/etc/os-release") as f:
+            for line in f:
+                line = line.strip()
+                if "=" in line:
+                    k, _, v = line.partition("=")
+                    _info[k] = v.strip('"').strip("'").lower()
+    except FileNotFoundError:
+        pass
+    return _info
+
+_OS_RELEASE = _read_os_release()
+
+def is_kali():
+    return _OS_RELEASE.get("ID", "") == "kali"
+
+# ---------------------------------------------------------------------------
 # Privilege helpers
 # ---------------------------------------------------------------------------
 def is_root():
@@ -180,6 +201,21 @@ def apt_install(packages):
     if _needed:
         run(["apt-get", "install", "-y"] + _needed)
 
+def apt_install_optional(packages):
+    """Install packages individually — continue on failure."""
+    global _apt_updated
+    if not _apt_updated:
+        run(["apt-get", "update", "-y"])
+        _apt_updated = True
+    for pkg in packages:
+        if _dpkg_installed(pkg):
+            info(f"  ✓ {pkg} already installed")
+            continue
+        try:
+            run(["apt-get", "install", "-y", pkg], check=False)
+        except Exception:
+            warn(f"  {pkg} not available — skipping")
+
 def dnf_install(packages):
     _needed = [p for p in packages if not _rpm_installed(p)]
     _skip = len(packages) - len(_needed)
@@ -200,23 +236,21 @@ def zypper_install(packages):
 # System packages
 # ---------------------------------------------------------------------------
 APT_PACKAGES = [
-    "nmap", "sslscan", "wpscan",
-    "enum4linux", "enum4linux-ng",
+    "nmap", "sslscan",
     "samba-common-bin", "smbclient", "smbmap",
-    "snmp", "snmp-mibs-downloader",
+    "snmp",
     "nfs-common", "ipmitool",
     "nbtscan", "avahi-utils", "dnsutils",
-    "hydra", "exploitdb", "sqlmap",
+    "hydra", "sqlmap",
     "ssh-audit", "ike-scan", "ntpsec",
-    # OWASP ZAP for the web-DAST phase
-    "zaproxy",
-    # Headless browser + driver for the screenshot phase
-    "chromium", "chromium-driver",
     "python3-pip", "python3-dev",
     "git", "golang-go",
     "libsasl2-dev", "libldap2-dev", "libkrb5-dev", "libssl-dev",
     "x11-utils",
-    "brutespray",
+]
+APT_PACKAGES_KALI = [
+    "wpscan", "enum4linux", "enum4linux-ng",
+    "snmp-mibs-downloader", "exploitdb", "zaproxy", "brutespray",
 ]
 DNF_PACKAGES = [
     "nmap", "sslscan",
@@ -306,10 +340,56 @@ def install_nbtscan_from_source():
             warn(f"nbtscan build failed: {e}")
 
 
+# ---------------------------------------------------------------------------
+# Chromium / chromedriver helpers (distro-aware)
+# ---------------------------------------------------------------------------
+def _install_chromium_apt():
+    """Install chromium — Kali uses 'chromium', Ubuntu uses 'chromium-browser' or snap."""
+    if is_kali():
+        apt_install_optional(["chromium", "chromium-driver"])
+        return
+    for name in ["chromium-browser", "chromium"]:
+        if _dpkg_installed(name):
+            info(f"  ✓ {name} already installed")
+            return
+    try:
+        run(["apt-get", "install", "-y", "chromium-browser"], check=False)
+        if _dpkg_installed("chromium-browser"):
+            return
+    except Exception:
+        pass
+    if shutil.which("snap"):
+        note("Chromium not in apt — trying snap …")
+        run(["snap", "install", "chromium"], check=False)
+    else:
+        note("Chromium not available via apt or snap — install manually or use webdriver-manager")
+
+def _install_chromedriver_apt():
+    """Install chromedriver — package name varies by distro."""
+    for name in ["chromium-chromedriver", "chromium-driver"]:
+        if _dpkg_installed(name):
+            info(f"  ✓ {name} already installed")
+            return
+        try:
+            run(["apt-get", "install", "-y", name], check=False)
+            if _dpkg_installed(name):
+                return
+        except Exception:
+            continue
+    note("chromedriver not in apt — selenium webdriver-manager handles this at runtime")
+
+
 def install_system():
     banner("Phase: system packages")
     if OS == "apt":
         apt_install(APT_PACKAGES)
+        if is_kali():
+            apt_install_optional(APT_PACKAGES_KALI)
+        else:
+            note("Non-Kali: some pentest packages (wpscan, enum4linux, exploitdb, zaproxy, brutespray) are Kali-repo-only.")
+            apt_install_optional(["snmp-mibs-downloader"])
+        _install_chromium_apt()
+        _install_chromedriver_apt()
     elif OS == "dnf":
         dnf_install(DNF_PACKAGES)
     elif OS == "zypper":
