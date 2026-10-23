@@ -594,8 +594,8 @@ def _u_augment_findings_path(findings_json_path, *, tool: str,
 
 
 def _enrich_remediation(findings_json_path) -> int:
-    """Match findings to findings_catalogue.json and inject remediation text.
-    Idempotent — skips findings that already have a non-empty remediation."""
+    """Match findings to findings_catalogue.json and inject remediation + risk.
+    Idempotent — skips fields that already have a non-empty value."""
     try:
         from pathlib import Path as _P
         import json as _j
@@ -609,24 +609,28 @@ def _enrich_remediation(findings_json_path) -> int:
         if not _catalogue_path.exists():
             return 0
         catalogue = _j.loads(_catalogue_path.read_text(encoding="utf-8"))
-        # Build a title→remediation lookup (normalised lowercase titles)
+        # Build a title→{remediation, risk} lookup (normalised lowercase titles)
         _lookup = {}
         for entry in catalogue:
             _title_key = (entry.get("title") or "").strip().lower()
             _rem = (entry.get("remediation_brief") or entry.get("_x_remediation") or "").strip()
-            if _title_key and _rem:
-                _lookup[_title_key] = _rem
+            _risk = (entry.get("risk") or "").strip().upper()
+            if _title_key and (_rem or _risk):
+                _lookup[_title_key] = {"remediation": _rem, "risk": _risk}
         if not _lookup:
             return 0
         findings = _j.loads(fpath.read_text(encoding="utf-8"))
         _count = 0
         for f in findings:
-            if (f.get("remediation") or "").strip():
-                continue  # already has remediation
             _key = (f.get("title") or "").strip().lower()
-            _rem = _lookup.get(_key, "")
-            if _rem:
-                f["remediation"] = _rem
+            _cat = _lookup.get(_key)
+            if not _cat:
+                continue
+            if not (f.get("remediation") or "").strip() and _cat["remediation"]:
+                f["remediation"] = _cat["remediation"]
+                _count += 1
+            if not (f.get("risk") or "").strip() and _cat["risk"]:
+                f["risk"] = _cat["risk"]
                 _count += 1
         if _count:
             fpath.write_text(_j.dumps(findings, indent=2, default=str), encoding="utf-8")
@@ -4034,7 +4038,7 @@ class OutputManager:
             })
         net_hosts.sort(key=_ip_sort_key)
 
-        # Emit "Discovery: OS Version Inferred" findings for hosts where OS
+        # Emit "OS Version Detected" findings for hosts where OS
         # was determined by inference rather than direct nmap/SSH detection
         _os_det_ips: set = set()
         for f in findings:
@@ -4070,7 +4074,7 @@ class OutputManager:
                     f"{', '.join(str(p) for p in sorted(_win_ports))}"
                 )
             self.log_finding(
-                title=f"Discovery: OS Version Inferred — {_h_os}",
+                title=f"OS Version Detected: {_h_os} [Inferred]",
                 ip=_hip,
                 port=0,
                 command=[],
@@ -4088,6 +4092,7 @@ class OutputManager:
                     self.software_inventory.relative_to(self.root)
                 ),
             )
+            check_os_eol(self, _hip, 0, h.get("hostname"), os_name=_h_os, method="inference", inferred=True)
 
         # Backfill inferred OS into software_inventory.json entries so the
         # Software Inventory intelligence tab shows OS for every row on hosts
@@ -7406,9 +7411,9 @@ def probe_uncertain_and_nonstandard_ports(
                     if _od_indicators:
                         _od_ind_str = "; ".join(_od_indicators)
                         output_mgr.log_finding(
-                            title="Out of Date Software: Unnecessary/Outdated Website Available",
+                            title="Discovery: Default Webpage Detected",
                             ip=ip, port=_port, hostname=hostname,
-                            command=_r["cmd"], risk="INFO",
+                            command=_r["cmd"], risk="LOW",
                             description=(
                                 f"The website at {ip}:{_port} shows signs of being "
                                 f"outdated or unnecessary: {_od_ind_str}. Outdated "
@@ -8486,7 +8491,7 @@ def port_scan(
                     # signature — it is a real detection, not a port-number
                     # guess.  Record both versioned and versionless products
                     # so every identified service appears in the findings
-                    # (versioned → "Software Version Detected: Software Version Detected", versionless
+                    # (versioned → "Software Version Detected", versionless
                     # → "Software Detected").  EOL/vuln checks still require
                     # a version string.
                     product = port_data.get("product", "")
@@ -16630,6 +16635,7 @@ def check_os_eol(
     hostname: "str | None",
     os_name: str,
     method: str = "",
+    inferred: bool = False,
 ) -> None:
     """
     Check *os_name* against _EOL_OS_DB and emit findings if the OS is EOL.
@@ -16664,10 +16670,11 @@ def check_os_eol(
     if eol and today > eol:
         _os_src = method.split()[0].lower() if method else "nmap"
         _eol_inv_rel = _eol_evidence_file(output_mgr, ip, port)
+        _inf_tag = " [Inferred]" if inferred else ""
         if ext_eol and today <= ext_eol:
             # Past standard EOL but within extended/LTS support
             output_mgr.log_finding(
-                title=f"EOL Software: OS End-of-Life (Extended Support): {label}",
+                title=f"EOL Software: OS End-of-Life (Extended Support): {label}{_inf_tag}",
                 ip=ip, port=port, hostname=hostname, command=method,
                 risk="MEDIUM",
                 description=(
@@ -16688,7 +16695,7 @@ def check_os_eol(
         else:
             # Fully EOL (past both standard and extended support)
             output_mgr.log_finding(
-                title=f"EOL Software: OS End-of-Life: {label}",
+                title=f"EOL Software: OS End-of-Life: {label}{_inf_tag}",
                 ip=ip, port=port, hostname=hostname, command=method,
                 risk="HIGH",
                 description=(
@@ -17540,6 +17547,16 @@ def correlate_software_cves(
     return count
 
 
+_IS_OS_PRODUCT = re.compile(
+    r'^(?:Microsoft\s+)?Windows\s+(?:Server\s+\d|XP|Vista|[78]|1[01])\b'
+    r'|^(?:Oracle\s+)?Linux\s+Server\b'
+    r'|^(?:Red\s*Hat|RHEL|CentOS|Rocky|AlmaLinux|Fedora|Debian|Ubuntu|SUSE|openSUSE)\b'
+    r'|^FreeBSD\b|^OpenBSD\b|^NetBSD\b|^Solaris\b|^SunOS\b|^AIX\b|^HP-UX\b'
+    r'|^VMware\s+ESXi?\b|^macOS\b|^Mac\s+OS\b',
+    re.IGNORECASE,
+)
+
+
 def record_software(
     output_mgr: "OutputManager",
     ip: str,
@@ -17651,7 +17668,13 @@ def record_software(
         _sw_label = f"{_sw_label} {clean_ver}"
     _src = method.split()[0].lower()
     _sw_inv_rel = str(output_mgr.software_inventory.relative_to(output_mgr.root))
-    _sw_title_prefix = "Software Version Detected: Software Version Detected" if clean_ver else "Software Detected"
+    _is_os_product = bool(_IS_OS_PRODUCT.match(software_name))
+    if _is_os_product:
+        _sw_title_prefix = "OS Version Detected"
+    elif clean_ver:
+        _sw_title_prefix = "Software Version Detected"
+    else:
+        _sw_title_prefix = "Software Detected"
     output_mgr.log_finding(
         title=f"{_sw_title_prefix}: {_sw_label}",
         ip=ip,
@@ -17665,9 +17688,12 @@ def record_software(
         affected=f"{ip}:{port}" if port else ip,
         output_file=_sw_inv_rel,
     )
+    if _is_os_product:
+        check_os_eol(output_mgr, ip, port, hostname, os_name=_sw_label, method=method)
     if final_os:
+        check_os_eol(output_mgr, ip, port, hostname, os_name=final_os, method=method)
         output_mgr.log_finding(
-            title=f"Software Version Detected: OS Version Detected: {final_os}",
+            title=f"OS Version Detected: {final_os}",
             ip=ip,
             port=port,
             command=[],
@@ -22077,7 +22103,7 @@ def check_default_webpage(
     except Exception:
         _def_rel = None
     output_mgr.log_finding(
-        title=f"Default Webpage Detected: {matched_server}",
+        title="Discovery: Default Webpage Detected",
         ip=ip, port=port,
         command=f"HTTP GET {url}",
         hostname=hostname,
