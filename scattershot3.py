@@ -6110,7 +6110,7 @@ def _parse_nse_findings(
                 else:
                     risk = "LOW"
                 output_mgr.log_finding(
-                    title=f"Software Version Detected: Vulners: {cve_id} (CVSS {score})",
+                    title=f"Uncategorized: Vulners: {cve_id} (CVSS {score})",
                     ip=ip, port=port, command=cmd, hostname=hostname, risk=risk,
                     description=f"Nmap Vulners NSE detected {cve_id} (CVSS score {score}) on this service.",
                     sources="nmap-nse", cves=cve_id,
@@ -17928,7 +17928,7 @@ def check_eol_and_vulns(
                 _vuln_src = method.split()[0].lower() if method else "nmap"
                 _vuln_inv_rel = _eol_evidence_file(output_mgr, ip, port)
                 output_mgr.log_finding(
-                    title=f"Software Version Detected: Known Vulnerability: {software_name} {version} — {cve_desc}",
+                    title=f"Uncategorized: Known Vulnerability: {software_name} {version} — {cve_desc}",
                     ip=ip, port=port, hostname=hostname,
                     command=method, risk="CRITICAL",
                     description=cve_desc,
@@ -30504,7 +30504,7 @@ def run_sploitus(cves: "list[str]", output_mgr: "OutputManager", scope: str) -> 
                     "origin":    ex.get("source", ""),
                 }
                 output_mgr.log_finding(
-                    title=f"Software Version Detected: Public Exploit Available: {cve}",
+                    title=f"Uncategorized: Public Exploit Available: {cve}",
                     ip="", port=0,
                     command=f"sploitus API: {cve}",
                     risk="HIGH",
@@ -30739,7 +30739,7 @@ def run_metasploit_search(
             )
 
         output_mgr.log_finding(
-            title=f"Software Version Detected: Metasploit Module Available: {cve}",
+            title=f"Uncategorized: Metasploit Module Available: {cve}",
             ip="", port=0,
             command=" ".join(cmd),
             risk="HIGH",

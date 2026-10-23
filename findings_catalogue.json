@@ -1365,7 +1365,7 @@
     },
     {
       "id": "SS3-020",
-      "title": "Software Version Detected: Known CVE Vulnerability Detected",
+      "title": "Uncategorized: Known CVE Vulnerability Detected",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -3219,7 +3219,7 @@
     },
     {
       "id": "SS3-045",
-      "title": "Software Version Detected: Public Exploit Available for Detected Version",
+      "title": "Uncategorized: Public Exploit Available for Detected Version",
       "aliases": [
         "Sploitus: Public Exploit Available for Detected Version",
         "Metasploit Module Available",
@@ -3314,7 +3314,7 @@
     },
     {
       "id": "SS3-046",
-      "title": "Software Version Detected: Metasploit Module Available for Detected Vulnerability",
+      "title": "Uncategorized: Metasploit Module Available for Detected Vulnerability",
       "aliases": [
         "Sploitus: Public Exploit Available for Detected Version",
         "Metasploit Module Available",
@@ -7784,7 +7784,7 @@
     },
     {
       "id": "SS3-088",
-      "title": "Software Version Detected: Public Exploit Available",
+      "title": "Uncategorized: Public Exploit Available",
       "aliases": [
         "Sploitus: Public Exploit Available for Detected Version",
         "Metasploit Module Available",
@@ -7881,7 +7881,7 @@
     },
     {
       "id": "SS3-089",
-      "title": "Software Version Detected: Metasploit Module Available",
+      "title": "Uncategorized: Metasploit Module Available",
       "aliases": [
         "Sploitus: Public Exploit Available for Detected Version",
         "Metasploit Module Available",
@@ -9916,7 +9916,7 @@
     },
     {
       "id": "SS3-109",
-      "title": "Software Version Detected: Known Vulnerability",
+      "title": "Uncategorized: Known Vulnerability",
       "aliases": [
         "Nessus Critical Vulnerability",
         "Nessus High Vulnerability",
@@ -10016,7 +10016,7 @@
     },
     {
       "id": "SS3-110",
-      "title": "Software Version Detected: Vulners CVE Match",
+      "title": "Uncategorized: Vulners CVE Match",
       "aliases": [
         "Nessus Critical Vulnerability",
         "Nessus High Vulnerability",
@@ -10508,7 +10508,7 @@
     },
     {
       "id": "SS-011",
-      "title": "Software Version Detected: Known Vulnerability: {software_name} {version} — {cve_desc}",
+      "title": "Uncategorized: Known Vulnerability: {software_name} {version} — {cve_desc}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10586,7 +10586,7 @@
     },
     {
       "id": "SS-013",
-      "title": "Software Version Detected: Metasploit Module Available: {cve}",
+      "title": "Uncategorized: Metasploit Module Available: {cve}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10859,7 +10859,7 @@
     },
     {
       "id": "SS-020",
-      "title": "Software Version Detected: Public Exploit Available: {cve}",
+      "title": "Uncategorized: Public Exploit Available: {cve}",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -11368,7 +11368,7 @@
     },
     {
       "id": "SS-033",
-      "title": "Software Version Detected: Vulners: {cve_id} (CVSS {score})",
+      "title": "Uncategorized: Vulners: {cve_id} (CVSS {score})",
       "aliases": [],
       "source_tools": [
         "scattershot3"
