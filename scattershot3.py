@@ -7198,7 +7198,7 @@ def probe_uncertain_and_nonstandard_ports(
                         port=_port, body_snippet=_ce_body[:4096])
                     if _ce_cls and _ce_cls in _ADMIN_CONSOLE_LABELS:
                         output_mgr.log_finding(
-                            title="Discovery: Admin Console",
+                            title="Admin Endpoint Exposed",
                             ip=ip, port=_port, hostname=hostname,
                             command=_r["cmd"], risk="INFO",
                             description=(
@@ -9349,7 +9349,7 @@ def _port_scan_worker(
                         port=port, body_snippet=_ph_body[:4096])
                     if _ph_cls and _ph_cls in _ADMIN_CONSOLE_LABELS:
                         output_mgr.log_finding(
-                            title="Discovery: Admin Console",
+                            title="Admin Endpoint Exposed",
                             ip=ip, port=port, hostname=hostname,
                             command=f"HTTP GET {_http_url}",
                             risk="INFO",
@@ -11800,7 +11800,7 @@ def run_nuclei(
                 _nc_tag_set = {t.lower().strip() for t in _nc_tag_list if isinstance(t, str)}
                 if "exposed-panels" in _nc_tag_set:
                     output_mgr.log_finding(
-                        title="Discovery: Admin Console",
+                        title="Admin Endpoint Exposed",
                         ip=ip, port=port, hostname=None,
                         command=cmd, risk="INFO",
                         description=(
@@ -12199,7 +12199,7 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
                             )
                             continue
                         output_mgr.log_finding(
-                            title=f"Insecure Protocol Detected: Deprecated Protocol Enabled: {proto}",
+                            title=f"Deprecated Protocol Enabled: {proto}",
                             ip=ip, port=port, command=cmd, hostname=hostname,
                             risk=_proto_risk(proto),
                             description=f"sslscan: {proto} is enabled on {ip}:{port}",
@@ -12732,7 +12732,7 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                         "TLSv1.1": "TLS 1.1 is deprecated (RFC 8996) and lacks the cipher suite improvements of TLS 1.2. Industry standards (PCI-DSS, NIST SP 800-52r2) require disabling TLS 1.1.",
                     }
                     output_mgr.log_finding(
-                        title=f"Insecure Protocol Detected: Deprecated Protocol Enabled: {_norm_proto}",
+                        title=f"Deprecated Protocol Enabled: {_norm_proto}",
                         ip=ip, port=port, command=cmd, hostname=hostname,
                         risk=_proto_risk(proto_name),
                         description=_PROTO_DESCS.get(_norm_proto, f"{_norm_proto} is a deprecated protocol version that is no longer considered secure. Disable it and enforce TLS 1.2 or higher."),
@@ -17884,7 +17884,7 @@ def check_eol_and_vulns(
                 f"Security patches are limited to the extended support programme. "
                 f"Plan for migration before extended support ends."
             )
-            _eol_title = f"EOL Software: EOL Software (Extended Support): {software_name} {version}"
+            _eol_title = f"EOL Software: {software_name} {version} (Extended Support)"
             _eol_risk  = "MEDIUM"
         else:
             _eol_description = (
@@ -19442,7 +19442,7 @@ def take_web_screenshot(
             # VMware ESXi management interface
             if "esxi host client" in _b_low or ("vmware" in _b_low and "esxi" in _b_low):
                 output_mgr.log_finding(
-                    title="Discovery: VMware ESXi Management Interface",
+                    title="Admin Endpoint Exposed: VMware ESXi",
                     ip=ip, port=port, hostname=hostname,
                     command=f"screenshot {url}", risk="INFO",
                     description=(
@@ -19541,7 +19541,7 @@ def take_web_screenshot(
         # ── Generic admin console discovery from classification ──────────
         if _sc_cls and _sc_cls in _ADMIN_CONSOLE_LABELS:
             output_mgr.log_finding(
-                title="Discovery: Admin Console",
+                title="Admin Endpoint Exposed",
                 ip=ip, port=port, hostname=hostname,
                 command=f"screenshot {url}", risk="INFO",
                 description=(
@@ -21806,7 +21806,7 @@ def check_tomcat_manager(
             _tom_rel = None
 
         output_mgr.log_finding(
-            title="Discovery: Apache Tomcat Manager Login Page",
+            title="Admin Endpoint Exposed: Apache Tomcat Manager",
             ip=ip,
             port=port,
             command=f"HTTP GET {url}",
@@ -22058,7 +22058,7 @@ def check_default_webpage(
         port=port, body_snippet=body[:4096])
     if _cdw_cls and _cdw_cls in _ADMIN_CONSOLE_LABELS:
         output_mgr.log_finding(
-            title="Discovery: Admin Console",
+            title="Admin Endpoint Exposed",
             ip=ip, port=port, hostname=hostname,
             command=f"HTTP GET {url}",
             risk="INFO",
@@ -22668,7 +22668,7 @@ def run_gobuster(
         if any(_path_stripped == seg or _path_stripped.endswith(seg)
                for seg in _ADMIN_PATH_SEGS):
             output_mgr.log_finding(
-                title="Discovery: Admin Console",
+                title="Admin Endpoint Exposed",
                 ip=ip, port=port, hostname=hostname,
                 command=" ".join(cmd), risk="INFO",
                 description=(
@@ -27679,7 +27679,7 @@ def check_esxi_fingerprint(
     except Exception:
         _esxi_rel = None
     output_mgr.log_finding(
-        title=f"Debug Endpoint Exposed: VMware ESXi Management Interface Exposed{ver_str}{build_str}",
+        title="Admin Endpoint Exposed: VMware ESXi",
         ip=ip, port=port,
         command=f"Scattershot-ESXi-Fingerprint {scheme}://{ip}:{port}/ui/",
         hostname=hostname, risk=risk,
@@ -29472,7 +29472,7 @@ def run_amqp_check(
                     pass
             elif resp.status_code == 401:
                 output_mgr.log_finding(
-                    title="Discovery: Admin Console",
+                    title="Admin Endpoint Exposed: RabbitMQ",
                     ip=ip, port=port,
                     command=f"HTTP GET {mgmt_url}",
                     hostname=hostname, risk="INFO",
@@ -31196,7 +31196,7 @@ def _run_msdat(ip, port, output_mgr, msdat_path, hostname=None, username=None, p
         out_file.write_text(raw, encoding="utf-8")
         if re.search(r'vulnerable|xp_cmdshell|EXECUTE|pwned', raw, re.I):
             output_mgr.log_finding(
-                title="MSSQL: MSSQL Vulnerability", ip=ip, port=port, hostname=hostname,
+                title="Database: MSSQL Vulnerability", ip=ip, port=port, hostname=hostname,
                 command=" ".join(cmd), risk="HIGH",
                 description=(
                     "msdat identified a MSSQL vulnerability or exploitable "
