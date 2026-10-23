@@ -846,7 +846,7 @@
     },
     {
       "id": "SS3-014",
-      "title": "Network Misconfiguration: LLMNR/NBT-NS Response Captured (Responder)",
+      "title": "Uncategorized: LLMNR/NBT-NS Response Captured (Responder)",
       "aliases": [
         "LLMNR/NBT-NS Response Captured (Responder)",
         "NTLM Hash Captured via Responder",
@@ -962,7 +962,7 @@
     },
     {
       "id": "SS3-015",
-      "title": "Network Misconfiguration: NTLMv1 Hash Captured",
+      "title": "Uncategorized: NTLMv1 Hash Captured",
       "aliases": [
         "LLMNR/NBT-NS Response Captured (Responder)",
         "NTLM Hash Captured via Responder",
@@ -1078,7 +1078,7 @@
     },
     {
       "id": "SS3-016",
-      "title": "Network Misconfiguration: NTLMv2 Hash Captured",
+      "title": "Uncategorized: NTLMv2 Hash Captured",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10898,7 +10898,7 @@
     },
     {
       "id": "SS-021",
-      "title": "Network Misconfiguration: Responder Captured {ht} Hashes",
+      "title": "Uncategorized: Responder Captured {ht} Hashes",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -10937,7 +10937,7 @@
     },
     {
       "id": "SS-022",
-      "title": "Network Misconfiguration: Responder Captured {proto} Credentials",
+      "title": "Uncategorized: Responder Captured {proto} Credentials",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -12633,7 +12633,7 @@
     },
     {
       "id": "SS-050",
-      "title": "Oracle: Oracle Database Vulnerability",
+      "title": "Database: Oracle Database Vulnerability",
       "aliases": [
         "Oracle Database Vulnerability (odat)",
         "Oracle Default Credentials (ODAT)"
@@ -12934,7 +12934,7 @@
     },
     {
       "id": "SS-053",
-      "title": "Network Misconfiguration: Responder Captured Plaintext Credentials",
+      "title": "Uncategorized: Responder Captured Plaintext Credentials",
       "aliases": [],
       "source_tools": [
         "scattershot3"
@@ -14956,7 +14956,7 @@
     },
     {
       "id": "SS3-194",
-      "title": "IoT Protocol: MQTT Broker: No Authentication Required",
+      "title": "IoT: MQTT Broker: No Authentication Required",
       "aliases": [
         "MQTT No Auth",
         "MQTT Open Broker"
@@ -15023,7 +15023,7 @@
     },
     {
       "id": "SS3-195",
-      "title": "IoT Protocol: MQTT Broker Detected",
+      "title": "IoT: MQTT Broker Detected",
       "aliases": [
         "MQTT Detected",
         "MQTT Service"

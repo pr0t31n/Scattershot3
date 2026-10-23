@@ -24235,7 +24235,7 @@ def log_responder_findings(
         # ── Finding 2: Per-type aggregate hash findings ────────────────────
         for ht, lines in type_buckets.items():
             _write_finding({
-                "title":    f"Network Misconfiguration: Responder Captured {ht} Hashes",
+                "title":    f"Uncategorized: Responder Captured {ht} Hashes",
                 "datetime": ts, "ip": "", "port": 0, "hostname": "",
                 "risk":     _HASH_TYPE_RISK.get(ht, "HIGH"),
                 "command":  resp_cmd,
@@ -24267,7 +24267,7 @@ def log_responder_findings(
             if proto == "SMB":
                 continue   # SMB hashes already covered by per-type findings above
             _write_finding({
-                "title":    f"Network Misconfiguration: Responder Captured {proto} Credentials",
+                "title":    f"Uncategorized: Responder Captured {proto} Credentials",
                 "datetime": ts, "ip": "", "port": 0, "hostname": "",
                 "risk":     _PROTO_RISK.get(proto.upper(), "HIGH"),
                 "command":  resp_cmd,
@@ -24282,7 +24282,7 @@ def log_responder_findings(
         # ── Finding 5: Plaintext credentials ──────────────────────────────
         if cred_lines:
             _write_finding({
-                "title":    "Network Misconfiguration: Responder Captured Plaintext Credentials",
+                "title":    "Uncategorized: Responder Captured Plaintext Credentials",
                 "datetime": ts, "ip": "", "port": 0, "hostname": "",
                 "risk":     "CRITICAL",
                 "command":  resp_cmd,
@@ -29217,7 +29217,7 @@ def run_mqtt_check(
                     f"  {Fore.RED}[!!] MQTT NO AUTH on {ip}:{port}{Style.RESET_ALL}"
                 )
                 output_mgr.log_finding(
-                    title="IoT Protocol: MQTT Broker: No Authentication Required",
+                    title="IoT: MQTT Broker: No Authentication Required",
                     ip=ip, port=port,
                     command="Scattershot-MQTT-CONNECT",
                     hostname=hostname, risk="HIGH",
@@ -29257,7 +29257,7 @@ def run_mqtt_check(
                     pass
             else:
                 output_mgr.log_finding(
-                    title="IoT Protocol: MQTT Broker Detected",
+                    title="IoT: MQTT Broker Detected",
                     ip=ip, port=port,
                     command="Scattershot-MQTT-CONNECT",
                     hostname=hostname, risk="INFO",
@@ -31058,7 +31058,7 @@ def _run_odat(ip, port, output_mgr, odat_path, hostname=None, username=None, pas
         out_file.write_text(raw, encoding="utf-8")
         if re.search(r'CVE-|vulnerable|xterm|OK\b', raw, re.I):
             output_mgr.log_finding(
-                title="Oracle: Oracle Database Vulnerability", ip=ip, port=port, hostname=hostname,
+                title="Database: Oracle Database Vulnerability", ip=ip, port=port, hostname=hostname,
                 command=" ".join(cmd), risk="HIGH",
                 description=(
                     "odat identified an Oracle Database vulnerability or "
