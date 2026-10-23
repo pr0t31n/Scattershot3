@@ -2912,7 +2912,7 @@ class OutputManager:
                                             extrasaction="ignore")
                     writer.writerow(csv_entry)
 
-        if _CRUCIBLE_MANAGED:
+        if _CRUCIBLE_MANAGED and not merged:
             try:
                 _finding_payload = json.dumps({
                     "title": title, "ip": ip, "port": port,
