@@ -21316,6 +21316,23 @@ def run_smbmap_with_creds(
 # Enum4linux (requires credentials when available)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# NT kernel version → (Desktop edition, Server edition)
+_WINDOWS_NT_VERSIONS: dict[str, tuple[str, str]] = {
+    "3.1":  ("Windows NT 3.1",        "Windows NT 3.1"),
+    "3.5":  ("Windows NT 3.5",        "Windows NT 3.5"),
+    "3.51": ("Windows NT 3.51",       "Windows NT 3.51"),
+    "4.0":  ("Windows NT 4.0",        "Windows NT Server 4.0"),
+    "5.0":  ("Windows 2000",          "Windows 2000 Server"),
+    "5.1":  ("Windows XP",            "Windows XP"),
+    "5.2":  ("Windows XP x64",        "Windows Server 2003"),
+    "6.0":  ("Windows Vista",         "Windows Server 2008"),
+    "6.1":  ("Windows 7",             "Windows Server 2008 R2"),
+    "6.2":  ("Windows 8",             "Windows Server 2012"),
+    "6.3":  ("Windows 8.1",           "Windows Server 2012 R2"),
+    "10.0": ("Windows 10/11",         "Windows Server 2016+"),
+}
+
+
 def run_enum4linux(
     ip: str,
     enum4linux_path: str,
@@ -21415,21 +21432,59 @@ def run_enum4linux(
                 f"Domain SID: {sid}")
 
         # ── 3. OS / Host information ───────────────────────────────────────
-        _os_m = re.search(
-            r"(?:OS|Platform)\s*(?:Version)?\s*[=:]\s*(.+?)(?:\n|$)",
-            raw, re.IGNORECASE,
-        )
-        if _os_m:
-            os_ver = _os_m.group(1).strip()
-            if os_ver and len(os_ver) > 2:
-                _ef(f"OS Version Detected: {os_ver}", "INFO",
-                    f"Operating system version detected on {ip}: {os_ver}.",
-                    f"OS: {os_ver}")
-                # Record in software inventory
+        # enum4linux srvinfo exposes platform_id, os version, and
+        # server type.  platform_id 500 = Windows NT; os version is
+        # the kernel version (e.g. 6.1 = Windows 7 / Server 2008 R2).
+        # When the srvinfo description line contains "Samba", the host
+        # is Unix/Linux running Samba — the Samba version is what matters.
+        _samba_m = re.search(r"\bSamba\s+([\d.]+)", raw)
+        _plat_m  = re.search(r"platform_id\s*:\s*(\d+)", raw, re.IGNORECASE)
+        _osver_m = re.search(r"os\s+version\s*:\s*([\d.]+)", raw, re.IGNORECASE)
+        _stype_m = re.search(r"server\s+type\s*:\s*(0x[0-9a-fA-F]+)", raw, re.IGNORECASE)
+
+        _resolved_os = None
+        if _samba_m:
+            _samba_ver = _samba_m.group(1)
+            _nt_ver = _osver_m.group(1) if _osver_m else "unknown"
+            _resolved_os = f"Samba {_samba_ver}"
+            _ef(f"OS Version Detected: {_resolved_os}", "INFO",
+                f"Host {ip} is running Samba {_samba_ver} (Unix/Linux). "
+                f"The advertised NT compatibility version ({_nt_ver}) "
+                f"is not the actual OS version.",
+                f"Samba {_samba_ver} (NT compat {_nt_ver})")
+            record_software(
+                output_mgr, ip, _port_smb, hostname,
+                software_name="Samba", version=_samba_ver,
+                os_info=_resolved_os, method="enum4linux",
+            )
+        elif _osver_m:
+            _raw_ver = _osver_m.group(1).strip()
+            _plat = int(_plat_m.group(1)) if _plat_m else 0
+            _stype = int(_stype_m.group(1), 16) if _stype_m else 0
+            _is_server = bool(_stype & 0x8000)  # SV_TYPE_SERVER_NT
+
+            if _plat == 500 and _raw_ver in _WINDOWS_NT_VERSIONS:
+                _desk, _srv = _WINDOWS_NT_VERSIONS[_raw_ver]
+                _resolved_os = _srv if _is_server else _desk
+                _os_desc = (
+                    f"Windows NT kernel version {_raw_ver} detected on "
+                    f"{ip}, which maps to {_resolved_os}."
+                )
+                _os_snip = f"OS: {_resolved_os} (NT {_raw_ver})"
+                _sw_name = "Windows"
+            else:
+                _resolved_os = _raw_ver
+                _os_desc = f"Operating system version detected on {ip}: {_raw_ver}."
+                _os_snip = f"OS: {_raw_ver}"
+                _sw_name = "Windows"
+
+            if _resolved_os and len(_resolved_os) > 2:
+                _ef(f"OS Version Detected: {_resolved_os}", "INFO",
+                    _os_desc, _os_snip)
                 record_software(
                     output_mgr, ip, _port_smb, hostname,
-                    software_name="Windows", version=os_ver,
-                    os_info=os_ver, method="enum4linux",
+                    software_name=_sw_name, version=_resolved_os,
+                    os_info=_resolved_os, method="enum4linux",
                 )
 
         # ── 4. SMB Dialect / version ───────────────────────────────────────
