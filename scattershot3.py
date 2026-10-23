@@ -21432,30 +21432,54 @@ def run_enum4linux(
                 f"Domain SID: {sid}")
 
         # ── 3. OS / Host information ───────────────────────────────────────
-        # enum4linux srvinfo exposes platform_id, os version, and
-        # server type.  platform_id 500 = Windows NT; os version is
-        # the kernel version (e.g. 6.1 = Windows 7 / Server 2008 R2).
-        # When the srvinfo description line contains "Samba", the host
-        # is Unix/Linux running Samba — the Samba version is what matters.
+        # enum4linux srvinfo exposes platform_id, os version, server type,
+        # and a description line with flags like "Wk Sv PrQ Unx NT SNT".
+        # "Unx" flag = Unix/Linux host.  "Samba X.Y.Z" in the description
+        # means the host runs Samba (software, not the OS).
+        # platform_id 500 + no Samba/Unx = genuine Windows; the os version
+        # is the NT kernel version (e.g. 6.1 = Windows 7 / Server 2008 R2).
         _samba_m = re.search(r"\bSamba\s+([\d.]+)", raw)
         _plat_m  = re.search(r"platform_id\s*:\s*(\d+)", raw, re.IGNORECASE)
         _osver_m = re.search(r"os\s+version\s*:\s*([\d.]+)", raw, re.IGNORECASE)
         _stype_m = re.search(r"server\s+type\s*:\s*(0x[0-9a-fA-F]+)", raw, re.IGNORECASE)
+        # "Unx" flag in the srvinfo description line
+        _is_unix = bool(re.search(r"\bUnx\b", raw))
 
         _resolved_os = None
         if _samba_m:
             _samba_ver = _samba_m.group(1)
             _nt_ver = _osver_m.group(1) if _osver_m else "unknown"
-            _resolved_os = f"Samba {_samba_ver}"
+            # Samba host → OS is Unix/Linux, Samba is software
+            _resolved_os = "Unix/Linux"
             _ef(f"OS Version Detected: {_resolved_os}", "INFO",
-                f"Host {ip} is running Samba {_samba_ver} (Unix/Linux). "
-                f"The advertised NT compatibility version ({_nt_ver}) "
-                f"is not the actual OS version.",
-                f"Samba {_samba_ver} (NT compat {_nt_ver})")
+                f"Host {ip} is running Unix/Linux (Samba {_samba_ver} "
+                f"detected). The advertised NT compatibility version "
+                f"({_nt_ver}) is not the actual OS version.",
+                f"OS: Unix/Linux (via Samba {_samba_ver}, NT compat {_nt_ver})")
+            record_software(
+                output_mgr, ip, _port_smb, hostname,
+                software_name="Linux", version="",
+                os_info="Unix/Linux", method="enum4linux",
+            )
+            # Samba itself is software, not the OS
             record_software(
                 output_mgr, ip, _port_smb, hostname,
                 software_name="Samba", version=_samba_ver,
-                os_info=_resolved_os, method="enum4linux",
+                method="enum4linux",
+            )
+        elif _is_unix and _osver_m:
+            # Unix flag set but no Samba version string
+            _nt_ver = _osver_m.group(1).strip()
+            _resolved_os = "Unix/Linux"
+            _ef(f"OS Version Detected: {_resolved_os}", "INFO",
+                f"Host {ip} identified as Unix/Linux via SMB server type "
+                f"flags. The NT compatibility version ({_nt_ver}) is not "
+                f"the actual OS version.",
+                f"OS: Unix/Linux (NT compat {_nt_ver})")
+            record_software(
+                output_mgr, ip, _port_smb, hostname,
+                software_name="Linux", version="",
+                os_info="Unix/Linux", method="enum4linux",
             )
         elif _osver_m:
             _raw_ver = _osver_m.group(1).strip()
@@ -21471,19 +21495,17 @@ def run_enum4linux(
                     f"{ip}, which maps to {_resolved_os}."
                 )
                 _os_snip = f"OS: {_resolved_os} (NT {_raw_ver})"
-                _sw_name = "Windows"
             else:
                 _resolved_os = _raw_ver
                 _os_desc = f"Operating system version detected on {ip}: {_raw_ver}."
                 _os_snip = f"OS: {_raw_ver}"
-                _sw_name = "Windows"
 
             if _resolved_os and len(_resolved_os) > 2:
                 _ef(f"OS Version Detected: {_resolved_os}", "INFO",
                     _os_desc, _os_snip)
                 record_software(
                     output_mgr, ip, _port_smb, hostname,
-                    software_name=_sw_name, version=_resolved_os,
+                    software_name="Windows", version=_resolved_os,
                     os_info=_resolved_os, method="enum4linux",
                 )
 
