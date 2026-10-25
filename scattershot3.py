@@ -6623,6 +6623,34 @@ def _parse_nse_findings(
                 affected=f"{ip}:{port}",
                 output_file=output_file,
             )
+        # ── SMB signing bypass: re-auth identity check (blackfield.ch 2026-10) ──
+        if re.search(r"message_signing:\s*required", smb_secmode_out, re.IGNORECASE):
+            output_mgr.log_finding(
+                title="SMB Signing Enforced — Verify Re-Authentication Bypass Patch (KB5124008)",
+                ip=ip, port=port, command=cmd, hostname=hostname, risk="INFO",
+                description=(
+                    "SMB signing is enforced on this host, which prevents traditional "
+                    "NTLM relay attacks. However, research published October 2026 "
+                    "(blackfield.ch) demonstrated that enforced signing can be bypassed "
+                    "via SMB session re-authentication: an attacker opens a signed session "
+                    "with their own credentials, then re-authenticates it with a relayed "
+                    "privileged identity. The server retains the original signing key (per "
+                    "MS-SMB2 spec) while granting the new identity's privileges. Microsoft "
+                    "silently patched this with a same-identity check in KB5124008 "
+                    "(September 2026). Verify the target has this update installed."
+                ),
+                remediation=(
+                    "Install KB5124008 (September 2026 cumulative update) or later. "
+                    "Validate with: NetExec reauth_swap module or patchcheck.py from "
+                    "the reauthx toolkit. Domain Controllers are highest priority."
+                ),
+                output=smb_secmode_out,
+                sources="nmap-nse",
+                affected=f"{ip}:{port}",
+                output_file=output_file,
+                service="smb",
+                confidence="Tentative",
+            )
 
     # ── mysql-empty-password: MySQL null-auth ─────────────────────────────────
     mysql_empty_out = scripts.get("mysql-empty-password", "")
