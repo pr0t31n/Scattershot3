@@ -6299,6 +6299,42 @@ def _parse_nse_findings(
                 output_file=output_file,
             )
 
+    # ── rdp-ntlm-info: Windows domain/hostname disclosure via NTLM ──────────
+    rdp_ntlm_out = scripts.get("rdp-ntlm-info", "")
+    if rdp_ntlm_out:
+        _ntlm_fields = {}
+        for _line in rdp_ntlm_out.splitlines():
+            _m = re.match(r"\s+(Target_Name|NetBIOS_Domain_Name|NetBIOS_Computer_Name"
+                          r"|DNS_Domain_Name|DNS_Computer_Name|DNS_Tree_Name"
+                          r"|Product_Version):\s+(.+)", _line)
+            if _m:
+                _ntlm_fields[_m.group(1)] = _m.group(2).strip()
+        if _ntlm_fields:
+            _domain = _ntlm_fields.get("NetBIOS_Domain_Name",
+                      _ntlm_fields.get("Target_Name", ""))
+            _comp = _ntlm_fields.get("NetBIOS_Computer_Name", "")
+            _dns  = _ntlm_fields.get("DNS_Domain_Name", "")
+            _ver  = _ntlm_fields.get("Product_Version", "")
+            _parts = []
+            if _domain: _parts.append(f"Domain: {_domain}")
+            if _comp:   _parts.append(f"Host: {_comp}")
+            if _dns:    _parts.append(f"DNS: {_dns}")
+            if _ver:    _parts.append(f"Version: {_ver}")
+            output_mgr.log_finding(
+                title="RDP: NTLM Information Disclosure",
+                ip=ip, port=port, command=cmd, hostname=hostname, risk="INFO",
+                description=(
+                    f"The RDP service discloses internal network information via NTLM "
+                    f"authentication handshake: {', '.join(_parts)}. This reveals the "
+                    f"Windows domain structure, computer name, and OS version to "
+                    f"unauthenticated remote attackers."
+                ),
+                output=rdp_ntlm_out,
+                sources="nmap-nse",
+                affected=f"{ip}:{port}",
+                output_file=output_file,
+            )
+
     # ── ipmi-cipher-zero: IPMI 2.0 auth bypass + hash capture ────────────────
     # FP-control per 2026-06-11 review: the prior pattern matched "supported"
     # anywhere in the output and would mis-fire on "is not supported". Require
@@ -8642,7 +8678,7 @@ def port_scan(
             nse_passes.append((smb_ports, smb_scripts))
         if rdp_ports:
             rdp_scripts = []
-            for _s in ("rdp-vuln-ms12-020", "rdp-enum-encryption"):
+            for _s in ("rdp-vuln-ms12-020", "rdp-enum-encryption", "rdp-ntlm-info"):
                 if _script_exists(_s):
                     rdp_scripts.append(_s)
             if rdp_scripts:
