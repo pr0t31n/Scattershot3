@@ -36194,17 +36194,6 @@ _SWEEP_MANUAL_RULES: list[tuple[list[str], str, str, str, str]] = [
      "  1. showmount -e {ip}\n"
      "  2. mount -t nfs {ip}:/<export> /mnt/nfs",
      "MEDIUM"),
-    (["rdp", "nla not enforced", "nla not supported", "no tls or nla",
-      "null encryption", "weak encryption", "native encryption"],
-     "Manual (xfreerdp / Crowbar)",
-     "RDP: Verify Authentication Downgrade and MitM",
-     "RDP on {ip}:{port} has weak or missing encryption/NLA.\n"
-     "Next steps:\n"
-     "  1. xfreerdp /v:{ip} /sec:nla   (test if NLA truly enforced)\n"
-     "  2. xfreerdp /v:{ip} /sec:rdp   (test legacy RDP encryption)\n"
-     "  3. seth.py {ip}   (RDP MitM credential capture)\n"
-     "  4. crowbar -b rdp -s {ip}/32 -u admin -C passwords.txt",
-     "HIGH"),
     (["smtp open.*relay", "open mail relay"],
      "Manual (swaks / telnet)",
      "SMTP: Verify Open Relay for Spoofing",
