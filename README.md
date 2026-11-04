@@ -11,7 +11,7 @@ Scattershot3 takes a list of IPs, ranges, or CIDRs, classifies them as internal 
 - **Automatic INT/EXT classification** — RFC-1918 addresses go to the internal pass; routable IPs go to external. Each scope gets its own isolated output directory and its own full pipeline run.
 - **13-phase pipeline** — From ping sweep to OWASP ZAP DAST, every phase gates on the results of the previous one (no redundant tool runs against dead hosts).
 - **30+ tool integrations** — nmap, rustscan, sslscan, testssl.sh, ssh-audit, Nuclei, gobuster, wpscan, Responder, smbmap, enum4linux, Hydra, sqlmap, XSStrike, ZAP, BloodHound-Python, Kerbrute, odat, msdat, enumdb, Sploitus, and more.
-- **Vantage integration** — Set `VANTAGE_MANAGED=1` to emit structured protocol tokens for the [Vantage](../vantage/) web UI. All output streams switch to JSON protocol messages; phases report live status.
+- **Crucible integration** — Set `CRUCIBLE_MANAGED=1` to emit structured protocol tokens for the Crucible web UI. All output streams switch to JSON protocol messages; phases report live status.
 - **Scan resumption** — `checkpoint.json` tracks every completed phase and host. Re-running with the same `--project` name skips already-finished work.
 - **Credential chaining** — A shared `CredentialStore` passes discovered credentials forward across phases (banner grabs → Hydra → database attacks → AD tools).
 - **Flexible target input** — Inline args, `--targets-file`, JSON settings file, CIDR, hyphen ranges (`192.168.1.1-20`), and individual IPs all work together.
@@ -238,9 +238,9 @@ Severity values: `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO`
 
 ---
 
-## Vantage Integration
+## Crucible Integration
 
-When launched by [Vantage](../vantage/) (`VANTAGE_MANAGED=1`), Scattershot3 switches to structured protocol output:
+When launched by Crucible (`CRUCIBLE_MANAGED=1`), Scattershot3 switches to structured protocol output:
 
 | Token | Purpose |
 |-------|---------|
@@ -249,7 +249,7 @@ When launched by [Vantage](../vantage/) (`VANTAGE_MANAGED=1`), Scattershot3 swit
 | `__VANTAGE_STATUS__:` | Phase progress update |
 | `__VANTAGE_PROMPT__:` | Interactive prompt requiring user response |
 
-Dependency installs are non-interactive (auto-approved). Phase status is reported live so the Vantage UI can track progress across the 13-phase pipeline in real time.
+Dependency installs are non-interactive (auto-approved). Phase status is reported live so the Crucible UI can track progress across the 13-phase pipeline in real time.
 
 ---
 
