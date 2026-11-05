@@ -17,6 +17,7 @@ Scattershot3 takes a list of IPs, ranges, or CIDRs, classifies them as internal 
 - **Flexible target input** — Inline args, `--targets-file`, JSON settings file, CIDR, hyphen ranges (`192.168.1.1-20`), and individual IPs all work together.
 - **Rich output** — `findings.json`, `findings.csv`, `findings.xlsx` (multi-sheet, styled), `correlated.json` (IP→port→tool correlation), `software_inventory.json`, and a top-level `summary.json`.
 - **Passive seed** — A concurrent tcpdump thread runs alongside Phase 1 discovery, capturing broadcast traffic (SSDP, mDNS, LLMNR, LLDP, ARP). The pcap is handed to Trawler in hunt mode (with the testing server excluded) to discover hosts and services that don't respond to active probes. Discovered IPs and Trawler findings are merged into the scan queue.
+- **AI/ML service detection** — Automatically fingerprints AI inference engines (Ollama, vLLM, Triton), ML platforms (MLflow, Ray), UI frameworks (Gradio, Streamlit), and vector databases (Milvus, Qdrant, Chroma) during port scanning. Emits findings and action items for pAIn AI red-team follow-up.
 - **Cross-platform** — Linux, macOS, Windows. Route setup and Responder are Linux-only; all other phases run everywhere.
 
 ---
@@ -28,6 +29,7 @@ Scattershot3 takes a list of IPs, ranges, or CIDRs, classifies them as internal 
 | 1 | **Host Discovery** | nmap `-sn` | Always |
 | 1.5 | **Hostname Resolution** | PTR/rDNS, nbtscan, nmblookup, avahi-resolve | Unless `--no-hostname-scan` |
 | 2 | **Port Scan + Service Probing** | nmap / rustscan → sslscan, testssl.sh, ssh-audit (per SSH port), web probing, banner grab, screenshots | Always on live hosts |
+| 2.H | **AI/ML Service Detection** | HTTP fingerprinting (Ollama, Gradio, Streamlit, vLLM, Triton, MLflow, etc.) | AI port or banner detected |
 | 3 | **Vulnerability Scanning** | Nuclei (CVE, misconfig, exposed-panels, default-login, network, exposure, auth-bypass) | Unless `--no-nuclei` |
 | 4 | **Exploit Lookup** | searchsploit (`--nmap`), Sploitus REST API | Unless `--no-searchsploit` |
 | 5 | **Database Attacks** | odat (Oracle), msdat (MSSQL), enumdb (MySQL/MSSQL) | Ports 1433/1434/1521/3306 open |
@@ -197,6 +199,7 @@ CLI arguments always override settings file values. Generate a full template wit
 │   ├── nuclei/                 Nuclei findings JSON/CSV
 │   ├── banners/                per-port banner capture files
 │   ├── web/                    HTTP response bodies + screenshots
+│   ├── ai/                     AI/ML service probe evidence (per host)
 │   ├── smb/                    smbmap, enum4linux, rpcclient output
 │   ├── snmp/                   snmpwalk output per host
 │   ├── responder/              Responder captured hashes
@@ -250,6 +253,48 @@ When launched by Crucible (`CRUCIBLE_MANAGED=1`), Scattershot3 switches to struc
 | `__VANTAGE_PROMPT__:` | Interactive prompt requiring user response |
 
 Dependency installs are non-interactive (auto-approved). Phase status is reported live so the Crucible UI can track progress across the 13-phase pipeline in real time.
+
+---
+
+## AI/ML Service Detection
+
+Phase 2.H runs automatically during port scanning. When a port matches a known AI service port or when HTTP/banner probing reveals AI service indicators, Scattershot3 fingerprints the service by probing known API endpoints.
+
+### Detected services
+
+| Service | Default Port | Probe Endpoint | Type |
+|---------|-------------|----------------|------|
+| Ollama | 11434 | `/api/tags` | LLM Inference |
+| Gradio | 7860 | `/api/version` | ML UI Framework |
+| Streamlit | 8501 | `/_stcore/health` | ML UI Framework |
+| MLflow | 5000 | `/api/2.0/mlflow/version` | ML Platform |
+| vLLM | 8000 | `/v1/models` | LLM Inference |
+| NVIDIA Triton | 8001/8002 | `/v2/models/stats` | Model Serving |
+| Dify | 3000 | `/api/version` | AI Platform |
+| Weaviate | 8080 | `/v1/.well-known/ready` | Vector DB |
+| LangFlow | 7681 | `/health` | AI Orchestration |
+| Milvus | 19530 | `/v1/vector/collections` | Vector DB |
+| Qdrant | 6333/6334 | `/collections` | Vector DB |
+| Jupyter | 8888 | `/api/status` | Notebook Server |
+| Ray Dashboard | 8265 | `/api/version` | ML Orchestration |
+| LiteLLM | 4000 | `/v1/models` | LLM Proxy |
+| LocalAI | 5001 | `/v1/models` | LLM Inference |
+| ComfyUI | 8188 | `/system_stats` | Image Generation |
+| ChromaDB | 7000 | `/api/v1/heartbeat` | Vector DB |
+
+### Findings emitted
+
+| ID | Title | Risk | Condition |
+|----|-------|------|-----------|
+| SS-AI-001 | AI/ML Service Exposed | MEDIUM | Any AI service reachable |
+| SS-AI-002 | AI Service Unauthenticated Access | HIGH | API responds without auth |
+| SS-AI-003 | AI Model Inventory Disclosed | MEDIUM | Model list retrievable |
+| SS-AI-004 | AI Service Version Disclosed | LOW | Version info leaked |
+| SS-AI-005 | Non-Standard AI Service Port | INFO | AI on unexpected port |
+
+When running under Crucible, AI service discoveries emit `__CRUCIBLE_TARGET__` tokens with `ai_service` metadata and `__CRUCIBLE_ACTION_ITEM__` tokens recommending pAIn for AI red-team follow-up.
+
+Evidence files are saved to `hosts/<ip>/ai/` within the scope output directory.
 
 ---
 

@@ -5237,6 +5237,68 @@ WEB_PORTS = {
     7080, 7443, 9000, 9090, 9443, 10000,
 }
 
+# ── AI/ML service ports ─────────────────────────────────────────────────
+# Known default ports for AI inference, model serving, vector databases,
+# and ML orchestration platforms.  Used by Phase H (AI service detection)
+# in probe_uncertain_and_nonstandard_ports().
+AI_PORTS: "dict[int, str]" = {
+    11434: "Ollama",
+    7860:  "Gradio",
+    8501:  "Streamlit",
+    5000:  "MLflow",
+    8000:  "vLLM",
+    8001:  "Triton-HTTP",
+    8002:  "Triton-gRPC",
+    3000:  "Dify",
+    8080:  "Weaviate",
+    7681:  "LangFlow",
+    19530: "Milvus",
+    6333:  "Qdrant-HTTP",
+    6334:  "Qdrant-gRPC",
+    8888:  "Jupyter",
+    8265:  "Ray-Dashboard",
+    4000:  "LiteLLM",
+    9090:  "Prometheus-AI",
+    5001:  "LocalAI",
+    8188:  "ComfyUI",
+    7000:  "Chroma",
+}
+
+# Reverse lookup: AI service name → list of known ports (for non-standard
+# port detection when an AI service is found on an unexpected port).
+_AI_STANDARD_PORTS: "dict[str, tuple[int, ...]]" = {
+    "Ollama":        (11434,),
+    "Gradio":        (7860,),
+    "Streamlit":     (8501,),
+    "MLflow":        (5000,),
+    "vLLM":          (8000,),
+    "Triton":        (8000, 8001, 8002),
+    "Dify":          (3000,),
+    "Weaviate":      (8080,),
+    "LangFlow":      (7681,),
+    "Milvus":        (19530,),
+    "Qdrant":        (6333, 6334),
+    "Jupyter":       (8888,),
+    "Ray":           (8265,),
+    "LiteLLM":       (4000,),
+    "LocalAI":       (5001,),
+    "ComfyUI":       (8188,),
+    "Chroma":        (7000, 8000),
+    "OpenAI-compat": (8000, 4000, 5001, 11434),
+}
+
+# HTTP response header / body substrings that betray an AI service even
+# when not running on a known port.
+_AI_HEADER_SIGNATURES: "list[tuple[str, str]]" = [
+    ("x-ollama-version",  "Ollama"),
+    ("x-gradio-version",  "Gradio"),
+    ("x-streamlit-version", "Streamlit"),
+    ("server: triton",    "Triton"),
+    ("server: uvicorn",   ""),           # heuristic only — needs body check
+    ("server: mlflow",    "MLflow"),
+    ("x-litellm-version", "LiteLLM"),
+]
+
 # nmap service name substrings that suggest HTTP/HTTPS.
 # Stored as a tuple (not set) because we do substring matching via `in`,
 # not O(1) membership tests, so set semantics offer no benefit here.
@@ -6931,13 +6993,305 @@ def _curl_probe_web(ip: str, port: int, scheme: str = "http",
             "tool": "curl-unavailable", "cmd": ""}
 
 
+
+# ── AI/ML service probing ──────────────────────────────────────────────
+# Endpoint table: (path, expected_key_in_json, service_name, version_key,
+#                  models_key)
+_AI_PROBE_ENDPOINTS: "list[tuple[str, str | None, str, str | None, str | None]]" = [
+    # Ollama — /api/tags returns {"models": [...]}
+    ("/api/tags",                 "models",      "Ollama",        None,          "models"),
+    # Gradio — /api/version returns {"version": "x.y.z"}
+    ("/api/version",              "version",     "Gradio",        "version",     None),
+    # Streamlit — /_stcore/health returns "ok" (plain text, not JSON)
+    ("/_stcore/health",           None,          "Streamlit",     None,          None),
+    # MLflow — /api/2.0/mlflow/version returns {"version": "x.y.z"}
+    ("/api/2.0/mlflow/version",   "version",     "MLflow",        "version",     None),
+    # vLLM / OpenAI-compat — /v1/models returns {"data": [{"id": "..."}]}
+    ("/v1/models",                "data",        "OpenAI-compat", None,          "data"),
+    # Triton — /v2/models/stats returns Triton model stats
+    ("/v2/models/stats",          "model_stats", "Triton",        None,          "model_stats"),
+    # Triton health
+    ("/v2/health/ready",          None,          "Triton",        None,          None),
+    # Weaviate — /v1/.well-known/ready
+    ("/v1/.well-known/ready",     None,          "Weaviate",      None,          None),
+    # Qdrant — /collections
+    ("/collections",              "result",      "Qdrant",        None,          "result"),
+    # Milvus — /v1/vector/collections (Attu proxy)
+    ("/v1/vector/collections",    None,          "Milvus",        None,          None),
+    # Jupyter — /api/status
+    ("/api/status",               "started",     "Jupyter",       "version",     None),
+    # Ray — /api/version
+    ("/api/version",              "ray_version", "Ray",           "ray_version", None),
+    # ComfyUI — /system_stats
+    ("/system_stats",             "system",      "ComfyUI",       None,          None),
+    # ChromaDB — /api/v1/heartbeat
+    ("/api/v1/heartbeat",         "nanosecond heartbeat", "Chroma", None,        None),
+    # Generic health check (many services)
+    ("/health",                   None,          "",              None,          None),
+]
+
+
+def _probe_ai_service(
+    ip: str,
+    port: int,
+    svc_hint: str,
+    output_mgr: "OutputManager | None",
+    hostname: "str | None" = None,
+) -> dict:
+    """Probe a single port for AI/ML service fingerprints.
+
+    Tries known AI API endpoints and parses responses to detect the
+    service type, version, loaded models, and authentication state.
+
+    Returns a dict:
+        detected      — bool: an AI service was positively identified
+        service       — str: service name (e.g. "Ollama", "vLLM")
+        version       — str: version string if discovered, else ""
+        models        — list[str]: model names/IDs if disclosed
+        auth_required — bool: True when the service returned 401/403
+        evidence_path — Path | None: saved evidence file
+        ai_type       — str: inference / platform / vectordb / ui / orchestration
+    """
+    result = {
+        "detected": False,
+        "service": "",
+        "version": "",
+        "models": [],
+        "auth_required": False,
+        "evidence_path": None,
+        "ai_type": "unknown",
+    }
+
+    _scheme = "https" if port in (443, 8443, 4443, 7443, 9443) else "http"
+
+    _evidence_lines: list[str] = []
+    _detected_service = svc_hint or ""
+    _detected_version = ""
+    _detected_models: list[str] = []
+    _auth_required = False
+
+    for _ep_path, _key, _svc_name, _ver_key, _models_key in _AI_PROBE_ENDPOINTS:
+        _url = f"{_scheme}://{ip}:{port}{_ep_path}"
+        try:
+            _resp = _HTTP_SESSION.get(_url, timeout=5, verify=False,
+                                      allow_redirects=False)
+
+            if _resp.status_code in (401, 403):
+                _auth_required = True
+                if _svc_name:
+                    _detected_service = _detected_service or _svc_name
+                _evidence_lines.append(
+                    f"[{_ep_path}] HTTP {_resp.status_code} — auth required"
+                )
+                continue
+
+            if _resp.status_code not in (200, 204):
+                continue
+
+            # ── Check response headers for AI signatures ─────────
+            _resp_hdrs = {k.lower(): v for k, v in _resp.headers.items()}
+            for _sig_hdr, _sig_svc in _AI_HEADER_SIGNATURES:
+                if ":" in _sig_hdr:
+                    _sh_name, _sh_val = _sig_hdr.split(":", 1)
+                    _sh_name = _sh_name.strip().lower()
+                    _sh_val = _sh_val.strip().lower()
+                    _actual = _resp_hdrs.get(_sh_name, "").lower()
+                    if _sh_val and _sh_val in _actual and _sig_svc:
+                        _detected_service = _detected_service or _sig_svc
+                else:
+                    _sh_name = _sig_hdr.strip().lower()
+                    if _sh_name in _resp_hdrs and _sig_svc:
+                        _detected_service = _detected_service or _sig_svc
+                        _hv = _resp_hdrs[_sh_name]
+                        if _hv and not _detected_version:
+                            _detected_version = _hv
+
+            # ── Streamlit special case (plain text "ok") ──────────
+            if _ep_path == "/_stcore/health":
+                _bt = (_resp.text or "").strip().lower()
+                if _bt == "ok" or "streamlit" in _bt:
+                    _detected_service = "Streamlit"
+                    _evidence_lines.append(
+                        f"[{_ep_path}] Streamlit health: {_resp.text[:100]}"
+                    )
+                    break
+
+            # ── Try JSON parse ────────────────────────────────────
+            try:
+                _jdata = _resp.json()
+            except Exception:
+                _body_lc = (_resp.text or "")[:2048].lower()
+                if "ollama" in _body_lc:
+                    _detected_service = _detected_service or "Ollama"
+                elif "gradio" in _body_lc:
+                    _detected_service = _detected_service or "Gradio"
+                elif "streamlit" in _body_lc:
+                    _detected_service = _detected_service or "Streamlit"
+                continue
+
+            # ── Validate expected key ─────────────────────────────
+            if _key and isinstance(_jdata, dict) and _key not in _jdata:
+                continue
+
+            if _svc_name:
+                _detected_service = _detected_service or _svc_name
+
+            # Extract version
+            if _ver_key and isinstance(_jdata, dict):
+                _v = _jdata.get(_ver_key, "")
+                if _v and isinstance(_v, str):
+                    _detected_version = _detected_version or _v
+
+            # Extract model list
+            if _models_key and isinstance(_jdata, dict):
+                _raw = _jdata.get(_models_key, [])
+                if isinstance(_raw, list):
+                    for _m in _raw[:50]:
+                        if isinstance(_m, dict):
+                            _mn = (_m.get("id") or _m.get("name")
+                                   or _m.get("model") or "")
+                            if _mn:
+                                _detected_models.append(str(_mn))
+                        elif isinstance(_m, str):
+                            _detected_models.append(_m)
+
+            _evidence_lines.append(
+                f"[{_ep_path}] HTTP {_resp.status_code} — "
+                f"svc={_svc_name or '?'} ver={_detected_version or '?'} "
+                f"models={len(_detected_models)} "
+                f"body={json.dumps(_jdata, default=str)[:500]}"
+            )
+
+            if _detected_service:
+                break
+
+        except requests.exceptions.ConnectionError:
+            continue
+        except requests.exceptions.Timeout:
+            continue
+        except Exception:
+            continue
+
+    # ── Fallback: root request header check ───────────────────────────
+    if not _detected_service and not _evidence_lines:
+        try:
+            _root = _HTTP_SESSION.get(
+                f"{_scheme}://{ip}:{port}/",
+                timeout=5, verify=False, allow_redirects=False)
+            if _root.status_code in (401, 403):
+                _auth_required = True
+            _rh = {k.lower(): v for k, v in _root.headers.items()}
+            for _sig_hdr, _sig_svc in _AI_HEADER_SIGNATURES:
+                if ":" in _sig_hdr:
+                    _sh_name, _sh_val = _sig_hdr.split(":", 1)
+                    _sh_name = _sh_name.strip().lower()
+                    _sh_val = _sh_val.strip().lower()
+                    _actual = _rh.get(_sh_name, "").lower()
+                    if _sh_val and _sh_val in _actual and _sig_svc:
+                        _detected_service = _sig_svc
+                else:
+                    _sh_name = _sig_hdr.strip().lower()
+                    if _sh_name in _rh and _sig_svc:
+                        _detected_service = _sig_svc
+                        _hv = _rh[_sh_name]
+                        if _hv and not _detected_version:
+                            _detected_version = _hv
+            if _detected_service:
+                _evidence_lines.append(
+                    f"[/] HTTP {_root.status_code} — "
+                    f"AI detected via headers: {_detected_service}"
+                )
+        except Exception:
+            pass
+
+    if not _detected_service:
+        return result
+
+    # ── Classify AI type ──────────────────────────────────────────────
+    _sl = _detected_service.lower()
+    if _sl in ("ollama", "vllm", "localai", "litellm", "openai-compat"):
+        _ai_type = "inference"
+    elif _sl in ("triton",):
+        _ai_type = "model-serving"
+    elif _sl in ("gradio", "streamlit", "comfyui"):
+        _ai_type = "ui-framework"
+    elif _sl in ("mlflow", "ray"):
+        _ai_type = "platform"
+    elif _sl in ("weaviate", "qdrant", "milvus", "chroma"):
+        _ai_type = "vector-db"
+    elif _sl in ("jupyter",):
+        _ai_type = "notebook"
+    elif _sl in ("dify", "langflow"):
+        _ai_type = "orchestration"
+    else:
+        _ai_type = "unknown"
+
+    # ── Save evidence ─────────────────────────────────────────────────
+    _ev_path = None
+    if output_mgr:
+        try:
+            _ai_dir = output_mgr.host_path(ip) / "ai"
+            _ai_dir.mkdir(parents=True, exist_ok=True)
+            _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            _ev_path = (
+                _ai_dir
+                / f"{ip.replace('.', '_')}_{port}_ai_probe_{_ts}.txt"
+            )
+            _lines = [
+                f"AI Service Probe Results",
+                f"{'=' * 60}",
+                f"Target:         {ip}:{port}",
+                f"Hostname:       {hostname or 'N/A'}",
+                f"Service:        {_detected_service}",
+                f"Type:           {_ai_type}",
+                f"Version:        {_detected_version or 'unknown'}",
+                f"Auth Required:  {_auth_required}",
+                f"Models Found:   {len(_detected_models)}",
+                f"Timestamp:      {datetime.now().isoformat()}",
+                f"",
+                f"--- Models ---",
+            ]
+            for _mn in _detected_models[:50]:
+                _lines.append(f"  - {_mn}")
+            if not _detected_models:
+                _lines.append("  (none disclosed or not applicable)")
+            _lines.append("")
+            _lines.append("--- Probe Log ---")
+            for _el in _evidence_lines:
+                _lines.append(f"  {_el}")
+            _ev_path.write_text("\n".join(_lines) + "\n", encoding="utf-8")
+
+            output_mgr.log_command(
+                "ai-probe", "scattershot3-internal",
+                f"# AI service probe {_scheme}://{ip}:{port}",
+                _ev_path,
+                extra={"target": f"{ip}:{port}",
+                       "service": _detected_service,
+                       "ai_type": _ai_type,
+                       "version": _detected_version or "unknown",
+                       "models_count": len(_detected_models)},
+            )
+        except OSError:
+            pass
+
+    result.update({
+        "detected": True,
+        "service": _detected_service,
+        "version": _detected_version,
+        "models": _detected_models,
+        "auth_required": _auth_required,
+        "evidence_path": _ev_path,
+        "ai_type": _ai_type,
+    })
+    return result
+
 def probe_uncertain_and_nonstandard_ports(
     ip: str,
     results: "dict[int, dict]",
     output_mgr: "OutputManager | None",
     hostname: "str | None" = None,
 ) -> None:
-    """Phase D + E + F + G unified post-port-scan helper.
+    """Phase D + E + F + G + H unified post-port-scan helper.
 
     For every open port in *results*:
       • If nmap left service unknown / tcpwrapped / blank → netcat-probe
@@ -6952,6 +7306,9 @@ def probe_uncertain_and_nonstandard_ports(
         informational finding (Phase G).
       • If the port is a web port not in the canonical WEB_PORTS list,
         emit a "Non-Standard Web Port" informational finding.
+      • If the port matches a known AI service port or HTTP headers
+        indicate an AI service, probe for AI/ML service fingerprints
+        and emit AI-specific findings (Phase H).
     """
     if output_mgr is None or not results:
         return
@@ -8294,6 +8651,213 @@ def probe_uncertain_and_nonstandard_ports(
                 sources="fracture-recon-port",
                 affected=f"{ip}:{_port}",
             )
+
+        # ── Phase H: AI/ML service detection ──────────────────────────────
+        # When a port matches a known AI service port or when the curl/banner
+        # phase found AI indicators, probe for specific AI service endpoints.
+        _ai_hint = AI_PORTS.get(_port, "")
+        # Also trigger on header-signature matches from the curl probe above
+        if not _ai_hint and _got_http:
+            try:
+                _ai_check_resp = _HTTP_SESSION.get(
+                    f"{'https' if _port in (443, 8443, 4443, 7443, 9443) else 'http'}://{ip}:{_port}/",
+                    timeout=3, verify=False, allow_redirects=False)
+                _ai_check_hdrs = {k.lower(): v for k, v in _ai_check_resp.headers.items()}
+                for _ai_sh, _ai_ssvc in _AI_HEADER_SIGNATURES:
+                    if ":" in _ai_sh:
+                        _ai_hn, _ai_hv = _ai_sh.split(":", 1)
+                        if _ai_hv.strip().lower() in _ai_check_hdrs.get(_ai_hn.strip().lower(), "").lower():
+                            if _ai_ssvc:
+                                _ai_hint = _ai_ssvc
+                                break
+                    else:
+                        if _ai_sh.strip().lower() in _ai_check_hdrs:
+                            if _ai_ssvc:
+                                _ai_hint = _ai_ssvc
+                                break
+            except Exception:
+                pass
+
+        if _ai_hint or _port in AI_PORTS:
+            try:
+                _ai_result = _probe_ai_service(
+                    ip, _port, _ai_hint, output_mgr, hostname)
+                if _ai_result["detected"]:
+                    _ai_svc   = _ai_result["service"]
+                    _ai_ver   = _ai_result["version"]
+                    _ai_mods  = _ai_result["models"]
+                    _ai_auth  = _ai_result["auth_required"]
+                    _ai_evp   = _ai_result["evidence_path"]
+                    _ai_type  = _ai_result["ai_type"]
+                    _ai_of    = (str(_ai_evp.relative_to(output_mgr.root))
+                                 if _ai_evp else None)
+
+                    # SS-AI-001: AI/ML Service Exposed
+                    output_mgr.log_finding(
+                        title=f"AI/ML Service Exposed — {_ai_svc}",
+                        ip=ip, port=_port, hostname=hostname,
+                        command=f"# AI probe {ip}:{_port}",
+                        risk="MEDIUM",
+                        description=(
+                            f"An {_ai_svc} ({_ai_type}) service is exposed on "
+                            f"{ip}:{_port}"
+                            f"{f' ({hostname})' if hostname else ''}. "
+                            f"AI/ML services provide direct access to language "
+                            f"models, image generators, or vector databases "
+                            f"that may process sensitive data or enable prompt "
+                            f"injection attacks against business-critical AI "
+                            f"pipelines."
+                        ),
+                        output=(
+                            f"Service:    {_ai_svc}\n"
+                            f"Type:       {_ai_type}\n"
+                            f"Version:    {_ai_ver or 'unknown'}\n"
+                            f"Auth:       {'required' if _ai_auth else 'NOT required'}\n"
+                            f"Models:     {len(_ai_mods)}"
+                        ),
+                        sources="scattershot3-ai-probe",
+                        affected=f"{ip}:{_port}",
+                        output_file=_ai_of,
+                    )
+
+                    # SS-AI-002: Unauthenticated Access
+                    if not _ai_auth:
+                        output_mgr.log_finding(
+                            title="AI Service Unauthenticated Access",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=f"# AI auth check {ip}:{_port}",
+                            risk="HIGH",
+                            description=(
+                                f"The {_ai_svc} service at {ip}:{_port} "
+                                f"responds to unauthenticated API requests. "
+                                f"No authentication token, API key, or "
+                                f"credentials are required to interact with "
+                                f"the service. An attacker can query models, "
+                                f"extract metadata, submit adversarial inputs, "
+                                f"or weaponize the compute for abuse."
+                            ),
+                            output=(
+                                f"Service:    {_ai_svc}\n"
+                                f"Endpoint:   {ip}:{_port}\n"
+                                f"Auth:       NOT REQUIRED\n"
+                                f"Models:     {len(_ai_mods)}"
+                            ),
+                            sources="scattershot3-ai-probe",
+                            affected=f"{ip}:{_port}",
+                            output_file=_ai_of,
+                        )
+
+                    # SS-AI-003: Model Inventory Disclosed
+                    if _ai_mods:
+                        _model_list_str = ", ".join(_ai_mods[:10])
+                        if len(_ai_mods) > 10:
+                            _model_list_str += f" (+{len(_ai_mods)-10} more)"
+                        output_mgr.log_finding(
+                            title="AI Model Inventory Disclosed",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=f"# AI model enumeration {ip}:{_port}",
+                            risk="MEDIUM",
+                            description=(
+                                f"The {_ai_svc} service at {ip}:{_port} "
+                                f"discloses {len(_ai_mods)} loaded model(s). "
+                                f"Model inventory reveals the organization's "
+                                f"AI capabilities and technology stack, "
+                                f"enabling targeted adversarial attacks."
+                            ),
+                            output=(
+                                f"Service:    {_ai_svc}\n"
+                                f"Models ({len(_ai_mods)}): {_model_list_str}"
+                            ),
+                            sources="scattershot3-ai-probe",
+                            affected=f"{ip}:{_port}",
+                            output_file=_ai_of,
+                        )
+
+                    # SS-AI-004: Version Disclosed
+                    if _ai_ver:
+                        output_mgr.log_finding(
+                            title="AI Service Version Disclosed",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=f"# AI version check {ip}:{_port}",
+                            risk="LOW",
+                            description=(
+                                f"The {_ai_svc} service at {ip}:{_port} "
+                                f"discloses its version ({_ai_ver}). Version "
+                                f"information aids attackers in identifying "
+                                f"known vulnerabilities for the exact running "
+                                f"version."
+                            ),
+                            output=(
+                                f"Service:    {_ai_svc}\n"
+                                f"Version:    {_ai_ver}\n"
+                                f"Endpoint:   {ip}:{_port}"
+                            ),
+                            sources="scattershot3-ai-probe",
+                            affected=f"{ip}:{_port}",
+                            output_file=_ai_of,
+                        )
+
+                    # SS-AI-005: Non-Standard AI Service Port
+                    _ai_std_ports = _AI_STANDARD_PORTS.get(_ai_svc, ())
+                    if _ai_std_ports and _port not in _ai_std_ports:
+                        output_mgr.log_finding(
+                            title="Non-Standard AI Service Port",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=f"# AI port check {ip}:{_port}",
+                            risk="INFO",
+                            description=(
+                                f"The {_ai_svc} service was identified on "
+                                f"{ip}:{_port}, but the standard port(s) for "
+                                f"{_ai_svc} are "
+                                f"{', '.join(str(p) for p in _ai_std_ports)}. "
+                                f"AI services on non-standard ports may evade "
+                                f"standard vulnerability scanning and security "
+                                f"monitoring."
+                            ),
+                            output=(
+                                f"Service:         {_ai_svc}\n"
+                                f"Observed port:   {_port}\n"
+                                f"Standard ports:  "
+                                f"{', '.join(str(p) for p in _ai_std_ports)}"
+                            ),
+                            sources="scattershot3-ai-probe",
+                            affected=f"{ip}:{_port}",
+                            output_file=_ai_of,
+                        )
+
+                    # ── Emit __CRUCIBLE_TARGET__ for AI service ───────
+                    _vc.target(ip=ip, hostname=hostname, scope=None,
+                               alive=True, source="scattershot3-ai-probe")
+
+                    # ── Emit action item for pAIn AI red-team ────────
+                    output_mgr.log_action_item(
+                        item_type="ai_red_team",
+                        recommended_tool="pAIn",
+                        target=f"{'https' if _port in (443, 8443, 4443, 7443, 9443) else 'http'}://{ip}:{_port}",
+                        ip=ip,
+                        port=_port,
+                        hostname=hostname,
+                        title=f"AI Red-Team: {_ai_svc} on {ip}:{_port}",
+                        description=(
+                            f"{_ai_svc} ({_ai_type}) detected on {ip}:{_port}. "
+                            f"Recommend AI-specific testing: prompt injection, "
+                            f"model extraction, training data exfiltration, "
+                            f"and adversarial input analysis."
+                            f"{f' {len(_ai_mods)} model(s) loaded.' if _ai_mods else ''}"
+                        ),
+                        source_finding=f"AI/ML Service Exposed — {_ai_svc}",
+                        priority="HIGH" if not _ai_auth else "MEDIUM",
+                        metadata={
+                            "ai_service": _ai_svc,
+                            "ai_type": _ai_type,
+                            "version": _ai_ver or "unknown",
+                            "auth_required": _ai_auth,
+                            "models_count": len(_ai_mods),
+                        },
+                    )
+            except Exception:
+                pass
+
 
 
 def port_scan(
