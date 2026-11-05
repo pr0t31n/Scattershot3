@@ -262,7 +262,7 @@ except ImportError:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Finding title normalisation — applied at write time so output files already
-# carry canonical names (same patterns Vantage uses for cross-tool dedup).
+# carry canonical names (same patterns Crucible uses for cross-tool dedup).
 # ─────────────────────────────────────────────────────────────────────────────
 VERSION = Path(__file__).resolve().parent.joinpath("VERSION").read_text().strip()
 
@@ -1071,12 +1071,12 @@ def _tprint(*args, **kwargs):
 
 
 # ─────────────────────────────────────────────
-# Vantage integration layer
+# Crucible integration layer
 # ─────────────────────────────────────────────
 import queue as _queue
 import uuid as _uuid
 
-# Detect when running as a managed subprocess under Vantage
+# Detect when running as a managed subprocess under Crucible
 _CRUCIBLE_MANAGED = os.environ.get("CRUCIBLE_MANAGED", "") == "1"
 
 _CP_LOG     = "__CRUCIBLE_LOG__:"
@@ -1089,7 +1089,7 @@ _CP_ACTION  = "__CRUCIBLE_ACTION_ITEM__:"
 _CP_FINDING = "__CRUCIBLE_FINDING__:"
 
 
-class VantageConsole:
+class CrucibleConsole:
     """Dual-mode console output.
 
     When CRUCIBLE_MANAGED=1: emits protocol tokens that Crucible intercepts for
@@ -1187,9 +1187,9 @@ class VantageConsole:
     def target(self, ip: str, hostname: "str | None" = None,
                scope: "str | None" = None, alive: bool = True,
                source: str = "nmap") -> None:
-        """Emit a live target-discovery event so Vantage can incrementally
+        """Emit a live target-discovery event so Crucible can incrementally
         update the Targets tab as IPs are confirmed alive (no-op when run
-        outside Vantage)."""
+        outside Crucible)."""
         if not self._managed:
             return
         entry = {
@@ -1209,9 +1209,9 @@ class VantageConsole:
              extrainfo: str = "", state: str = "open",
              scope: "str | None" = None,
              hostname: "str | None" = None) -> None:
-        """Emit a live port-discovery event so Vantage can incrementally
+        """Emit a live port-discovery event so Crucible can incrementally
         update the Targets tab as open ports are found (no-op when run
-        outside Vantage)."""
+        outside Crucible)."""
         if not self._managed:
             return
         entry = {
@@ -1232,8 +1232,8 @@ class VantageConsole:
             sys.stdout.flush()
 
     def action_item(self, entry: dict) -> None:
-        """Emit a live action-item event so Vantage can update the
-        Action Items tab in real time (no-op outside Vantage)."""
+        """Emit a live action-item event so Crucible can update the
+        Action Items tab in real time (no-op outside Crucible)."""
         if not self._managed:
             return
         with self._lock:
@@ -1393,7 +1393,7 @@ class ProgressManager:
 
 
 # Module-level singleton console; ProgressManager is created in main()
-_vc: VantageConsole = VantageConsole()
+_vc: CrucibleConsole = CrucibleConsole()
 _pm: "ProgressManager | None" = None
 _pause: "_pp.PauseManager | None" = None  # type: ignore[name-defined]
 
@@ -1427,7 +1427,7 @@ def _write_crash_log(reason: str) -> None:
 def _handle_sigterm(signum, frame):
     reason = (
         "Process terminated by SIGTERM — killed externally "
-        "(Crucible stop, Vantage stop, systemd, kill command, or OOM reaper)"
+        "(Crucible stop, systemd, kill command, or OOM reaper)"
     )
     try:
         _vc.log(f"SIGTERM received — {reason}", "ERROR")
@@ -2814,7 +2814,7 @@ class OutputManager:
                         )
                     # Merge output_files — newline-separated, deduplicated. Newline
                     # matches the separator used for sources, command, and affected
-                    # (consumers like Vantage's Evidence modal split on newline to
+                    # (consumers like Crucible's Evidence modal split on newline to
                     # render one entry per file). Comma is a poor separator for
                     # file paths because POSIX paths can legally contain commas.
                     # Legacy comma-separated values are accepted on read for
@@ -3028,7 +3028,7 @@ class OutputManager:
             )
             tmp.replace(self.action_items_json)
 
-        # Emit live event for Vantage real-time UI updates
+        # Emit live event for Crucible real-time UI updates
         _vc.action_item(entry)
 
     def log_banner(self, ip: str, port: int, banner_result: dict, tool_path: str = "scattershot3-internal", hostname: str | None = None):
@@ -3729,15 +3729,15 @@ class OutputManager:
         except Exception:
             pass
 
-    # ── Aggregated outputs (consumed directly by Vantage and standalone reports) ─
+    # ── Aggregated outputs (consumed directly by Crucible and standalone reports) ─
 
     def write_targets_json(self, all_results: dict) -> "Path | None":
         """
         Build and write targets.json — a host-level aggregation of all scan
-        data that Vantage (and standalone consumers) can read directly without
+        data that Crucible (and standalone consumers) can read directly without
         performing their own enrichment.
 
-        Structure mirrors the 'network.hosts' shape returned by Vantage's
+        Structure mirrors the 'network.hosts' shape returned by Crucible's
         /api/targets endpoint so that endpoint can simply read this file.
 
         Correlates:
@@ -4851,14 +4851,14 @@ def check_privileges() -> None:
         )
 
     # ── Offer auto-elevation ──────────────────────────────────────────────────
-    # When running under Vantage (CRUCIBLE_MANAGED=1), re-exec via sudo would
-    # replace the subprocess Vantage is managing with a root process, making all
-    # output files root-owned and unreadable by Vantage for zip export.  Skip the
-    # re-exec prompt entirely; the user can restart Vantage itself as root if
+    # When running under Crucible (CRUCIBLE_MANAGED=1), re-exec via sudo would
+    # replace the subprocess Crucible is managing with a root process, making all
+    # output files root-owned and unreadable by Crucible for zip export.  Skip the
+    # re-exec prompt entirely; the user can restart Crucible itself as root if
     # full nmap privilege is required.
     if os.environ.get("CRUCIBLE_MANAGED"):
         print(
-            f"{Fore.YELLOW}[~] Running under Vantage — skipping sudo re-exec to keep "
+            f"{Fore.YELLOW}[~] Running under Crucible — skipping sudo re-exec to keep "
             f"output files accessible.\n"
             f"    nmap may run in degraded (connect-scan) mode without root.{Style.RESET_ALL}"
         )
@@ -5699,7 +5699,7 @@ def host_discovery_range(
                 and "unreach" not in reason
             ):
                 alive_map[ip] = True
-                # Live-emit so Vantage's Targets tab adds the host the
+                # Live-emit so Crucible's Targets tab adds the host the
                 # instant nmap confirms it alive, without waiting for
                 # the supplemental Phase 1b pass over non-responders.
                 _vc.target(ip=ip, hostname=None, scope=scope,
@@ -6010,7 +6010,7 @@ def _discover_chunk(
         alive_ips.extend(rescued)
         dead_ips = [ip for ip in dead_ips if ip not in set(rescued)]
 
-    # Live-emit alive hosts so Vantage's Targets tab updates immediately
+    # Live-emit alive hosts so Crucible's Targets tab updates immediately
     for ip in alive_ips:
         _vc.target(ip=ip, hostname=None, scope=scope, alive=True, source="nmap")
 
@@ -9624,7 +9624,7 @@ def _port_scan_worker(
                 for _udp_port, _udp_info in _udp_confirmed.items():
                     if _udp_port not in open_ports:
                         open_ports[_udp_port] = _udp_info
-            # Emit unconfirmed (open|filtered) ports to Vantage for
+            # # Emit unconfirmed (open|filtered) ports to Crucible for
             # informational display — they do NOT generate findings.
             for _uf_port, _uf_info in _udp_unconfirmed.items():
                 _vc.port(
@@ -9792,7 +9792,7 @@ def _port_scan_worker(
                 ] if x]
                 _op_svc = " / ".join(_op_parts) if _op_parts else "unknown service"
                 _op_affected.append(f"{ip}  {_op_port}/{_op_proto}  {_op_svc}")
-                # Live-emit so Vantage's Targets tab adds the port row as
+                # Live-emit so Crucible's Targets tab adds the port row as
                 # soon as it is discovered, without waiting for targets.json.
                 _vc.port(
                     ip=ip,
@@ -17439,7 +17439,7 @@ def query_vulners(
                     "apiKey":             api_key,
                 },
                 timeout=15,
-                headers={"User-Agent": "Vantage/1.0"},
+                headers={"User-Agent": "Crucible/1.0"},
             )
             resp.raise_for_status()
             data = resp.json()
@@ -17539,7 +17539,7 @@ def _vulners_cve_risk(cve_ids: list) -> str:
                 "https://vulners.com/api/v3/search/id/",
                 json={"id": cve_id, "apiKey": api_key},
                 timeout=10,
-                headers={"User-Agent": "Vantage/1.0"},
+                headers={"User-Agent": "Crucible/1.0"},
             )
             resp.raise_for_status()
             data = resp.json()
@@ -20353,7 +20353,7 @@ def _ensure_gobuster_wordlist() -> "str | None":
     if dest.exists():
         return str(dest)
     if _CRUCIBLE_MANAGED:
-        sys.stdout.write("[Vantage] Downloading gobuster wordlist (raft-medium-directories.txt)...\n")
+        sys.stdout.write("[Crucible] Downloading gobuster wordlist (raft-medium-directories.txt)...\n")
         sys.stdout.flush()
     else:
         print(f"{Fore.CYAN}[*] Downloading gobuster wordlist → {dest}{Style.RESET_ALL}")
@@ -20361,14 +20361,14 @@ def _ensure_gobuster_wordlist() -> "str | None":
         import urllib.request
         urllib.request.urlretrieve(_RAFT_MEDIUM_URL, str(dest))
         if _CRUCIBLE_MANAGED:
-            sys.stdout.write(f"[Vantage] Wordlist downloaded: {dest}\n")
+            sys.stdout.write(f"[Crucible] Wordlist downloaded: {dest}\n")
             sys.stdout.flush()
         else:
             print(f"{Fore.GREEN}[+] Wordlist saved: {dest}{Style.RESET_ALL}")
         return str(dest)
     except Exception as exc:
         if _CRUCIBLE_MANAGED:
-            sys.stdout.write(f"[Vantage] Wordlist download failed: {exc}\n")
+            sys.stdout.write(f"[Crucible] Wordlist download failed: {exc}\n")
             sys.stdout.flush()
         else:
             print(f"{Fore.YELLOW}[~] Wordlist download failed: {exc}{Style.RESET_ALL}")
@@ -20525,7 +20525,7 @@ def _brew_cmd(cmd: list[str]) -> list[str]:
 
     Homebrew refuses to run as root, and /opt/homebrew/bin is absent from
     root's default PATH on Apple Silicon.  When scattershot is invoked via
-    ``sudo`` (e.g. from Vantage), SUDO_USER is set to the original user.
+    ``sudo`` (e.g. from Crucible), SUDO_USER is set to the original user.
     This function:
       1. Substitutes the bare 'brew' token with the resolved full path.
       2. Prefixes the command with ``sudo -u $SUDO_USER`` so Homebrew runs
@@ -32978,7 +32978,6 @@ def _o365_enum_builtin(
 def _find_osift_emails(project_dir: str) -> "list[str]":
     p = Path(project_dir)
     candidates = list(p.parent.glob("osift/*/findings.json"))
-    candidates += list(p.parent.glob("osift/*/findings_vantage.json"))
     emails: set = set()
     for f in candidates:
         try:
@@ -35123,7 +35122,7 @@ def main():
     # ── Privilege check ───────────────────────────────────────────────────────
     check_privileges()
 
-    # ── Vantage ProgressManager ────────────────────────────────────────────
+    # ── Crucible ProgressManager ────────────────────────────────────────────
     global _pm, _pause, _CRASH_PROJECT_ROOT
     _early_proj_root = Path(args.project).resolve()
     _early_proj_root.mkdir(parents=True, exist_ok=True)
@@ -35618,7 +35617,7 @@ def main():
     else:
         print(f"{Fore.YELLOW}[~] Internal route setup disabled (--no-route-setup){Style.RESET_ALL}")
 
-    # Mark tool-discovery complete; emit tool availability map to Vantage UI
+    # Mark tool-discovery complete; emit tool availability map to Crucible UI
     _pm.set_phase_status("init_tools", "complete", label="INIT: Tool Discovery")
     _init_tool_results = {
         "nmap":          {"installed": bool(nmap_path),        "path": nmap_path or ""},
@@ -35831,7 +35830,7 @@ def main():
                 encoding="utf-8",
             )
     except Exception:
-        pass  # best-effort; Nessus action item also reaches Vantage via SocketIO
+        pass  # best-effort; Nessus action item also reaches Crucible via SocketIO
 
     # ── Scan passes ───────────────────────────────────────────────────
     # Run internal first (typically faster — LAN speeds, no firewall),

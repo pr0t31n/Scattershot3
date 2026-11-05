@@ -295,10 +295,10 @@ When launched by Crucible (`CRUCIBLE_MANAGED=1`), Scattershot3 switches to struc
 
 | Token | Purpose |
 |-------|---------|
-| `__VANTAGE_LOG__:` | Standard log line forwarded to UI console |
-| `__VANTAGE_ERR__:` | Error line forwarded to UI |
-| `__VANTAGE_STATUS__:` | Phase progress update |
-| `__VANTAGE_PROMPT__:` | Interactive prompt requiring user response |
+| `__CRUCIBLE_LOG__:` | Standard log line forwarded to UI console |
+| `__CRUCIBLE_ERR__:` | Error line forwarded to UI |
+| `__CRUCIBLE_STATUS__:` | Phase progress update |
+| `__CRUCIBLE_PROMPT__:` | Interactive prompt requiring user response |
 
 Dependency installs are non-interactive (auto-approved). Phase status is reported live so the Crucible UI can track progress across the 13-phase pipeline in real time.
 
