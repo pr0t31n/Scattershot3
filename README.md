@@ -6,6 +6,9 @@ Scattershot3 takes a list of IPs, ranges, or CIDRs, classifies them as internal 
 
 ---
 
+
+> **[View full documentation on the Codex Wiki](https://wiki.pr0t31n.com/tools/scattershot3)** — detailed features, CLI reference, findings catalogue, and integration guides.
+
 ## Features
 
 - **Automatic INT/EXT classification** — RFC-1918 addresses go to the internal pass; routable IPs go to external. Each scope gets its own isolated output directory and its own full pipeline run.
