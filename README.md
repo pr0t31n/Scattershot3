@@ -65,6 +65,8 @@ Scattershot3 takes a list of IPs, ranges, or CIDRs, classifies them as internal 
 - **Flexible target input** — Inline args, `--targets-file`, JSON settings file, CIDR, hyphen ranges (`192.168.1.1-20`), and individual IPs all work together.
 - **Target exclusions** — `--exclude` removes IPs/ranges/CIDRs from the scan after expansion.
 - **Rich output** — `findings.json`, `findings.csv`, `findings.xlsx` (multi-sheet, styled), `correlated.json` (IP->port->tool correlation), `software_inventory.json`, and a top-level `summary.json`.
+- **FindingsDB dual-write** — Findings are also inserted into a shared SQLite database (`PR0T31N_FINDINGS_DB` env var) alongside JSON output, enabling cross-tool querying and Crucible dashboard aggregation.
+- **Network posture report** — Generates a live-host posture summary with network segmentation detection across discovered subnets (v1.72.0+).
 - **Passive seed** — A concurrent tcpdump thread runs alongside Phase 1 discovery, capturing broadcast traffic (SSDP, mDNS, LLMNR, LLDP, ARP). The pcap is handed to Trawler in hunt mode (with the testing server excluded) to discover hosts and services that don't respond to active probes. Discovered IPs and Trawler findings are merged into the scan queue.
 - **AI/ML service detection** — Automatically fingerprints AI inference engines (Ollama, vLLM, Triton), ML platforms (MLflow, Ray), UI frameworks (Gradio, Streamlit), and vector databases (Milvus, Qdrant, Chroma) during port scanning. Emits findings and action items for pAIn AI red-team follow-up.
 - **Adaptive concurrency** — Port-scan workers auto-scale based on CPU/RAM utilization, bounded to [4, 64] workers.
@@ -407,7 +409,8 @@ CLI arguments always override settings file values. Generate a full template wit
 │   ├── software_inventory.json detected software and versions
 │   └── checkpoint.json         scan resumption state
 ├── external/                   same structure as internal/
-└── summary.json                combined cross-scope findings summary
+├── summary.json                combined cross-scope findings summary
+└── findings.db                 SQLite findings database (when PR0T31N_FINDINGS_DB set)
 ```
 
 ### findings.json schema
