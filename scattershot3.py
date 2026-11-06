@@ -9821,39 +9821,6 @@ def _port_scan_worker(
                 affected=ip,
                 output_file=str(_ps_out_path) if _ps_out_path else None,
             )
-        # Log unconfirmed (open|filtered) UDP ports as a separate INFO finding
-        if output_mgr and _udp_unconfirmed:
-            _uf_affected = []
-            for _uf_port, _uf_info in sorted(_udp_unconfirmed.items()):
-                _uf_parts = [x for x in [
-                    _uf_info.get("name", ""),
-                    _uf_info.get("product", ""),
-                    _uf_info.get("version", ""),
-                ] if x]
-                _uf_svc = " / ".join(_uf_parts) if _uf_parts else "unknown service"
-                _uf_affected.append(f"{ip}  {_uf_port}/udp  {_uf_svc}")
-            output_mgr.log_finding(
-                title="Unconfirmed UDP Ports (open|filtered)",
-                ip=ip, port=0,
-                command=f"nmap -sU --top-ports {getattr(args, 'udp_top_ports', 20)} {ip}",
-                hostname=hostname,
-                risk="INFO",
-                description=(
-                    "The following UDP ports were reported as open|filtered by nmap. "
-                    "This means no response was received — the port may be open (silently "
-                    "accepting packets) or filtered by a firewall. Unlike confirmed open "
-                    "ports, these did not produce an actual UDP response and should be "
-                    "considered unconfirmed. Manual verification is recommended for any "
-                    "ports of interest."
-                ),
-                sources="nmap",
-                output="\n".join(_uf_affected),
-                affected=ip,
-                output_file=",".join(filter(None, [
-                    str(_udp_xml_path) if _udp_xml_path else None,
-                    str(_ps_out_path) if _ps_out_path else None,
-                ])) or None,
-            )
 
     host_result: dict = {
         "alive":             True,
