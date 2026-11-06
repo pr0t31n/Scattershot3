@@ -5541,6 +5541,15 @@ def _decode_nmap_output(raw) -> str:
     return raw or ""
 
 
+_SPURIOUS_REASONS = frozenset({
+    "host-unreach",       # ICMP host unreachable from an intermediate router
+    "net-unreach",        # ICMP network unreachable
+    "admin-prohibited",   # ICMP admin-prohibited (firewall drop)
+    "host-prohibited",    # ICMP host-prohibited
+    "no-response",        # no probe response at all
+})
+
+
 def host_discovery_range(
     ips: list[str],
     output_mgr: "OutputManager | None" = None,
@@ -5580,11 +5589,15 @@ def host_discovery_range(
       -PE/-PP/-PM          ICMP echo / timestamp / netmask probes
       -PS<ports>           TCP SYN probes — survives firewalls that drop ICMP
       -PU<ports>           UDP probes for firewall-traversal
+      -PA<ports>           TCP ACK probes — bypasses stateful firewalls
+      -PR                  ARP probe — most reliable on LAN (Layer 2)
       -PY                  SCTP INIT probe
       -PO 2                IP protocol ping (IGMP)
       --min-parallelism    floor on concurrent probes so nmap doesn't throttle
                            itself too aggressively on large fast networks
-      --host-timeout 10s   abandon each unresponsive host after 10 s
+      --max-retries 2      two retries per probe (both int and ext)
+      --host-timeout 15s   abandon each unresponsive host after 15 s (int)
+                           / 30 s (ext)
 
     Pass *nmap_args* to override the default discovery flags (e.g. for a
     supplemental pass with -PS -PA -PR probe types).
@@ -5595,33 +5608,24 @@ def host_discovery_range(
     IPs absent from nmap's output are mapped to False.
     """
     if nmap_args is None:
-        _host_timeout = "30s" if scope == "ext" else "10s"
-        _max_retries  = "2"  if scope == "ext" else "1"
+        _host_timeout = "30s" if scope == "ext" else "15s"
+        _max_retries  = "2"
         _min_par = discovery_min_parallelism if discovery_min_parallelism else 20
         _rate_flag = f" --min-rate {discovery_min_rate}" if discovery_min_rate else ""
         _timing_flag = f" -T{timing_template}" if timing_template else ""
         nmap_args = (
             "-n -sn --reason "
-            "-PE "
+            "-PE -PP -PM "
             "-PS21,22,23,25,53,80,110,111,135,139,143,179,389,443,445,"
             "465,587,636,993,995,1433,1723,2525,3306,3389,5432,5900,"
             "8080,8443,8888,9090,9443 "
+            "-PA80,443 "
             "-PU53,69,123,161,500,1194 "
+            "-PR "
             f"--max-retries {_max_retries} --min-parallelism {_min_par}"
             f"{_rate_flag}{_timing_flag} "
             f"--host-timeout {_host_timeout}"
         )
-
-    # Reasons that indicate the response came from a router/firewall rather
-    # than the target itself — hosts with these reasons are excluded from
-    # alive_map even if nmap reports their state as "up".
-    _SPURIOUS_REASONS = frozenset({
-        "host-unreach",       # ICMP host unreachable from an intermediate router
-        "net-unreach",        # ICMP network unreachable
-        "admin-prohibited",   # ICMP admin-prohibited (firewall drop)
-        "host-prohibited",    # ICMP host-prohibited
-        "no-response",        # no probe response at all
-    })
 
     # ── Build nmap host argument ──────────────────────────────────────────────
     # Prefer raw_specs (preserves CIDR/range notation) over the flat IP list.
@@ -5658,7 +5662,22 @@ def host_discovery_range(
 
     nm = nmap.PortScanner()
     try:
-        nm.scan(hosts=hosts_str, arguments=nmap_args)
+        nm.scan(hosts=hosts_str, arguments=nmap_args, timeout=600)
+
+        _scan_errors = (nm._scan_result.get("nmap", {})
+                        .get("scaninfo", {}).get("error", []))
+        if _scan_errors and output_mgr:
+            for _se in (_scan_errors if isinstance(_scan_errors, list)
+                        else [_scan_errors]):
+                _se_str = str(_se).strip()
+                if _se_str:
+                    _tprint(f"{Fore.YELLOW}  [~] nmap stderr: "
+                            f"{_se_str[:200]}{Style.RESET_ALL}")
+                    output_mgr.log_error(
+                        "nmap", nmap_path, cmd_list, f"stderr: {_se_str}",
+                        extra={"target": hosts_str,
+                               "scan_type": "host_discovery"},
+                    )
 
         if output_mgr:
             raw_bytes = (nm.get_nmap_last_output()
@@ -5709,6 +5728,15 @@ def host_discovery_range(
                     f"{Fore.YELLOW}  [~] {ip} reported up but excluded"
                     f" (reason: {reason or 'unknown'}){Style.RESET_ALL}"
                 )
+                if output_mgr:
+                    output_mgr.log_command(
+                        "nmap", nmap_path, cmd_list, None,
+                        extra={
+                            "target": ip,
+                            "scan_type": "host_discovery_excluded",
+                            "reason": reason or "unknown",
+                        },
+                    )
 
     except Exception as e:
         err_msg = str(e)
@@ -5768,10 +5796,6 @@ def _parse_nmap_xml_alive(xml_path: "Path | str") -> "tuple[list[str], list[str]
     Reasons from routers/firewalls rather than the target itself are excluded
     (same logic as host_discovery_range).
     """
-    _SPURIOUS_REASONS = frozenset({
-        "host-unreach", "net-unreach", "admin-prohibited",
-        "host-prohibited", "no-response",
-    })
     alive: list[str] = []
     all_hosts: list[str] = []
     try:
@@ -5837,17 +5861,20 @@ def _discover_chunk(
 
     # ── Default discovery args ────────────────────────────────────────────────
     if nmap_args is None:
-        _host_timeout = "30s" if scope == "ext" else "10s"
-        _max_retries = "2" if scope == "ext" else "1"
+        _host_timeout = "30s" if scope == "ext" else "15s"
+        _max_retries = "2"
         _min_par = discovery_min_parallelism if discovery_min_parallelism else 20
         _rate_flag = f" --min-rate {discovery_min_rate}" if discovery_min_rate else ""
         _timing_flag = f" -T{timing_template}" if timing_template else ""
         nmap_args = (
             "-n -sn --reason "
-            "-PE "
+            "-PE -PP -PM "
             "-PS21,22,23,25,53,80,110,111,135,139,143,179,389,443,445,"
             "465,587,636,993,995,1433,1723,2525,3306,3389,5432,5900,"
             "8080,8443,8888,9090,9443 "
+            "-PA80,443 "
+            "-PU53,69,123,161,500,1194 "
+            "-PR "
             f"--max-retries {_max_retries} --min-parallelism {_min_par}"
             f"{_rate_flag}{_timing_flag} "
             f"--host-timeout {_host_timeout}"
@@ -33139,8 +33166,8 @@ def scan_scope(
     # For smaller target sets, the original monolithic pipeline is used.
     _use_chunked = bool(raw_specs) and _n_targets > 4096
 
-    _1b_timeout  = "30s" if scope == "ext" else "10s"
-    _1b_retries  = "2"  if scope == "ext" else "1"
+    _1b_timeout  = "30s" if scope == "ext" else "15s"
+    _1b_retries  = "2"
     _1b_min_par = getattr(args, "discovery_min_parallelism", None) or 20
     _1b_rate = getattr(args, "discovery_min_rate", None)
     _1b_timing = getattr(args, "timing_template", None)
