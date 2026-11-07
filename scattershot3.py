@@ -6221,7 +6221,7 @@ def _parse_nse_findings(
                 else:
                     risk = "LOW"
                 output_mgr.log_finding(
-                    title=f"Uncategorized: Vulners: {cve_id} (CVSS {score})",
+                    title=f"Known Vulnerability: Vulners: {cve_id} (CVSS {score})",
                     ip=ip, port=port, command=cmd, hostname=hostname, risk=risk,
                     description=f"Nmap Vulners NSE detected {cve_id} (CVSS score {score}) on this service.",
                     sources="nmap-nse", cves=cve_id,
@@ -12415,7 +12415,7 @@ def run_nuclei(
                 full_desc = " | ".join(desc_parts)
 
                 output_mgr.log_finding(
-                    title=f"Uncategorized: [Nuclei] {title}",
+                    title=f"Known Vulnerability: [Nuclei] {title}",
                     ip=ip,
                     port=port,
                     command=cmd,
@@ -18593,7 +18593,7 @@ def check_eol_and_vulns(
                 _vuln_src = method.split()[0].lower() if method else "nmap"
                 _vuln_inv_rel = _eol_evidence_file(output_mgr, ip, port)
                 output_mgr.log_finding(
-                    title=f"Uncategorized: Known Vulnerability: {software_name} {version} — {cve_desc}",
+                    title=f"Known Vulnerability: {software_name} {version} — {cve_desc}",
                     ip=ip, port=port, hostname=hostname,
                     command=method, risk="CRITICAL",
                     description=cve_desc,
@@ -24977,7 +24977,7 @@ def log_responder_findings(
         # ── Finding 2: Per-type aggregate hash findings ────────────────────
         for ht, lines in type_buckets.items():
             _write_finding({
-                "title":    f"Uncategorized: Responder Captured {ht} Hashes",
+                "title":    f"Credential Capture: Responder Captured {ht} Hashes",
                 "datetime": ts, "ip": "", "port": 0, "hostname": "",
                 "risk":     _HASH_TYPE_RISK.get(ht, "HIGH"),
                 "command":  resp_cmd,
@@ -25009,7 +25009,7 @@ def log_responder_findings(
             if proto == "SMB":
                 continue   # SMB hashes already covered by per-type findings above
             _write_finding({
-                "title":    f"Uncategorized: Responder Captured {proto} Credentials",
+                "title":    f"Credential Capture: Responder Captured {proto} Credentials",
                 "datetime": ts, "ip": "", "port": 0, "hostname": "",
                 "risk":     _PROTO_RISK.get(proto.upper(), "HIGH"),
                 "command":  resp_cmd,
@@ -25024,7 +25024,7 @@ def log_responder_findings(
         # ── Finding 5: Plaintext credentials ──────────────────────────────
         if cred_lines:
             _write_finding({
-                "title":    "Uncategorized: Responder Captured Plaintext Credentials",
+                "title":    "Credential Capture: Responder Captured Plaintext Credentials",
                 "datetime": ts, "ip": "", "port": 0, "hostname": "",
                 "risk":     "CRITICAL",
                 "command":  resp_cmd,
@@ -31246,7 +31246,7 @@ def run_sploitus(cves: "list[str]", output_mgr: "OutputManager", scope: str) -> 
                     "origin":    ex.get("source", ""),
                 }
                 output_mgr.log_finding(
-                    title=f"Uncategorized: Public Exploit Available: {cve}",
+                    title=f"Known Vulnerability: Public Exploit Available: {cve}",
                     ip="", port=0,
                     command=f"sploitus API: {cve}",
                     risk="HIGH",
@@ -31481,7 +31481,7 @@ def run_metasploit_search(
             )
 
         output_mgr.log_finding(
-            title=f"Uncategorized: Metasploit Module Available: {cve}",
+            title=f"Known Vulnerability: Metasploit Module Available: {cve}",
             ip="", port=0,
             command=" ".join(cmd),
             risk="HIGH",
