@@ -5606,11 +5606,12 @@
     },
     {
       "id": "SS3-067",
-      "title": "Admin Endpoint Exposed: VMware ESXi",
+      "title": "Admin Endpoint Exposed",
       "aliases": [
         "ESXi Host Accessible",
         "VMware vSphere Exposed",
-        "VMware ESXi Management Interface Exposed"
+        "VMware ESXi Management Interface Exposed",
+        "Admin Endpoint Exposed: VMware ESXi"
       ],
       "source_tools": [
         "scattershot3"
@@ -10207,8 +10208,10 @@
     },
     {
       "id": "SS-001",
-      "title": "Known Vulnerability: [Nuclei] {title}",
-      "aliases": [],
+      "title": "Known Vulnerability: Nuclei Finding",
+      "aliases": [
+        "Known Vulnerability: [Nuclei] {title}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -10246,8 +10249,10 @@
     },
     {
       "id": "SS-002",
-      "title": "Admin Endpoint Exposed: Apache Tomcat Manager",
-      "aliases": [],
+      "title": "Admin Endpoint Exposed",
+      "aliases": [
+        "Admin Endpoint Exposed: Apache Tomcat Manager"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -10330,8 +10335,10 @@
     },
     {
       "id": "SS-004",
-      "title": "Deprecated Protocol Enabled: {_norm_proto}",
-      "aliases": [],
+      "title": "Deprecated Protocol Enabled",
+      "aliases": [
+        "Deprecated Protocol Enabled: {_norm_proto}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -10369,8 +10376,10 @@
     },
     {
       "id": "SS-005",
-      "title": "Deprecated Protocol Enabled: {_TESTSSL_PROTO_IDS[_tsf_id]}",
-      "aliases": [],
+      "title": "Deprecated Protocol Enabled",
+      "aliases": [
+        "Deprecated Protocol Enabled: {_TESTSSL_PROTO_IDS[_tsf_id]}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -10408,8 +10417,10 @@
     },
     {
       "id": "SS-006",
-      "title": "Deprecated Protocol Enabled: {proto}",
-      "aliases": [],
+      "title": "Deprecated Protocol Enabled",
+      "aliases": [
+        "Deprecated Protocol Enabled: {proto}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -10447,8 +10458,10 @@
     },
     {
       "id": "SS-007",
-      "title": "EOL Software: {software_name} {version} (Extended Support)",
-      "aliases": [],
+      "title": "EOL Software (Extended Support)",
+      "aliases": [
+        "EOL Software: {software_name} {version} (Extended Support)"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -10486,8 +10499,10 @@
     },
     {
       "id": "SS-008",
-      "title": "EOL Software: {software_name} {version}",
-      "aliases": [],
+      "title": "EOL Software",
+      "aliases": [
+        "EOL Software: {software_name} {version}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -10525,8 +10540,10 @@
     },
     {
       "id": "SS-009",
-      "title": "Insecure Protocol Detected: {_insec_name}",
-      "aliases": [],
+      "title": "Insecure Protocol Detected",
+      "aliases": [
+        "Insecure Protocol Detected: {_insec_name}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -10564,8 +10581,10 @@
     },
     {
       "id": "SS-010",
-      "title": "Authentication Bypass: IPMI Cipher Suite 0 Auth Bypass Confirmed \u2014 user={user}",
-      "aliases": [],
+      "title": "Authentication Bypass: IPMI Cipher Suite 0 Auth Bypass Confirmed",
+      "aliases": [
+        "Authentication Bypass: IPMI Cipher Suite 0 Auth Bypass Confirmed \u2014 user={user}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -10605,8 +10624,10 @@
     },
     {
       "id": "SS-011",
-      "title": "Known Vulnerability: {software_name} {version} \u2014 {cve_desc}",
-      "aliases": [],
+      "title": "Known Vulnerability",
+      "aliases": [
+        "Known Vulnerability: {software_name} {version} \u2014 {cve_desc}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -10644,8 +10665,10 @@
     },
     {
       "id": "SS-012",
-      "title": "SSH Vulnerability: libSSH Authentication Bypass (CVE-2018-10933) \u2014 v{ver}",
-      "aliases": [],
+      "title": "SSH Vulnerability: libSSH Authentication Bypass (CVE-2018-10933)",
+      "aliases": [
+        "SSH Vulnerability: libSSH Authentication Bypass (CVE-2018-10933) \u2014 v{ver}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -10685,8 +10708,10 @@
     },
     {
       "id": "SS-013",
-      "title": "Known Vulnerability: Metasploit Module Available: {cve}",
-      "aliases": [],
+      "title": "Known Vulnerability: Metasploit Module Available",
+      "aliases": [
+        "Known Vulnerability: Metasploit Module Available: {cve}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -10724,8 +10749,10 @@
     },
     {
       "id": "SS-014",
-      "title": "Missing Security Header: {header_name}",
-      "aliases": [],
+      "title": "Missing Security Header",
+      "aliases": [
+        "Missing Security Header: {header_name}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -10763,8 +10790,10 @@
     },
     {
       "id": "SS-015",
-      "title": "Database: MySQL CVE-2012-2122 Authentication Bypass Risk (v{server_ver})",
-      "aliases": [],
+      "title": "Database: MySQL CVE-2012-2122 Authentication Bypass Risk",
+      "aliases": [
+        "Database: MySQL CVE-2012-2122 Authentication Bypass Risk (v{server_ver})"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -10804,8 +10833,10 @@
     },
     {
       "id": "SS-016",
-      "title": "Enumeration: NFS Export Enumerated: {_export_path}",
-      "aliases": [],
+      "title": "Enumeration: NFS Export Enumerated",
+      "aliases": [
+        "Enumeration: NFS Export Enumerated: {_export_path}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -10846,8 +10877,10 @@
     },
     {
       "id": "SS-017",
-      "title": "EOL Software: OS End-of-Life (Extended Support): {label}",
-      "aliases": [],
+      "title": "EOL Software: OS End-of-Life (Extended Support)",
+      "aliases": [
+        "EOL Software: OS End-of-Life (Extended Support): {label}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -10885,8 +10918,10 @@
     },
     {
       "id": "SS-018",
-      "title": "EOL Software: OS End-of-Life: {label}",
-      "aliases": [],
+      "title": "EOL Software: OS End-of-Life",
+      "aliases": [
+        "EOL Software: OS End-of-Life: {label}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -10924,8 +10959,10 @@
     },
     {
       "id": "SS-019",
-      "title": "OS Version Detected: {final_os}",
-      "aliases": [],
+      "title": "OS Version Detected",
+      "aliases": [
+        "OS Version Detected: {final_os}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -10963,8 +11000,10 @@
     },
     {
       "id": "SS-020",
-      "title": "Known Vulnerability: Public Exploit Available: {cve}",
-      "aliases": [],
+      "title": "Known Vulnerability: Public Exploit Available",
+      "aliases": [
+        "Known Vulnerability: Public Exploit Available: {cve}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -11002,8 +11041,10 @@
     },
     {
       "id": "SS-021",
-      "title": "Credential Capture: Responder Captured {ht} Hashes",
-      "aliases": [],
+      "title": "Credential Capture: Responder Hash Capture",
+      "aliases": [
+        "Credential Capture: Responder Captured {ht} Hashes"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -11041,8 +11082,10 @@
     },
     {
       "id": "SS-022",
-      "title": "Credential Capture: Responder Captured {proto} Credentials",
-      "aliases": [],
+      "title": "Credential Capture: Responder Credential Capture",
+      "aliases": [
+        "Credential Capture: Responder Captured {proto} Credentials"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -11202,8 +11245,10 @@
     },
     {
       "id": "SS-026",
-      "title": "Software Version Detected: {_sw_label}",
-      "aliases": [],
+      "title": "Software Version Detected",
+      "aliases": [
+        "Software Version Detected: {_sw_label}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -11286,8 +11331,10 @@
     },
     {
       "id": "SS-028",
-      "title": "SSL/TLS Vulnerability (Potential): {_tsf_id}",
-      "aliases": [],
+      "title": "SSL/TLS Vulnerability (Potential)",
+      "aliases": [
+        "SSL/TLS Vulnerability (Potential): {_tsf_id}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -11325,8 +11372,10 @@
     },
     {
       "id": "SS-029",
-      "title": "SSL/TLS Vulnerability: {_tsf_id}",
-      "aliases": [],
+      "title": "SSL/TLS Vulnerability",
+      "aliases": [
+        "SSL/TLS Vulnerability: {_tsf_id}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -11364,8 +11413,10 @@
     },
     {
       "id": "SS-030",
-      "title": "SSL/TLS Vulnerability: {name}",
-      "aliases": [],
+      "title": "SSL/TLS Vulnerability",
+      "aliases": [
+        "SSL/TLS Vulnerability: {name}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -11442,8 +11493,10 @@
     },
     {
       "id": "SS-032",
-      "title": "Admin Endpoint Exposed: VMware ESXi",
-      "aliases": [],
+      "title": "Admin Endpoint Exposed",
+      "aliases": [
+        "Admin Endpoint Exposed: VMware ESXi"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -11484,8 +11537,10 @@
     },
     {
       "id": "SS-033",
-      "title": "Known Vulnerability: Vulners: {cve_id} (CVSS {score})",
-      "aliases": [],
+      "title": "Known Vulnerability: Vulners CVE Match",
+      "aliases": [
+        "Known Vulnerability: Vulners: {cve_id} (CVSS {score})"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -11523,8 +11578,10 @@
     },
     {
       "id": "SS-034",
-      "title": "Web Vulnerability: WordPress Core Vulnerability: {vuln_title[:80]}",
-      "aliases": [],
+      "title": "Web Vulnerability: WordPress Core Vulnerability",
+      "aliases": [
+        "Web Vulnerability: WordPress Core Vulnerability: {vuln_title[:80]}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -11562,8 +11619,10 @@
     },
     {
       "id": "SS-035",
-      "title": "Web Vulnerability: WordPress Plugin Vulnerability: {vuln_title[:65]} ({plugin_slug})",
-      "aliases": [],
+      "title": "Web Vulnerability: WordPress Plugin Vulnerability",
+      "aliases": [
+        "Web Vulnerability: WordPress Plugin Vulnerability: {vuln_title[:65]} ({plugin_slug})"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -11601,8 +11660,10 @@
     },
     {
       "id": "SS-036",
-      "title": "Web Vulnerability: WordPress Theme Vulnerability: {vuln_title[:70]} ({theme_slug})",
-      "aliases": [],
+      "title": "Web Vulnerability: WordPress Theme Vulnerability",
+      "aliases": [
+        "Web Vulnerability: WordPress Theme Vulnerability: {vuln_title[:70]} ({theme_slug})"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -13583,8 +13644,10 @@
     },
     {
       "id": "SS-062",
-      "title": "SSL/TLS Vulnerability: insecure_redirect",
-      "aliases": [],
+      "title": "SSL/TLS Vulnerability",
+      "aliases": [
+        "SSL/TLS Vulnerability: insecure_redirect"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -13622,8 +13685,10 @@
     },
     {
       "id": "SS-063",
-      "title": "SSL/TLS Vulnerability: ipv4_in_header",
-      "aliases": [],
+      "title": "SSL/TLS Vulnerability",
+      "aliases": [
+        "SSL/TLS Vulnerability: ipv4_in_header"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -13661,8 +13726,10 @@
     },
     {
       "id": "SS-064",
-      "title": "SSL/TLS Vulnerability: secure_client_renego",
-      "aliases": [],
+      "title": "SSL/TLS Vulnerability",
+      "aliases": [
+        "SSL/TLS Vulnerability: secure_client_renego"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -13700,8 +13767,10 @@
     },
     {
       "id": "SS-065",
-      "title": "SSL/TLS Vulnerability: TLS_misses_extension_23",
-      "aliases": [],
+      "title": "SSL/TLS Vulnerability",
+      "aliases": [
+        "SSL/TLS Vulnerability: TLS_misses_extension_23"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -14124,8 +14193,10 @@
     },
     {
       "id": "SS3-179",
-      "title": "SSH Vulnerability: {cve_id}",
-      "aliases": [],
+      "title": "SSH Vulnerability",
+      "aliases": [
+        "SSH Vulnerability: {cve_id}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -15280,10 +15351,11 @@
     },
     {
       "id": "SS3-197",
-      "title": "Admin Endpoint Exposed: RabbitMQ",
+      "title": "Admin Endpoint Exposed",
       "aliases": [
         "RabbitMQ Management",
-        "RabbitMQ UI"
+        "RabbitMQ UI",
+        "Admin Endpoint Exposed: RabbitMQ"
       ],
       "source_tools": [
         "scattershot3"
@@ -17002,11 +17074,12 @@
     },
     {
       "id": "SS-081",
-      "title": "Sensitive File Exposed: {_status_label} Page Exposed",
+      "title": "Sensitive File Exposed: Status Page Exposed",
       "aliases": [
         "Apache Server Status Exposed",
         "Apache Server Info Exposed",
-        "mod_status Accessible"
+        "mod_status Accessible",
+        "Sensitive File Exposed: {_status_label} Page Exposed"
       ],
       "source_tools": [
         "scattershot3"
@@ -17148,11 +17221,12 @@
     },
     {
       "id": "SS-083",
-      "title": "Debug Endpoint Exposed: {_dbg_label}",
+      "title": "Debug Endpoint Exposed",
       "aliases": [
         "Spring Boot Actuator Exposed",
         "Django Debug Toolbar Exposed",
-        "Debug Console Accessible"
+        "Debug Console Accessible",
+        "Debug Endpoint Exposed: {_dbg_label}"
       ],
       "source_tools": [
         "scattershot3"
@@ -18431,10 +18505,11 @@
     },
     {
       "id": "SS3-218",
-      "title": "Authentication: Weak Credentials: {SERVICE}",
+      "title": "Authentication: Weak Credentials",
       "aliases": [
         "BruteSpray Weak Credentials",
-        "Service Weak Password"
+        "Service Weak Password",
+        "Authentication: Weak Credentials: {SERVICE}"
       ],
       "source_tools": [
         "scattershot3",
@@ -18502,7 +18577,9 @@
       ]
     },
     {
-      "aliases": [],
+      "aliases": [
+        "OS Version Detected: {os} [Inferred]"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -18539,13 +18616,15 @@
       "remediation_effort": "Easy",
       "validation_tools": [],
       "id": "SS3-219",
-      "title": "OS Version Detected: {os} [Inferred]",
+      "title": "OS Version Detected [Inferred]",
       "description": "Operating system inferred from software version analysis and port fingerprinting rather than direct nmap OS detection or SSH banner identification. Inference sources include IIS version to Windows Server edition mapping, SQL Server version correlation, OpenSSH banner to Linux distribution mapping, Cockpit version to RHEL mapping, Microsoft service software presence, VMware ESXi detection, and Windows-characteristic port combinations (RDP, SMB, MSRPC, WinRM).",
       "impact": "Accurate OS identification enables targeted vulnerability assessment, patch validation, and compliance scope determination. Inferred OS guides the tester toward OS-specific attack vectors, default credential databases, and known exploit chains. Without OS identification, vulnerability assessment is less targeted and may miss platform-specific weaknesses.",
       "remediation_brief": "Informational finding. Validate inferred OS with targeted nmap -O scan or authenticated assessment. Use the inferred OS to scope platform-specific vulnerability checks."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Server Role Identified \u2014 Domain Controller"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -18587,13 +18666,15 @@
       "remediation_effort": "Easy",
       "validation_tools": [],
       "id": "SS3-220",
-      "title": "Discovery: Server Role Identified \u2014 Domain Controller",
+      "title": "Discovery: Server Role Identified",
       "description": "Host identified as an Active Directory Domain Controller based on Kerberos (88/tcp), LDAP (389/tcp), and supporting services (Global Catalog, DNS, SMB). Domain Controllers are the central authentication and authorization authority for Windows Active Directory environments.",
       "impact": "Domain Controllers hold the keys to the entire Active Directory environment. Compromise of a DC grants access to all domain-joined systems, user credentials (NTDS.dit), Group Policy Objects, and Kerberos ticket-granting services. DCs are prime targets for Kerberoasting, DCSync, Golden Ticket, and Pass-the-Hash attacks. Identifying DCs early directs the tester to the highest-value targets.",
       "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Server Role Identified \u2014 DNS Server"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -18635,13 +18716,15 @@
       "remediation_effort": "Easy",
       "validation_tools": [],
       "id": "SS3-221",
-      "title": "Discovery: Server Role Identified \u2014 DNS Server",
+      "title": "Discovery: Server Role Identified",
       "description": "Host identified as a DNS server based on port 53 (TCP/UDP) and optionally detected DNS software (BIND, dnsmasq, Unbound, PowerDNS, Microsoft DNS).",
       "impact": "DNS servers reveal internal network topology, naming conventions, and service locations through zone transfers (AXFR) and record enumeration. A compromised DNS server enables DNS poisoning, traffic redirection, and man-in-the-middle attacks across the entire network.",
       "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Server Role Identified \u2014 DHCP Server"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -18683,13 +18766,15 @@
       "remediation_effort": "Easy",
       "validation_tools": [],
       "id": "SS3-222",
-      "title": "Discovery: Server Role Identified \u2014 DHCP Server",
+      "title": "Discovery: Server Role Identified",
       "description": "Host identified as a DHCP server based on port 67/udp and optionally detected DHCP software (ISC DHCP, dnsmasq).",
       "impact": "DHCP servers control IP address assignment and can push configuration to all clients including DNS servers, default gateways, and proxy settings. A rogue or compromised DHCP server enables network-wide man-in-the-middle attacks via malicious gateway or DNS injection.",
       "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Server Role Identified \u2014 Mail Server"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -18731,13 +18816,15 @@
       "remediation_effort": "Easy",
       "validation_tools": [],
       "id": "SS3-223",
-      "title": "Discovery: Server Role Identified \u2014 Mail Server",
+      "title": "Discovery: Server Role Identified",
       "description": "Host identified as a mail server based on SMTP (25/tcp) and optionally POP3/IMAP/submission ports (110, 143, 465, 587, 993, 995) with detected mail software (Postfix, Sendmail, Exim, Exchange, Dovecot).",
       "impact": "Mail servers process and store organizational email containing sensitive communications, credentials, and attachments. They are targets for credential harvesting, phishing relay, open relay abuse, and data exfiltration. Exchange servers in particular may expose OWA and EWS interfaces with known exploitation chains (ProxyShell, ProxyLogon).",
       "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Server Role Identified \u2014 Web Server"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -18779,13 +18866,15 @@
       "remediation_effort": "Easy",
       "validation_tools": [],
       "id": "SS3-224",
-      "title": "Discovery: Server Role Identified \u2014 Web Server",
+      "title": "Discovery: Server Role Identified",
       "description": "Host identified as a web server based on HTTP/HTTPS ports (80, 443, 8080, 8443) and optionally detected web server software (Nginx, Apache, IIS, Tomcat, Lighttpd, Caddy, HAProxy).",
       "impact": "Web servers host applications, APIs, and administrative interfaces that represent a significant portion of the external attack surface. Identification enables targeted web vulnerability scanning, technology-specific exploit testing, and web application penetration testing.",
       "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Server Role Identified \u2014 Database Server"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -18827,13 +18916,15 @@
       "remediation_effort": "Easy",
       "validation_tools": [],
       "id": "SS3-225",
-      "title": "Discovery: Server Role Identified \u2014 Database Server",
+      "title": "Discovery: Server Role Identified",
       "description": "Host identified as a database server based on database ports (MySQL 3306, PostgreSQL 5432, MSSQL 1433, Oracle 1521, MongoDB 27017, Redis 6379, Cassandra 9042) and optionally detected database software.",
       "impact": "Database servers store the organization's structured data including user records, financial data, and application state. Direct database access enables data exfiltration, privilege escalation via stored procedures, and lateral movement through linked servers or database links. Exposed database ports are high-value targets for credential brute-forcing.",
       "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Server Role Identified \u2014 File Server"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -18875,13 +18966,15 @@
       "remediation_effort": "Easy",
       "validation_tools": [],
       "id": "SS3-226",
-      "title": "Discovery: Server Role Identified \u2014 File Server",
+      "title": "Discovery: Server Role Identified",
       "description": "Host identified as a file server based on SMB (445/tcp), NetBIOS (139/tcp), NFS (2049/tcp), and RPC (111/tcp) port combinations.",
       "impact": "File servers contain shared documents, configuration files, scripts, and potentially credentials or sensitive data in accessible shares. SMB shares are prime targets for credential relay attacks (NTLM relay), sensitive data discovery, and lateral movement. NFS exports may allow unauthorized access when misconfigured.",
       "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Server Role Identified \u2014 Print Server"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -18917,13 +19010,15 @@
       "remediation_effort": "Easy",
       "validation_tools": [],
       "id": "SS3-227",
-      "title": "Discovery: Server Role Identified \u2014 Print Server",
+      "title": "Discovery: Server Role Identified",
       "description": "Host identified as a print server based on IPP (631/tcp), LPD (515/tcp), or JetDirect (9100/tcp) ports and optionally CUPS software detection.",
       "impact": "Print servers process documents that may contain sensitive information. Print protocols (IPP, LPD, JetDirect) historically have weak authentication and known vulnerabilities. CUPS servers may expose administrative interfaces and have been subject to remote code execution vulnerabilities.",
       "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Server Role Identified \u2014 Proxy/Load Balancer"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -18965,13 +19060,15 @@
       "remediation_effort": "Easy",
       "validation_tools": [],
       "id": "SS3-228",
-      "title": "Discovery: Server Role Identified \u2014 Proxy/Load Balancer",
+      "title": "Discovery: Server Role Identified",
       "description": "Host identified as a proxy or load balancer based on common proxy ports (3128, 8080, 8443) and optionally detected software (Squid, HAProxy, Nginx, Varnish, Envoy, Traefik, F5).",
       "impact": "Proxy and load balancer infrastructure reveals backend server topology and may expose administrative interfaces. Misconfigured proxies can enable server-side request forgery (SSRF), cache poisoning, and access to internal-only services. Load balancer admin panels may grant control over traffic routing.",
       "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Server Role Identified \u2014 VPN Gateway"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -19013,13 +19110,15 @@
       "remediation_effort": "Easy",
       "validation_tools": [],
       "id": "SS3-229",
-      "title": "Discovery: Server Role Identified \u2014 VPN Gateway",
+      "title": "Discovery: Server Role Identified",
       "description": "Host identified as a VPN gateway based on OpenVPN (1194/tcp/udp), IKE (500/udp), NAT-T (4500/udp), L2TP (1701/udp), or PPTP (1723/tcp) ports and optionally detected VPN software.",
       "impact": "VPN gateways are the entry point to internal networks from external locations. Compromising a VPN gateway grants authenticated access to the internal network segment. VPN appliances have been subject to critical vulnerabilities (Pulse Secure, Fortinet, Cisco AnyConnect) that enable pre-authentication remote code execution.",
       "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Server Role Identified \u2014 RADIUS Server"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -19061,13 +19160,15 @@
       "remediation_effort": "Easy",
       "validation_tools": [],
       "id": "SS3-230",
-      "title": "Discovery: Server Role Identified \u2014 RADIUS Server",
+      "title": "Discovery: Server Role Identified",
       "description": "Host identified as a RADIUS authentication server based on authentication (1812/udp) and accounting (1813/udp) ports and optionally detected RADIUS software (FreeRADIUS).",
       "impact": "RADIUS servers centralize network access authentication for VPN, wireless, and 802.1X wired access. Compromising a RADIUS server enables authentication bypass for all connected network access infrastructure, potentially granting access to every network segment protected by 802.1X or VPN authentication.",
       "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Server Role Identified \u2014 Monitoring Server"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -19109,13 +19210,15 @@
       "remediation_effort": "Easy",
       "validation_tools": [],
       "id": "SS3-231",
-      "title": "Discovery: Server Role Identified \u2014 Monitoring Server",
+      "title": "Discovery: Server Role Identified",
       "description": "Host identified as a monitoring or observability server based on SNMP (161-162/udp), Prometheus (9090/tcp), Grafana (3000/tcp), Kibana (5601/tcp), or Elasticsearch (9200/tcp) port combinations and optionally detected monitoring software.",
       "impact": "Monitoring servers aggregate telemetry, logs, and metrics from across the infrastructure, providing a comprehensive view of network topology, service health, and security events. Compromising a monitoring server reveals the full infrastructure map and may expose credentials stored in data source configurations. SNMP community strings and monitoring agent credentials are high-value targets.",
       "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Server Role Identified \u2014 Virtualization Host"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -19157,13 +19260,15 @@
       "remediation_effort": "Easy",
       "validation_tools": [],
       "id": "SS3-232",
-      "title": "Discovery: Server Role Identified \u2014 Virtualization Host",
+      "title": "Discovery: Server Role Identified",
       "description": "Host identified as a virtualization host based on VMware (902/tcp, 443/tcp), Proxmox (8006/tcp) ports and optionally detected hypervisor software (ESXi, VMware, Proxmox, vCenter).",
       "impact": "Virtualization hosts run multiple virtual machines and represent high-value targets. Compromising a hypervisor grants access to all hosted VMs, their virtual disks, memory contents, and network traffic. ESXi and vCenter have been subject to critical vulnerabilities enabling remote code execution and VM escape.",
       "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Server Role Identified \u2014 CI/CD Server"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -19205,13 +19310,15 @@
       "remediation_effort": "Easy",
       "validation_tools": [],
       "id": "SS3-233",
-      "title": "Discovery: Server Role Identified \u2014 CI/CD Server",
+      "title": "Discovery: Server Role Identified",
       "description": "Host identified as a CI/CD server based on Jenkins (8080/tcp, 50000/tcp), GitLab, TeamCity, or Bamboo port and software detection.",
       "impact": "CI/CD servers have access to source code repositories, build artifacts, deployment credentials, and production infrastructure. Compromising a CI/CD pipeline enables supply chain attacks, credential theft from build environments, and code injection into production deployments. Jenkins servers frequently expose unauthenticated script consoles.",
       "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Server Role Identified \u2014 Container Host"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -19253,13 +19360,15 @@
       "remediation_effort": "Easy",
       "validation_tools": [],
       "id": "SS3-234",
-      "title": "Discovery: Server Role Identified \u2014 Container Host",
+      "title": "Discovery: Server Role Identified",
       "description": "Host identified as a container orchestration host based on Docker API (2375-2376/tcp), Kubernetes API (6443/tcp), kubelet (10250/tcp) ports and optionally detected container software (Docker, Kubernetes, Portainer, Rancher).",
       "impact": "Container hosts run containerized workloads and expose orchestration APIs that may grant cluster-wide access. An exposed Docker socket (2375/tcp without TLS) allows arbitrary container creation with host filesystem access. Kubernetes API access enables pod creation, secret extraction, and lateral movement across the cluster.",
       "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Server Role Identified \u2014 Backup Server"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -19301,13 +19410,15 @@
       "remediation_effort": "Easy",
       "validation_tools": [],
       "id": "SS3-235",
-      "title": "Discovery: Server Role Identified \u2014 Backup Server",
+      "title": "Discovery: Server Role Identified",
       "description": "Host identified as a backup server based on Veeam (10000/tcp), Bacula/Bareos (9103/tcp), or monitoring agent (6556/tcp) ports and optionally detected backup software.",
       "impact": "Backup servers contain copies of data from across the infrastructure, including databases, file servers, and application data. Compromising a backup server provides access to historical data, potentially including credentials, and may enable restoration of data to attacker-controlled systems. Backup credentials often have broad read access across the environment.",
       "remediation_brief": "Informational finding. Validate server role and ensure appropriate hardening per role. Apply role-specific security baselines (CIS benchmarks, DISA STIGs) and verify least-privilege network access."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Software Detected: {_sw_label}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -19344,13 +19455,15 @@
       "validation_tools": [],
       "_template": true,
       "id": "SS3-236",
-      "title": "Software Detected: {_sw_label}",
+      "title": "Software Detected",
       "description": "Software product identified on a host without a specific version number. While the product name is known, the absence of version information limits vulnerability assessment.",
       "impact": "Identified software presence reveals the technology stack in use. Without version information, targeted CVE matching is not possible, but the product category still aids attack surface mapping.",
       "remediation_brief": "Restrict service banner exposure and unnecessary protocol responses to limit software fingerprinting opportunities."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Environment Tier Inferred \u2014 {environment}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -19387,13 +19500,15 @@
       "validation_tools": [],
       "_template": true,
       "id": "SS3-237",
-      "title": "Discovery: Environment Tier Inferred \u2014 {environment}",
+      "title": "Discovery: Environment Tier Inferred",
       "description": "Server environment tier (e.g. Production, Test, DR, Pre-Production) inferred from hostname naming convention analysis.",
       "impact": "Environment classification reveals network segmentation practices and identifies production systems that handle live data, aiding risk prioritization.",
       "remediation_brief": "Review hostname naming conventions to ensure they do not inadvertently expose environment classification to unauthenticated users. Consider using opaque hostnames for externally-facing systems."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Application Identified \u2014 {app_name}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -19430,13 +19545,15 @@
       "validation_tools": [],
       "_template": true,
       "id": "SS3-238",
-      "title": "Discovery: Application Identified \u2014 {app_name}",
+      "title": "Discovery: Application Identified",
       "description": "Enterprise application identified from hostname naming convention. The hostname pattern matches a known product naming scheme.",
       "impact": "Application identification from hostnames reveals the technology stack without requiring active probing, aiding targeted vulnerability research and attack surface mapping.",
       "remediation_brief": "Use opaque hostnames that do not embed application or product names for internet-facing systems."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Hardware Model Identified \u2014 {model}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -19473,13 +19590,15 @@
       "validation_tools": [],
       "_template": true,
       "id": "SS3-239",
-      "title": "Discovery: Hardware Model Identified \u2014 {model}",
+      "title": "Discovery: Hardware Model Identified",
       "description": "Server hardware model inferred from hostname naming convention. The hostname contains a pattern matching a known server hardware model number.",
       "impact": "Hardware model identification reveals the physical infrastructure platform, which may have known firmware vulnerabilities or BIOS/BMC attack surfaces (e.g., iDRAC, iLO).",
       "remediation_brief": "Avoid embedding hardware model identifiers in hostnames. Review BIOS/firmware update status on identified hardware platforms."
     },
     {
-      "aliases": [],
+      "aliases": [
+        "Discovery: Server Role Inferred \u2014 {role}"
+      ],
       "source_tools": [
         "scattershot3"
       ],
@@ -19516,7 +19635,7 @@
       "validation_tools": [],
       "_template": true,
       "id": "SS3-240",
-      "title": "Discovery: Server Role Inferred \u2014 {role}",
+      "title": "Discovery: Server Role Identified",
       "description": "Server role inferred from hostname token analysis. Keywords in the hostname suggest a specific server function (e.g., sql=Database, api=API Server, vpn=VPN Gateway).",
       "impact": "Server role identification aids in targeting specific service types and identifying high-value targets such as database servers, domain controllers, or backup systems.",
       "remediation_brief": "Use role-neutral hostnames for externally-facing systems. Ensure hostname-implied services are properly hardened for their role."
@@ -19891,8 +20010,9 @@
     },
     {
       "id": "SS-AI-001",
-      "title": "AI/ML Service Exposed \u2014 {service}",
+      "title": "AI/ML: Service Exposed",
       "aliases": [
+        "AI/ML Service Exposed",
         "AI Service Detected",
         "ML Service Exposed"
       ],
@@ -19986,8 +20106,9 @@
     },
     {
       "id": "SS-AI-002",
-      "title": "AI Service Unauthenticated Access",
+      "title": "AI/ML: AI Service Unauthenticated Access",
       "aliases": [
+        "AI Service Unauthenticated Access",
         "Unauthenticated AI API",
         "AI Endpoint No Auth"
       ],

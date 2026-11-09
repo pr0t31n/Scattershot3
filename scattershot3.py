@@ -3435,7 +3435,7 @@ class OutputManager:
                     # testssl: explicit named vulnerabilities
                     for v in ssl_result.get("vulnerabilities", []):
                         vulns.append({
-                            "title":    f"SSL/TLS Vulnerability: {v['name']}",
+                            "title":    "SSL/TLS Vulnerability",
                             "severity": v.get("severity", ""),
                             "detail":   v.get("status", ""),
                         })
@@ -3447,7 +3447,7 @@ class OutputManager:
                         proto   = proto_entry.get("protocol", "")
                         if enabled and (_RE_WEAK_SSL.search(proto) or _RE_WEAK_TLS.search(proto)):
                             vulns.append({
-                                "title":    f"Deprecated Protocol Enabled: {proto}",
+                                "title":    "Deprecated Protocol Enabled",
                                 "severity": _proto_risk(proto),
                                 "detail":   status,
                             })
@@ -4091,7 +4091,7 @@ class OutputManager:
                     f"{', '.join(str(p) for p in sorted(_win_ports))}"
                 )
             self.log_finding(
-                title=f"OS Version Detected: {_h_os} [Inferred]",
+                title="OS Version Detected [Inferred]",
                 ip=_hip,
                 port=0,
                 command=[],
@@ -4104,7 +4104,7 @@ class OutputManager:
                 ),
                 sources="scattershot3",
                 output="\n".join(_ev_lines),
-                affected=_hip,
+                affected=f"{_h_os} ({_hip})",
                 output_file=str(
                     self.software_inventory.relative_to(self.root)
                 ),
@@ -4163,7 +4163,7 @@ class OutputManager:
                     "ports":    sorted(_port_set),
                 })
                 self.log_finding(
-                    title=f"Discovery: Server Role Identified — {_role}",
+                    title="Discovery: Server Role Identified",
                     ip=_hip,
                     port=0,
                     command=[],
@@ -4175,7 +4175,7 @@ class OutputManager:
                     ),
                     sources="scattershot3",
                     output=f"Role: {_role}\n{_role_ev}",
-                    affected=_hip,
+                    affected=f"{_role} ({_hip})",
                     output_file=str(
                         self.software_inventory.relative_to(self.root)
                     ),
@@ -6221,12 +6221,12 @@ def _parse_nse_findings(
                 else:
                     risk = "LOW"
                 output_mgr.log_finding(
-                    title=f"Known Vulnerability: Vulners: {cve_id} (CVSS {score})",
+                    title="Known Vulnerability: Vulners CVE Match",
                     ip=ip, port=port, command=cmd, hostname=hostname, risk=risk,
                     description=f"Nmap Vulners NSE detected {cve_id} (CVSS score {score}) on this service.",
                     sources="nmap-nse", cves=cve_id,
                     output=line,
-                    affected=f"{ip}:{port}",
+                    affected=f"{cve_id} CVSS {score} ({ip}:{port})",
                     output_file=output_file,
                 )
 
@@ -8282,7 +8282,7 @@ def probe_uncertain_and_nonstandard_ports(
                                     ("Server Version" in _ss_body or "Current Time" in _ss_body
                                      or "Scoreboard" in _ss_body or "Server Built" in _ss_body)):
                                 output_mgr.log_finding(
-                                    title=f"Sensitive File Exposed: {_status_label} Page Exposed",
+                                    title="Sensitive File Exposed: Status Page Exposed",
                                     ip=ip, port=_port, hostname=hostname,
                                     command=f"curl -sk {_scheme}://{_curl_host}:{_port}{_status_ep}",
                                     risk="MEDIUM",
@@ -8296,7 +8296,7 @@ def probe_uncertain_and_nonstandard_ports(
                                     ),
                                     output=_ss_body[:1024],
                                     sources="scattershot3-curl-probe",
-                                    affected=f"{ip}:{_port}",
+                                    affected=f"{_status_label} ({ip}:{_port})",
                                     output_file=str(_curl_path.relative_to(output_mgr.root)),
                                 )
                                 _tprint(
@@ -8354,7 +8354,7 @@ def probe_uncertain_and_nonstandard_ports(
                                 _dbg_ok = True
                             if _dbg_ok:
                                 output_mgr.log_finding(
-                                    title=f"Debug Endpoint Exposed: {_dbg_label}",
+                                    title="Debug Endpoint Exposed",
                                     ip=ip, port=_port, hostname=hostname,
                                     command=f"curl -sk {_scheme}://{_curl_host}:{_port}{_dbg_ep}",
                                     risk="MEDIUM",
@@ -8368,7 +8368,7 @@ def probe_uncertain_and_nonstandard_ports(
                                     ),
                                     output=_dbg_body[:1024],
                                     sources="scattershot3-curl-probe",
-                                    affected=f"{ip}:{_port}",
+                                    affected=f"{_dbg_label} ({ip}:{_port})",
                                     output_file=str(_curl_path.relative_to(output_mgr.root)),
                                 )
                                 _tprint(
@@ -9040,7 +9040,7 @@ def probe_uncertain_and_nonstandard_ports(
 
                     # SS-AI-001: AI/ML Service Exposed
                     output_mgr.log_finding(
-                        title=f"AI/ML Service Exposed — {_ai_svc}",
+                        title="AI/ML: Service Exposed",
                         ip=ip, port=_port, hostname=hostname,
                         command=f"# AI probe {ip}:{_port}",
                         risk="MEDIUM",
@@ -9062,7 +9062,7 @@ def probe_uncertain_and_nonstandard_ports(
                             f"Models:     {len(_ai_mods)}"
                         ),
                         sources="scattershot3-ai-probe",
-                        affected=f"{ip}:{_port}",
+                        affected=f"{_ai_svc} ({ip}:{_port})",
                         output_file=_ai_of,
                     )
 
@@ -9071,7 +9071,7 @@ def probe_uncertain_and_nonstandard_ports(
                     # from a health check returning 200
                     if not _ai_auth and _ai_vfy:
                         output_mgr.log_finding(
-                            title="AI Service Unauthenticated Access",
+                            title="AI/ML: AI Service Unauthenticated Access",
                             ip=ip, port=_port, hostname=hostname,
                             command=f"# AI auth check {ip}:{_port}",
                             risk="HIGH",
@@ -9091,7 +9091,7 @@ def probe_uncertain_and_nonstandard_ports(
                                 f"Models:     {len(_ai_mods)}"
                             ),
                             sources="scattershot3-ai-probe",
-                            affected=f"{ip}:{_port}",
+                            affected=f"{_ai_svc} ({ip}:{_port})",
                             output_file=_ai_of,
                         )
 
@@ -9354,7 +9354,7 @@ def probe_uncertain_and_nonstandard_ports(
                             f"and adversarial input analysis."
                             f"{f' {len(_ai_mods)} model(s) loaded.' if _ai_mods else ''}"
                         ),
-                        source_finding=f"AI/ML Service Exposed — {_ai_svc}",
+                        source_finding=f"AI/ML: Service Exposed ({_ai_svc})",
                         priority="HIGH" if not _ai_auth else "MEDIUM",
                         metadata={
                             "ai_service": _ai_svc,
@@ -11725,7 +11725,7 @@ def _port_scan_worker(
                 # Scope-aware risk: cleartext protocols are HIGH externally
                 _insec_risk = "HIGH" if output_mgr.scope == "ext" else "MEDIUM"
                 output_mgr.log_finding(
-                    title=f"Insecure Protocol Detected: {_insec_name}",
+                    title="Insecure Protocol Detected",
                     ip=ip, port=port,
                     command=nmap_cmd_ref,
                     hostname=hostname,
@@ -11733,7 +11733,7 @@ def _port_scan_worker(
                     description=_insec_full_desc,
                     sources="nmap",
                     output="\n".join(_insec_aff_parts) or None,
-                    affected=f"{ip}:{port}",
+                    affected=f"{_insec_name} ({ip}:{port})",
                     output_file=str(_ps_out_path) if _ps_out_path else None,
                 )
 
@@ -12925,7 +12925,7 @@ def run_nuclei(
                 full_desc = " | ".join(desc_parts)
 
                 output_mgr.log_finding(
-                    title=f"Known Vulnerability: [Nuclei] {title}",
+                    title="Known Vulnerability: Nuclei Finding",
                     ip=ip,
                     port=port,
                     command=cmd,
@@ -12940,7 +12940,7 @@ def run_nuclei(
                         + (f"Description: {description[:600]}\n" if description else "")
                     ),
                     sources="nuclei", cves=", ".join(cves) if cves else "",
-                    affected=matched_at or (f"{ip}:{port}" if port else ip),
+                    affected=f"{title} ({matched_at or (f'{ip}:{port}' if port else ip)})",
                     output_file=str(jsonl_out),
                 )
 
@@ -13348,13 +13348,13 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
                             )
                             continue
                         output_mgr.log_finding(
-                            title=f"Deprecated Protocol Enabled: {proto}",
+                            title="Deprecated Protocol Enabled",
                             ip=ip, port=port, command=cmd, hostname=hostname,
                             risk=_proto_risk(proto),
                             description=f"sslscan: {proto} is enabled on {ip}:{port}",
                             sources="sslscan",
                             output=f"Protocol: {proto}\nStatus: enabled",
-                            affected=f"{ip}:{port}",
+                            affected=f"{proto} ({ip}:{port})",
                             output_file=_ss_out_file,
                         )
 
@@ -13881,7 +13881,7 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                         "TLSv1.1": "TLS 1.1 is deprecated (RFC 8996) and lacks the cipher suite improvements of TLS 1.2. Industry standards (PCI-DSS, NIST SP 800-52r2) require disabling TLS 1.1.",
                     }
                     output_mgr.log_finding(
-                        title=f"Deprecated Protocol Enabled: {_norm_proto}",
+                        title="Deprecated Protocol Enabled",
                         ip=ip, port=port, command=cmd, hostname=hostname,
                         risk=_proto_risk(proto_name),
                         description=_PROTO_DESCS.get(_norm_proto, f"{_norm_proto} is a deprecated protocol version that is no longer considered secure. Disable it and enforce TLS 1.2 or higher."),
@@ -13891,7 +13891,7 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                             f"Status: {proto_status}\n"
                             f"Note: {proto_note}"
                         ),
-                        affected=f"{ip}:{port}",
+                        affected=f"{_norm_proto} ({ip}:{port})",
                         output_file=_ts_out_file,
                     )
 
@@ -13995,7 +13995,8 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                     if _tsf_id_base in _TESTSSL_PROTO_IDS:
                         if "not offered" in _tsf_finding_lo:
                             continue  # protocol is correctly absent — no finding
-                        _tsf_title = f"Deprecated Protocol Enabled: {_TESTSSL_PROTO_IDS[_tsf_id_base]}"
+                        _tsf_title = "Deprecated Protocol Enabled"
+                        _tsf_affected = f"{_TESTSSL_PROTO_IDS[_tsf_id_base]} ({_tsf_affected or f'{ip}:{port}'})"
                         _tsf_risk  = _proto_risk(_TESTSSL_PROTO_IDS[_tsf_id_base])
                         _tsf_cve   = _TESTSSL_CVES_JSON.get(_tsf_id_base, "")
                         if _tsf_cve_inline:
@@ -14019,7 +14020,7 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                             _tsf_risk  = "LOW"
                         # ── Potential vulnerability — rename format ────────────
                         elif "potentially vulnerable" in _tsf_finding_lo:
-                            _tsf_title = f"SSL/TLS Vulnerability (Potential): {_tsf_id}"
+                            _tsf_title = "SSL/TLS Vulnerability (Potential)"; _tsf_affected = f"{_tsf_id} ({_tsf_affected or f'{ip}:{port}'})"
                             _tsf_risk  = "INFO"
                         # ── Cipher: No Cipher Order Configured ────────────────
                         elif _tsf_id_base.startswith("cipher_order"):
@@ -14198,12 +14199,12 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                             if "potentially" in _tsf_finding_lo:
                                 _tsf_title = "SSL/TLS Vulnerability (Potential): Lucky13"
                             else:
-                                _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id_base}"
+                                _tsf_title = "SSL/TLS Vulnerability"; _tsf_affected = f"{_tsf_id_base} ({_tsf_affected or f'{ip}:{port}'})"
                             _tsf_risk  = "MEDIUM" if _is_ext else "LOW"
                         elif _tsf_id_base == "SWEET32":
                             if "not vulnerable" in _tsf_finding_lo:
                                 continue
-                            _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id_base}"
+                            _tsf_title = "SSL/TLS Vulnerability"; _tsf_affected = f"{_tsf_id_base} ({_tsf_affected or f'{ip}:{port}'})"
                             _tsf_risk  = "MEDIUM" if _is_ext else "LOW"
                         elif _tsf_id_base == "LOGJAM":
                             if "not vulnerable" in _tsf_finding_lo:
@@ -14212,10 +14213,10 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                             _lj_small_dh = bool(re.search(
                                 r'(?:512|768|1024)\s*(?:bit|b\b)', _tsf_finding_lo))
                             if _lj_has_export or _lj_small_dh:
-                                _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id_base}"
+                                _tsf_title = "SSL/TLS Vulnerability"; _tsf_affected = f"{_tsf_id_base} ({_tsf_affected or f'{ip}:{port}'})"
                                 _tsf_risk  = "HIGH" if _is_ext else "MEDIUM"
                             else:
-                                _tsf_title = f"SSL/TLS Vulnerability (Potential): {_tsf_id_base}"
+                                _tsf_title = "SSL/TLS Vulnerability (Potential)"; _tsf_affected = f"{_tsf_id_base} ({_tsf_affected or f'{ip}:{port}'})"
                                 _tsf_risk  = "INFO"
                                 _tsf_finding = (
                                     "(Potential) testssl flagged LOGJAM due to a "
@@ -14225,20 +14226,20 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                                 )
                         # ── Auto-validated checks ───
                         elif _tsf_id_base == "insecure_redirect":
-                            _tsf_title = "SSL/TLS Vulnerability: insecure_redirect"
+                            _tsf_title = "SSL/TLS Vulnerability"; _tsf_affected = f"insecure_redirect ({_tsf_affected or f'{ip}:{port}'})"
                             _tsf_risk  = "MEDIUM"
                         elif _tsf_id_base == "secure_client_renego":
-                            _tsf_title = "SSL/TLS Vulnerability: secure_client_renego"
+                            _tsf_title = "SSL/TLS Vulnerability"; _tsf_affected = f"secure_client_renego ({_tsf_affected or f'{ip}:{port}'})"
                             _tsf_risk  = "LOW"
                         elif _tsf_id_base == "ipv4_in_header":
-                            _tsf_title = "SSL/TLS Vulnerability: ipv4_in_header"
+                            _tsf_title = "SSL/TLS Vulnerability"; _tsf_affected = f"ipv4_in_header ({_tsf_affected or f'{ip}:{port}'})"
                             _tsf_risk  = "LOW"
                         elif _tsf_id_base == "TLS_misses_extension_23":
                             if (_tsf_sev in ("OK", "INFO")
                                     or "detected" in _tsf_finding_lo
                                     or "offered" in _tsf_finding_lo):
                                 continue
-                            _tsf_title = "SSL/TLS Vulnerability: TLS_misses_extension_23"
+                            _tsf_title = "SSL/TLS Vulnerability"; _tsf_affected = f"TLS_misses_extension_23 ({_tsf_affected or f'{ip}:{port}'})"
                             _tsf_risk  = "MEDIUM" if _is_ext else "LOW"
                         elif _tsf_id_base in ("cert_notAfter",
                                          "cert_expirationStatus",
@@ -14278,7 +14279,7 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                             if ("not offered" in _tsf_finding_lo
                                     or "not vulnerable" in _tsf_finding_lo):
                                 continue
-                            _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id_base}"
+                            _tsf_title = "SSL/TLS Vulnerability"; _tsf_affected = f"{_tsf_id_base} ({_tsf_affected or f'{ip}:{port}'})"
                             if _tsf_risk in ("HIGH", "CRITICAL") and not _is_ext:
                                 _tsf_risk = {"CRITICAL": "HIGH", "HIGH": "MEDIUM"}.get(_tsf_risk, _tsf_risk)
 
@@ -16704,7 +16705,7 @@ def run_ssh_audit(
             else:
                 risk = "MEDIUM"
             output_mgr.log_finding(
-                title=f"SSH Vulnerability: {cve_id}",
+                title="SSH Vulnerability",
                 ip=ip, port=port, hostname=hostname,
                 command=cmd_str,
                 risk=risk,
@@ -16720,7 +16721,7 @@ def run_ssh_audit(
                 ),
                 cves=cve_id,
                 sources="ssh-audit",
-                affected=affected,
+                affected=f"{cve_id} ({affected})",
                 output_file=rel_out,
                 service="ssh",
             )
@@ -17823,7 +17824,7 @@ def check_os_eol(
         if ext_eol and today <= ext_eol:
             # Past standard EOL but within extended/LTS support
             output_mgr.log_finding(
-                title=f"EOL Software: OS End-of-Life (Extended Support): {label}{_inf_tag}",
+                title="EOL Software: OS End-of-Life (Extended Support)",
                 ip=ip, port=port, hostname=hostname, command=method,
                 risk="MEDIUM",
                 description=(
@@ -17838,13 +17839,13 @@ def check_os_eol(
                     f"Extended EOL: {ext_eol}\n"
                     f"Detection method: {method}"
                 ),
-                affected=f"{ip}",
+                affected=f"{label}{_inf_tag} ({ip})",
                 output_file=_eol_inv_rel,
             )
         else:
             # Fully EOL (past both standard and extended support)
             output_mgr.log_finding(
-                title=f"EOL Software: OS End-of-Life: {label}{_inf_tag}",
+                title="EOL Software: OS End-of-Life",
                 ip=ip, port=port, hostname=hostname, command=method,
                 risk="HIGH",
                 description=(
@@ -17860,7 +17861,7 @@ def check_os_eol(
                     + (f"Extended EOL: {ext_eol}\n" if ext_eol else "")
                     + f"Detection method: {method}"
                 ),
-                affected=f"{ip}",
+                affected=f"{label}{_inf_tag} ({ip})",
                 output_file=_eol_inv_rel,
             )
 
@@ -18769,6 +18770,8 @@ def record_software(
         _canon_os, _ = _resolve_ssh_os(final_os.replace(" ", "-"))
         if _canon_os:
             final_os = _canon_os
+        elif parsed_os is None and os_info:
+            final_os = None
 
     entry: dict = {
         "software":  software_name.strip(),
@@ -18825,7 +18828,7 @@ def record_software(
     else:
         _sw_title_prefix = "Software Detected"
     output_mgr.log_finding(
-        title=f"{_sw_title_prefix}: {_sw_label}",
+        title=_sw_title_prefix,
         ip=ip,
         port=port,
         command=[],
@@ -18834,7 +18837,7 @@ def record_software(
         description=f"Detected by {method}" + (f"; OS hint: {final_os}" if final_os else ""),
         sources=_src,
         output=f"Detection method: {method}\nEvidence: {evidence_line}",
-        affected=f"{ip}:{port}" if port else ip,
+        affected=f"{_sw_label} ({ip}:{port})" if port else f"{_sw_label} ({ip})",
         output_file=_sw_inv_rel,
     )
     if _is_os_product:
@@ -18842,7 +18845,7 @@ def record_software(
     if final_os:
         check_os_eol(output_mgr, ip, port, hostname, os_name=final_os, method=method)
         output_mgr.log_finding(
-            title=f"OS Version Detected: {final_os}",
+            title="OS Version Detected",
             ip=ip,
             port=port,
             command=[],
@@ -18851,7 +18854,7 @@ def record_software(
             description=f"OS hint from {method}",
             sources=_src,
             output=f"Detection method: {method}\nEvidence: {evidence_line}",
-            affected=ip,
+            affected=f"{final_os} ({ip})",
             output_file=_sw_inv_rel,
         )
 
@@ -19033,7 +19036,7 @@ def check_eol_and_vulns(
                 f"Security patches are limited to the extended support programme. "
                 f"Plan for migration before extended support ends."
             )
-            _eol_title = f"EOL Software: {software_name} {version} (Extended Support)"
+            _eol_title = "EOL Software: End-of-Life (Extended Support)"
             _eol_risk  = "MEDIUM"
         else:
             _eol_description = (
@@ -19045,7 +19048,7 @@ def check_eol_and_vulns(
                 + (f"Extended Support Ended: {_ext_support_end}\n" if _ext_support_end else "Extended Support: N/A\n")
                 + f"Versions below {db_entry['eol_before']} are considered end-of-life."
             )
-            _eol_title = f"EOL Software: {software_name} {version}"
+            _eol_title = "EOL Software: End-of-Life"
             _eol_risk  = "HIGH"
 
         findings.append({
@@ -19079,7 +19082,7 @@ def check_eol_and_vulns(
                     + (f"Extended support end: {_ext_support_end}\n" if _ext_support_end else "")
                     + f"Detection method: {method}"
                 ),
-                affected=f"{ip}:{port}" if port else ip,
+                affected=f"{software_name} {version} ({ip}:{port})" if port else f"{software_name} {version} ({ip})",
                 output_file=_eol_inv_rel,
             )
 
@@ -19103,7 +19106,7 @@ def check_eol_and_vulns(
                 _vuln_src = method.split()[0].lower() if method else "nmap"
                 _vuln_inv_rel = _eol_evidence_file(output_mgr, ip, port)
                 output_mgr.log_finding(
-                    title=f"Known Vulnerability: {software_name} {version} — {cve_desc}",
+                    title="Known Vulnerability",
                     ip=ip, port=port, hostname=hostname,
                     command=method, risk="CRITICAL",
                     description=cve_desc,
@@ -19115,7 +19118,7 @@ def check_eol_and_vulns(
                         f"Detail: {cve_desc}\n"
                         f"Detection method: {method}"
                     ),
-                    affected=f"{ip}:{port}" if port else ip,
+                    affected=f"{software_name} {version} — {cve_desc} ({ip}:{port})" if port else f"{software_name} {version} — {cve_desc} ({ip})",
                     output_file=_vuln_inv_rel,
                 )
 
@@ -20591,7 +20594,7 @@ def take_web_screenshot(
             # VMware ESXi management interface
             if "esxi host client" in _b_low or ("vmware" in _b_low and "esxi" in _b_low):
                 output_mgr.log_finding(
-                    title="Admin Endpoint Exposed: VMware ESXi",
+                    title="Admin Endpoint Exposed",
                     ip=ip, port=port, hostname=hostname,
                     command=f"screenshot {url}", risk="INFO",
                     description=(
@@ -20601,7 +20604,7 @@ def take_web_screenshot(
                     ),
                     output=_body_snippet[:512],
                     sources="screenshot-body",
-                    affected=f"{ip}:{port}",
+                    affected=f"VMware ESXi ({ip}:{port})",
                     output_file=_out_rel,
                 )
             # Jenkins CI/CD
@@ -22955,7 +22958,7 @@ def check_tomcat_manager(
             _tom_rel = None
 
         output_mgr.log_finding(
-            title="Admin Endpoint Exposed: Apache Tomcat Manager",
+            title="Admin Endpoint Exposed",
             ip=ip,
             port=port,
             command=f"HTTP GET {url}",
@@ -22976,7 +22979,7 @@ def check_tomcat_manager(
                 f"{resp.text[:2000]}"
             ),
             sources="http-fetch",
-            affected=url,
+            affected=f"Apache Tomcat Manager ({url})",
             output_file=_tom_rel,
         )
 
@@ -23584,7 +23587,7 @@ def run_shcheck(
                     f"on {ip}:{port}{Style.RESET_ALL}"
                 )
                 output_mgr.log_finding(
-                    title=f"Missing Security Header: {header_name}",
+                    title="Missing Security Header",
                     ip=ip, port=port, hostname=hostname,
                     risk=risk,
                     command=cmd_str,
@@ -23594,7 +23597,7 @@ def run_shcheck(
                     ),
                     sources="shcheck",
                     output=f"Missing header: {header_name}\nURL: {url}",
-                    affected=url,
+                    affected=f"{header_name} ({url})",
                     output_file=str(out_file),
                 )
             _json_parsed = True
@@ -23627,7 +23630,7 @@ def run_shcheck(
                 f"on {ip}:{port}{Style.RESET_ALL}"
             )
             output_mgr.log_finding(
-                title=f"Missing Security Header: {header_name}",
+                title="Missing Security Header",
                 ip=ip, port=port, hostname=hostname,
                 risk=risk,
                 command=cmd_str,
@@ -23637,7 +23640,7 @@ def run_shcheck(
                 ),
                 output=f"Missing header: {header_name}\nURL: {url}\nSource line: {line}",
                 sources="shcheck",
-                affected=url,
+                affected=f"{header_name} ({url})",
                 output_file=str(out_file),
             )
 
@@ -24116,7 +24119,7 @@ def run_wpscan(
             f"{vuln_title[:60]}{Style.RESET_ALL}"
         )
         output_mgr.log_finding(
-            title=f"WordPress Core Vulnerability: {vuln_title[:80]}",
+            title="Web Vulnerability: WordPress Core Vulnerability",
             ip=ip, port=port, hostname=hostname,
             risk="CRITICAL",
             command=" ".join(cmd),
@@ -24126,7 +24129,7 @@ def run_wpscan(
             ),
             output=json.dumps(vuln, indent=2),
             sources="wpscan", cves=cves,
-            affected=url,
+            affected=f"{vuln_title[:80]} ({url})",
             output_file=str(out_file),
         )
 
@@ -24150,7 +24153,7 @@ def run_wpscan(
             )
             _theme_cves = ", ".join((vuln.get("references") or {}).get("cve", []))
             output_mgr.log_finding(
-                title=f"WordPress Theme Vulnerability: {vuln_title[:70]} ({theme_slug})",
+                title="Web Vulnerability: WordPress Theme Vulnerability",
                 ip=ip, port=port, hostname=hostname,
                 risk="HIGH",
                 command=" ".join(cmd),
@@ -24160,7 +24163,7 @@ def run_wpscan(
                 ),
                 output=json.dumps(vuln, indent=2),
                 sources="wpscan", cves=_theme_cves,
-                affected=url,
+                affected=f"{vuln_title[:70]} {theme_slug} ({url})",
                 output_file=str(out_file),
             )
 
@@ -24176,7 +24179,7 @@ def run_wpscan(
             )
             _plugin_cves = ", ".join((vuln.get("references") or {}).get("cve", []))
             output_mgr.log_finding(
-                title=f"WordPress Plugin Vulnerability: {vuln_title[:65]} ({plugin_slug})",
+                title="Web Vulnerability: WordPress Plugin Vulnerability",
                 ip=ip, port=port, hostname=hostname,
                 risk="HIGH",
                 command=" ".join(cmd),
@@ -24186,7 +24189,7 @@ def run_wpscan(
                 ),
                 output=json.dumps(vuln, indent=2),
                 sources="wpscan", cves=_plugin_cves,
-                affected=url,
+                affected=f"{vuln_title[:65]} {plugin_slug} ({url})",
                 output_file=str(out_file),
             )
 
@@ -25487,7 +25490,8 @@ def log_responder_findings(
         # ── Finding 2: Per-type aggregate hash findings ────────────────────
         for ht, lines in type_buckets.items():
             _write_finding({
-                "title":    f"Credential Capture: Responder Captured {ht} Hashes",
+                "title":    "Credential Capture: Responder Hash Capture",
+                "affected": f"{ht} ({len(lines)} hash(es))",
                 "datetime": ts, "ip": "", "port": 0, "hostname": "",
                 "risk":     _HASH_TYPE_RISK.get(ht, "HIGH"),
                 "command":  resp_cmd,
@@ -25519,7 +25523,8 @@ def log_responder_findings(
             if proto == "SMB":
                 continue   # SMB hashes already covered by per-type findings above
             _write_finding({
-                "title":    f"Credential Capture: Responder Captured {proto} Credentials",
+                "title":    "Credential Capture: Responder Credential Capture",
+                "affected": f"{proto} ({len(proto_lines)} credential(s))",
                 "datetime": ts, "ip": "", "port": 0, "hostname": "",
                 "risk":     _PROTO_RISK.get(proto.upper(), "HIGH"),
                 "command":  resp_cmd,
@@ -25534,7 +25539,8 @@ def log_responder_findings(
         # ── Finding 5: Plaintext credentials ──────────────────────────────
         if cred_lines:
             _write_finding({
-                "title":    "Credential Capture: Responder Captured Plaintext Credentials",
+                "title":    "Credential Capture: Responder Plaintext Credential Capture",
+                "affected": f"Plaintext ({len(cred_lines)} credential(s))",
                 "datetime": ts, "ip": "", "port": 0, "hostname": "",
                 "risk":     "CRITICAL",
                 "command":  resp_cmd,
@@ -25822,7 +25828,7 @@ def run_libssh_check(
         except Exception:
             _libssh_rel = None
         output_mgr.log_finding(
-            title=f"SSH Vulnerability: libSSH Authentication Bypass (CVE-2018-10933) — v{ver}",
+            title="SSH Vulnerability: libSSH Authentication Bypass (CVE-2018-10933)",
             ip=ip, port=port,
             command="Scattershot-SSH-Banner-Analysis",
             hostname=hostname, risk="CRITICAL",
@@ -25840,7 +25846,7 @@ def run_libssh_check(
             ),
             cves="CVE-2018-10933",
             sources="ssh-banner",
-            affected=f"{ip}:{port}",
+            affected=f"libssh {ver} ({ip}:{port})",
             output_file=_libssh_rel,
         )
     else:
@@ -26756,7 +26762,7 @@ def run_mysql_auth_check(
                     (maj == 5 and mino == 6 and patch < 6) or
                     (maj == 5 and mino in (1, 2, 3))):
                 output_mgr.log_finding(
-                    title=f"Database: MySQL CVE-2012-2122 Authentication Bypass Risk (v{server_ver})",
+                    title="Database: MySQL CVE-2012-2122 Authentication Bypass Risk",
                     ip=ip, port=port,
                     command="Scattershot-MySQL-Auth-Check",
                     hostname=hostname, risk="HIGH",
@@ -26773,7 +26779,7 @@ def run_mysql_auth_check(
                     ),
                     cves="CVE-2012-2122",
                     sources="mysql-auth-check",
-                    affected=f"{ip}:{port}",
+                    affected=f"v{server_ver} ({ip}:{port})",
                     output_file=str(out_file),
                 )
                 lines.append("CVE-2012-2122: POTENTIALLY AFFECTED")
@@ -27548,7 +27554,7 @@ def run_nfs_enum(
                     )
 
                 output_mgr.log_finding(
-                    title=f"Enumeration: NFS Export Enumerated: {_export_path}",
+                    title="Enumeration: NFS Export Enumerated",
                     ip=ip, port=port,
                     command=f"nfs-rpc-enum {ip}:{_nfs_port}{_export_path}",
                     hostname=hostname,
@@ -27564,7 +27570,7 @@ def run_nfs_enum(
                         e["path"] for e in _er["tree"][:50]
                     ) + (f"\n... ({_total} total)" if _total > 50 else ""),
                     sources="nfs-rpc",
-                    affected=f"{ip}:{port}",
+                    affected=f"{_export_path} ({ip}:{port})",
                     output_file=_enum_file_str,
                 )
 
@@ -28835,7 +28841,7 @@ def check_esxi_fingerprint(
     except Exception:
         _esxi_rel = None
     output_mgr.log_finding(
-        title="Admin Endpoint Exposed: VMware ESXi",
+        title="Admin Endpoint Exposed",
         ip=ip, port=port,
         command=f"Scattershot-ESXi-Fingerprint {scheme}://{ip}:{port}/ui/",
         hostname=hostname, risk=risk,
@@ -28856,7 +28862,7 @@ def check_esxi_fingerprint(
             + f"Page body excerpt:\n{resp_text[:500]}"
         ),
         sources="esxi-fingerprint",
-        affected=_clean_url(scheme, ip, port),
+        affected=f"VMware ESXi ({_clean_url(scheme, ip, port)})",
         output_file=_esxi_rel,
     )
 
@@ -28926,7 +28932,7 @@ def run_ipmi_check(
                     f"on {ip}:{port} user={user}{Style.RESET_ALL}"
                 )
                 output_mgr.log_finding(
-                    title=f"Authentication Bypass: IPMI Cipher Suite 0 Auth Bypass Confirmed — user={user}",
+                    title="Authentication Bypass: IPMI Cipher Suite 0 Auth Bypass Confirmed",
                     ip=ip, port=port,
                     command=" ".join(cmd),
                     hostname=hostname, risk="CRITICAL",
@@ -28946,7 +28952,7 @@ def run_ipmi_check(
                     ),
                     cves="CVE-2013-4786",
                     sources="ipmitool",
-                    affected=f"{ip}:{port}",
+                    affected=f"{user} ({ip}:{port})",
                     output_file=str(out_file),
                 )
                 break
@@ -30628,7 +30634,7 @@ def run_amqp_check(
                     pass
             elif resp.status_code == 401:
                 output_mgr.log_finding(
-                    title="Admin Endpoint Exposed: RabbitMQ",
+                    title="Admin Endpoint Exposed",
                     ip=ip, port=port,
                     command=f"HTTP GET {mgmt_url}",
                     hostname=hostname, risk="INFO",
@@ -30640,7 +30646,7 @@ def run_amqp_check(
                     ),
                     output=f"RabbitMQ Management UI\nStatus: {resp.status_code}",
                     sources="rabbitmq-mgmt-probe",
-                    affected=f"{ip}:{port}",
+                    affected=f"RabbitMQ ({ip}:{port})",
                     output_file=str(out_file),
                 )
         else:
@@ -31763,7 +31769,7 @@ def run_sploitus(cves: "list[str]", output_mgr: "OutputManager", scope: str) -> 
                     "origin":    ex.get("source", ""),
                 }
                 output_mgr.log_finding(
-                    title=f"Known Vulnerability: Public Exploit Available: {cve}",
+                    title="Known Vulnerability: Public Exploit Available",
                     ip="", port=0,
                     command=f"sploitus API: {cve}",
                     risk="HIGH",
@@ -31777,7 +31783,7 @@ def run_sploitus(cves: "list[str]", output_mgr: "OutputManager", scope: str) -> 
                         f"Published: {ex.get('published', '')}"
                     ),
                     cves=cve,
-                    affected=cve,
+                    affected=f"{cve} ({ip}:{port})",
                     exploitdb=True,
                     exploit_details=[_sploitus_rec],
                     output_file=str(sploitus_dir / "sploitus_results.json"),
@@ -31998,7 +32004,7 @@ def run_metasploit_search(
             )
 
         output_mgr.log_finding(
-            title=f"Known Vulnerability: Metasploit Module Available: {cve}",
+            title="Known Vulnerability: Metasploit Module Available",
             ip="", port=0,
             command=" ".join(cmd),
             risk="HIGH",
@@ -32013,7 +32019,7 @@ def run_metasploit_search(
                 + "Modules:\n"
                 + "\n".join(f"  {m['path']} (rank={m.get('rank','')})" for m in all_mods[:10])
             ),
-            affected=cve,
+            affected=f"{cve} ({ip}:{port})",
             output_file=str(out_file),
             metasploit=True,
             exploit_details=exploit_recs,
@@ -37066,9 +37072,9 @@ def run_brutespray(
             is_default = cred["user"].lower() in _DEFAULT_USERNAMES
 
             _cred_title = (
-                f"Default Credentials: {cred['service'].upper()}"
+                "Authentication: Default Credentials"
                 if is_default
-                else f"Weak Credentials: {cred['service'].upper()}"
+                else "Authentication: Weak Credentials"
             )
             _cred_risk = "CRITICAL" if is_default else "HIGH"
 
@@ -37091,7 +37097,7 @@ def run_brutespray(
                     f"Password: [REDACTED]"
                 ),
                 sources="brutespray",
-                affected=cred["host"],
+                affected=f"{cred['service'].upper()} ({cred['host']})",
                 output_file=str(bs_out_dir.relative_to(output_mgr.root)),
             )
 
