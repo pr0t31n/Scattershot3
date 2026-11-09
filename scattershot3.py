@@ -7057,6 +7057,32 @@ _AI_PROBE_ENDPOINTS: "list[tuple[str, str | None, str, str | None, str | None]]"
     ("/health",                   None,          "",              None,          None),
 ]
 
+# Paths that are health/readiness checks — a 200 from these does NOT
+# prove the data plane is unauthenticated.
+_AI_HEALTH_ONLY_PATHS = frozenset({
+    "/health", "/v2/health/ready", "/v1/.well-known/ready",
+    "/api/v1/heartbeat", "/_stcore/health",
+})
+
+# Per-service data-plane endpoints used to verify auth state.  If 200 →
+# auth truly absent; 401/403 → auth present; error → inconclusive.
+_AI_AUTH_VERIFY: "dict[str, list[str]]" = {
+    "Chroma":        ["/api/v1/collections"],
+    "Ollama":        ["/api/tags"],
+    "OpenAI-compat": ["/v1/models"],
+    "Triton":        ["/v2/models/stats"],
+    "Weaviate":      ["/v1/schema"],
+    "Qdrant":        ["/collections"],
+    "Milvus":        ["/v1/vector/collections"],
+    "MLflow":        ["/api/2.0/mlflow/experiments/list"],
+    "Gradio":        ["/api/predict"],
+    "Jupyter":       ["/api/kernels"],
+    "Ray":           ["/api/jobs/"],
+    "ComfyUI":       ["/queue"],
+    "Dify":          ["/v1/datasets"],
+    "LangFlow":      ["/api/v1/flows"],
+}
+
 
 def _probe_ai_service(
     ip: str,
@@ -7085,6 +7111,7 @@ def _probe_ai_service(
         "version": "",
         "models": [],
         "auth_required": False,
+        "auth_verified": False,
         "evidence_path": None,
         "ai_type": "unknown",
     }
@@ -7096,6 +7123,8 @@ def _probe_ai_service(
     _detected_version = ""
     _detected_models: list[str] = []
     _auth_required = False
+    _auth_verified = False
+    _data_plane_hit = False
 
     for _ep_path, _key, _svc_name, _ver_key, _models_key in _AI_PROBE_ENDPOINTS:
         _url = f"{_scheme}://{ip}:{port}{_ep_path}"
@@ -7105,14 +7134,19 @@ def _probe_ai_service(
 
             if _resp.status_code in (401, 403):
                 _auth_required = True
+                _auth_verified = True
                 if _svc_name:
                     _detected_service = _detected_service or _svc_name
                 _evidence_lines.append(
                     f"[{_ep_path}] HTTP {_resp.status_code} — auth required"
+                    f"\n    Response: {(_resp.text or '')[:300]}"
                 )
                 continue
 
             if _resp.status_code not in (200, 204):
+                _evidence_lines.append(
+                    f"[{_ep_path}] HTTP {_resp.status_code} — skipped"
+                )
                 continue
 
             # ── Check response headers for AI signatures ─────────
@@ -7182,21 +7216,29 @@ def _probe_ai_service(
                         elif isinstance(_m, str):
                             _detected_models.append(_m)
 
+            _is_health = _ep_path in _AI_HEALTH_ONLY_PATHS
+            if not _is_health:
+                _data_plane_hit = True
+
             _evidence_lines.append(
                 f"[{_ep_path}] HTTP {_resp.status_code} — "
                 f"svc={_svc_name or '?'} ver={_detected_version or '?'} "
                 f"models={len(_detected_models)} "
-                f"body={json.dumps(_jdata, default=str)[:500]}"
+                f"health_only={'yes' if _is_health else 'no'}"
+                f"\n    Response: {json.dumps(_jdata, default=str)[:800]}"
             )
 
             if _detected_service:
                 break
 
         except requests.exceptions.ConnectionError:
+            _evidence_lines.append(f"[{_ep_path}] connection refused")
             continue
         except requests.exceptions.Timeout:
+            _evidence_lines.append(f"[{_ep_path}] timeout")
             continue
-        except Exception:
+        except Exception as _exc:
+            _evidence_lines.append(f"[{_ep_path}] error: {_exc}")
             continue
 
     # ── Fallback: root request header check ───────────────────────────
@@ -7253,6 +7295,47 @@ def _probe_ai_service(
     else:
         _ai_type = "unknown"
 
+    # ── Data-plane auth verification ─────────────────────────────────
+    # If no endpoint returned 401/403 we cannot assume auth is absent;
+    # a health endpoint returning 200 is not proof.  Hit a data-plane
+    # endpoint to confirm.
+    if not _auth_required and not _data_plane_hit:
+        _verify_eps = _AI_AUTH_VERIFY.get(_detected_service, [])
+        for _vep in _verify_eps:
+            _vurl = f"{_scheme}://{ip}:{port}{_vep}"
+            try:
+                _vresp = _HTTP_SESSION.get(
+                    _vurl, timeout=5, verify=False, allow_redirects=False)
+                if _vresp.status_code in (401, 403):
+                    _auth_required = True
+                    _auth_verified = True
+                    _evidence_lines.append(
+                        f"[AUTH-VERIFY {_vep}] HTTP {_vresp.status_code} "
+                        f"— auth REQUIRED on data plane"
+                        f"\n    Response: {(_vresp.text or '')[:300]}"
+                    )
+                elif _vresp.status_code in (200, 204):
+                    _auth_verified = True
+                    _evidence_lines.append(
+                        f"[AUTH-VERIFY {_vep}] HTTP {_vresp.status_code} "
+                        f"— data plane accessible WITHOUT auth"
+                        f"\n    Response: {(_vresp.text or '')[:800]}"
+                    )
+                else:
+                    _evidence_lines.append(
+                        f"[AUTH-VERIFY {_vep}] HTTP {_vresp.status_code} "
+                        f"— inconclusive"
+                    )
+                break
+            except Exception as _vexc:
+                _evidence_lines.append(
+                    f"[AUTH-VERIFY {_vep}] error: {_vexc}"
+                )
+    elif not _auth_required and _data_plane_hit:
+        _auth_verified = True
+    elif _auth_required:
+        _auth_verified = True
+
     # ── Save evidence ─────────────────────────────────────────────────
     _ev_path = None
     if output_mgr:
@@ -7273,6 +7356,8 @@ def _probe_ai_service(
                 f"Type:           {_ai_type}",
                 f"Version:        {_detected_version or 'unknown'}",
                 f"Auth Required:  {_auth_required}",
+                f"Auth Verified:  {_auth_verified}",
+                f"Data Plane Hit: {_data_plane_hit}",
                 f"Models Found:   {len(_detected_models)}",
                 f"Timestamp:      {datetime.now().isoformat()}",
                 f"",
@@ -7307,6 +7392,7 @@ def _probe_ai_service(
         "version": _detected_version,
         "models": _detected_models,
         "auth_required": _auth_required,
+        "auth_verified": _auth_verified,
         "evidence_path": _ev_path,
         "ai_type": _ai_type,
     })
@@ -8714,6 +8800,7 @@ def probe_uncertain_and_nonstandard_ports(
                     _ai_ver   = _ai_result["version"]
                     _ai_mods  = _ai_result["models"]
                     _ai_auth  = _ai_result["auth_required"]
+                    _ai_vfy   = _ai_result.get("auth_verified", False)
                     _ai_evp   = _ai_result["evidence_path"]
                     _ai_type  = _ai_result["ai_type"]
                     _ai_of    = (str(_ai_evp.relative_to(output_mgr.root))
@@ -8739,7 +8826,7 @@ def probe_uncertain_and_nonstandard_ports(
                             f"Service:    {_ai_svc}\n"
                             f"Type:       {_ai_type}\n"
                             f"Version:    {_ai_ver or 'unknown'}\n"
-                            f"Auth:       {'required' if _ai_auth else 'NOT required'}\n"
+                            f"Auth:       {'required' if _ai_auth else 'NOT required' if _ai_vfy else 'unknown (not verified)'}\n"
                             f"Models:     {len(_ai_mods)}"
                         ),
                         sources="scattershot3-ai-probe",
@@ -8747,8 +8834,10 @@ def probe_uncertain_and_nonstandard_ports(
                         output_file=_ai_of,
                     )
 
-                    # SS-AI-002: Unauthenticated Access
-                    if not _ai_auth:
+                    # SS-AI-002: Unauthenticated Access — only when
+                    # verified via a data-plane endpoint, not inferred
+                    # from a health check returning 200
+                    if not _ai_auth and _ai_vfy:
                         output_mgr.log_finding(
                             title="AI Service Unauthenticated Access",
                             ip=ip, port=_port, hostname=hostname,
