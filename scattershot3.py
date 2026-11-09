@@ -27962,6 +27962,13 @@ def run_rdp_check(
     ssl_ok     = supported_protos.get(0x01, False)
     nla_ok     = supported_protos.get(0x03, False)
 
+    # HYBRID_REQUIRED_BY_SERVER means the server demands CredSSP/NLA —
+    # the CredSSP probe may still fail (connection reset) because raw
+    # X.224 negotiation cannot complete the SPNEGO handshake, but the
+    # server rejecting lower protocols is proof NLA is required.
+    if "HYBRID_REQUIRED_BY_SERVER" in neg_errors and not nla_ok:
+        nla_ok = True
+
     # ── Phase 2: Native RDP encryption enumeration ───────────────────
     if native_rdp:
         lines.append("")
