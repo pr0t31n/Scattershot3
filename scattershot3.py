@@ -7067,6 +7067,7 @@ _AI_HEALTH_ONLY_PATHS = frozenset({
 # Per-service data-plane endpoints used to verify auth state.  If 200 →
 # auth truly absent; 401/403 → auth present; error → inconclusive.
 _AI_AUTH_VERIFY: "dict[str, list[str]]" = {
+    "MCP":           ["/tools", "/rpc"],
     "Chroma":        ["/api/v1/collections"],
     "Ollama":        ["/api/tags"],
     "OpenAI-compat": ["/v1/models"],
@@ -7114,6 +7115,12 @@ def _probe_ai_service(
         "auth_verified": False,
         "evidence_path": None,
         "ai_type": "unknown",
+        "mcp_tools": [],
+        "mcp_exec_tools": [],
+        "mcp_jsonrpc": False,
+        "mcp_sse": False,
+        "mcp_env_exposed": False,
+        "mcp_secrets": [],
     }
 
     _scheme = "https" if port in (443, 8443, 4443, 7443, 9443) else "http"
@@ -7273,6 +7280,177 @@ def _probe_ai_service(
         except Exception:
             pass
 
+    # ── MCP protocol detection ────────────────────────────────────
+    _mcp_detected = False
+    _mcp_tools: list[str] = []
+    _mcp_exec_tools: list[str] = []
+    _mcp_jsonrpc = False
+    _mcp_sse = False
+    _mcp_env_exposed = False
+    _mcp_secrets_found: list[str] = []
+
+    _EXEC_TOOL_PAT = re.compile(
+        r"(?i)(exec|run_command|shell|system|cmd|execute|subprocess|os_command)")
+    _SECRET_PAT = re.compile(
+        r"(?i)(SECRET|TOKEN|PASSWORD|API_KEY|PRIVATE_KEY|"
+        r"AWS_SECRET_ACCESS_KEY|DATABASE_URL|OPENAI_API_KEY)")
+
+    # MCP /tools — tool listing endpoint
+    _tools_url = f"{_scheme}://{ip}:{port}/tools"
+    try:
+        _tr = _HTTP_SESSION.get(
+            _tools_url, timeout=5, verify=False, allow_redirects=False)
+        if _tr.status_code in (401, 403):
+            _auth_required = True
+            _auth_verified = True
+            _evidence_lines.append(
+                f"[/tools] HTTP {_tr.status_code} — auth required")
+        elif _tr.status_code == 200:
+            try:
+                _td = _tr.json()
+                _tool_list = (
+                    _td if isinstance(_td, list)
+                    else _td.get("tools", []))
+                if isinstance(_tool_list, list) and _tool_list:
+                    _mcp_detected = True
+                    _data_plane_hit = True
+                    for _t in _tool_list:
+                        _tn = (_t.get("name", "")
+                               if isinstance(_t, dict) else str(_t))
+                        if _tn:
+                            _mcp_tools.append(_tn)
+                            if _EXEC_TOOL_PAT.search(_tn):
+                                _mcp_exec_tools.append(_tn)
+                    _evidence_lines.append(
+                        f"[/tools] HTTP 200 — "
+                        f"{len(_mcp_tools)} tool(s) enumerated"
+                        f"\n    Tools: {', '.join(_mcp_tools[:20])}"
+                        f"{f' (+{len(_mcp_tools)-20} more)' if len(_mcp_tools) > 20 else ''}")
+                    if _mcp_exec_tools:
+                        _evidence_lines.append(
+                            f"    ⚠ Exec-capable tools: "
+                            f"{', '.join(_mcp_exec_tools)}")
+            except (ValueError, KeyError):
+                pass
+    except Exception as _te:
+        _evidence_lines.append(f"[/tools] error: {_te}")
+
+    # MCP JSON-RPC — /rpc and /mcp endpoints
+    for _jrpc_path in ("/rpc", "/mcp"):
+        _jrpc_url = f"{_scheme}://{ip}:{port}{_jrpc_path}"
+        try:
+            _jr = _HTTP_SESSION.post(
+                _jrpc_url, timeout=5, verify=False,
+                allow_redirects=False,
+                json={"jsonrpc": "2.0", "id": 1,
+                      "method": "tools/list", "params": {}},
+                headers={"Content-Type": "application/json"})
+            if _jr.status_code in (401, 403):
+                _auth_required = True
+                _auth_verified = True
+                _evidence_lines.append(
+                    f"[{_jrpc_path}] HTTP {_jr.status_code} — auth required")
+            elif _jr.status_code == 200:
+                try:
+                    _jd = _jr.json()
+                    if isinstance(_jd, dict) and "jsonrpc" in _jd:
+                        _mcp_jsonrpc = True
+                        _mcp_detected = True
+                        _data_plane_hit = True
+                        _jr_tools = _jd.get("result", {})
+                        if isinstance(_jr_tools, dict):
+                            _jr_tools = _jr_tools.get("tools", [])
+                        if (isinstance(_jr_tools, list) and _jr_tools
+                                and not _mcp_tools):
+                            for _t in _jr_tools:
+                                _tn = (_t.get("name", "")
+                                       if isinstance(_t, dict)
+                                       else str(_t))
+                                if _tn:
+                                    _mcp_tools.append(_tn)
+                                    if _EXEC_TOOL_PAT.search(_tn):
+                                        _mcp_exec_tools.append(_tn)
+                        _evidence_lines.append(
+                            f"[{_jrpc_path}] HTTP 200 — JSON-RPC response"
+                            f"\n    Response: {json.dumps(_jd)[:500]}")
+                except (ValueError, KeyError):
+                    pass
+        except Exception as _je:
+            _evidence_lines.append(f"[{_jrpc_path}] error: {_je}")
+
+    # MCP SSE transport — /events endpoint
+    _sse_url = f"{_scheme}://{ip}:{port}/events"
+    try:
+        _sr = _HTTP_SESSION.get(
+            _sse_url, timeout=5, verify=False,
+            allow_redirects=False, stream=True)
+        _sse_ct = _sr.headers.get("content-type", "").lower()
+        if "text/event-stream" in _sse_ct:
+            _mcp_sse = True
+            _mcp_detected = True
+            _evidence_lines.append(
+                f"[/events] HTTP {_sr.status_code} — SSE transport detected"
+                f"\n    Content-Type: {_sse_ct}")
+        _sr.close()
+    except Exception as _se:
+        _evidence_lines.append(f"[/events] error: {_se}")
+
+    # Environment variable exposure — /env endpoint
+    _env_url = f"{_scheme}://{ip}:{port}/env"
+    try:
+        _er = _HTTP_SESSION.get(
+            _env_url, timeout=5, verify=False, allow_redirects=False)
+        if _er.status_code in (401, 403):
+            _evidence_lines.append(
+                f"[/env] HTTP {_er.status_code} — auth required")
+        elif _er.status_code == 200:
+            try:
+                _ed = _er.json()
+                if isinstance(_ed, dict) and len(_ed) > 0:
+                    _mcp_env_exposed = True
+                    _mcp_detected = True
+                    _data_plane_hit = True
+                    _env_text = json.dumps(_ed)
+                    for _sm in _SECRET_PAT.finditer(_env_text):
+                        _mcp_secrets_found.append(_sm.group(0))
+                    _mcp_secrets_found = list(
+                        set(_mcp_secrets_found))[:20]
+                    _evidence_lines.append(
+                        f"[/env] HTTP 200 — "
+                        f"{len(_ed)} environment variable(s) exposed"
+                        f"{f' ⚠ Secret markers: {_mcp_secrets_found}' if _mcp_secrets_found else ''}"
+                        f"\n    Keys: {', '.join(list(_ed.keys())[:30])}")
+            except (ValueError, KeyError):
+                pass
+    except Exception as _ee:
+        _evidence_lines.append(f"[/env] error: {_ee}")
+
+    # Debug endpoint secret scan — /debug
+    _debug_url = f"{_scheme}://{ip}:{port}/debug"
+    try:
+        _dr = _HTTP_SESSION.get(
+            _debug_url, timeout=5, verify=False, allow_redirects=False)
+        if _dr.status_code == 200:
+            try:
+                _dd = _dr.json()
+                if isinstance(_dd, dict) and len(_dd) > 0:
+                    _mcp_detected = True
+                    _data_plane_hit = True
+                    _dbg_text = json.dumps(_dd)
+                    for _sm in _SECRET_PAT.finditer(_dbg_text):
+                        if _sm.group(0) not in _mcp_secrets_found:
+                            _mcp_secrets_found.append(_sm.group(0))
+                    _evidence_lines.append(
+                        f"[/debug] HTTP 200 — debug info exposed"
+                        f"\n    Response: {_dbg_text[:500]}")
+            except (ValueError, KeyError):
+                pass
+    except Exception:
+        pass
+
+    if _mcp_detected and not _detected_service:
+        _detected_service = "MCP"
+
     if not _detected_service:
         return result
 
@@ -7292,6 +7470,8 @@ def _probe_ai_service(
         _ai_type = "notebook"
     elif _sl in ("dify", "langflow"):
         _ai_type = "orchestration"
+    elif _sl in ("mcp",):
+        _ai_type = "mcp-server"
     else:
         _ai_type = "unknown"
 
@@ -7367,6 +7547,18 @@ def _probe_ai_service(
                 _lines.append(f"  - {_mn}")
             if not _detected_models:
                 _lines.append("  (none disclosed or not applicable)")
+            if _mcp_tools:
+                _lines.append("")
+                _lines.append("--- MCP Tools ---")
+                for _mt in _mcp_tools[:50]:
+                    _prefix = "  ⚠ " if _mt in _mcp_exec_tools else "  - "
+                    _lines.append(f"{_prefix}{_mt}")
+            _lines.append("")
+            _lines.append(f"MCP JSON-RPC:  {'active' if _mcp_jsonrpc else 'not detected'}")
+            _lines.append(f"MCP SSE:       {'active' if _mcp_sse else 'not detected'}")
+            _lines.append(f"Env Exposed:   {'yes' if _mcp_env_exposed else 'no'}")
+            if _mcp_secrets_found:
+                _lines.append(f"Secret Markers: {', '.join(_mcp_secrets_found)}")
             _lines.append("")
             _lines.append("--- Probe Log ---")
             for _el in _evidence_lines:
@@ -7395,6 +7587,12 @@ def _probe_ai_service(
         "auth_verified": _auth_verified,
         "evidence_path": _ev_path,
         "ai_type": _ai_type,
+        "mcp_tools": _mcp_tools,
+        "mcp_exec_tools": _mcp_exec_tools,
+        "mcp_jsonrpc": _mcp_jsonrpc,
+        "mcp_sse": _mcp_sse,
+        "mcp_env_exposed": _mcp_env_exposed,
+        "mcp_secrets": _mcp_secrets_found,
     })
     return result
 
@@ -8600,7 +8798,13 @@ def probe_uncertain_and_nonstandard_ports(
                 pass
 
         # ── GAP-24: SMTP EXPN / VRFY user enumeration ────────────────────
-        if _port in (25, 587, 465, 2525) or _service == "smtp":
+        # Skip — run_smtp_checks() handles SMTP ports (25, 465, 587)
+        # with proper multi-user probing, 250-only matching, and evidence
+        # files.  This gap-filler only covers non-standard SMTP ports
+        # that run_smtp_checks won't see.
+        _gap24_smtp_standard = _port in (25, 587, 465)
+        if (not _gap24_smtp_standard
+                and (_port == 2525 or _service == "smtp")):
             try:
                 _smtp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 _smtp_sock.settimeout(5)
@@ -8609,29 +8813,57 @@ def probe_uncertain_and_nonstandard_ports(
                 if "220" in _smtp_banner[:10]:
                     _smtp_sock.sendall(b"EHLO test.local\r\n")
                     _smtp_sock.recv(4096)
-                    for _smtp_cmd, _smtp_label in [
-                        (b"EXPN root\r\n", "EXPN"),
-                        (b"VRFY root\r\n", "VRFY"),
+
+                    _gap24_dir = output_mgr.service_path(ip, "smtp")
+                    _gap24_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    _gap24_file = (_gap24_dir
+                        / f"{ip.replace('.', '_')}_{_port}_smtp_gap24_{_gap24_ts}.txt")
+                    _gap24_lines = [
+                        f"SMTP GAP-24 probe: {ip}:{_port}",
+                        f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                        f"Banner: {_smtp_banner.strip()[:200]}",
+                        "─" * 40,
+                    ]
+
+                    for _smtp_cmd, _smtp_user, _smtp_label in [
+                        (b"EXPN root\r\n", "root", "EXPN"),
+                        (b"EXPN admin\r\n", "admin", "EXPN"),
+                        (b"VRFY root\r\n", "root", "VRFY"),
+                        (b"VRFY admin\r\n", "admin", "VRFY"),
                     ]:
                         _smtp_sock.sendall(_smtp_cmd)
-                        _smtp_reply = _smtp_sock.recv(1024).decode("utf-8", errors="replace")
+                        _smtp_reply = _smtp_sock.recv(1024).decode(
+                            "utf-8", errors="replace").strip()
+                        _gap24_lines.append(
+                            f"{_smtp_label} {_smtp_user}: {_smtp_reply[:200]}")
                         if _smtp_reply.startswith("250"):
+                            _gap24_file.write_text(
+                                "\n".join(_gap24_lines), encoding="utf-8")
                             output_mgr.log_finding(
                                 title=f"Enumeration: SMTP {_smtp_label} User Enumeration Enabled",
                                 ip=ip, port=_port, hostname=hostname,
-                                command=f"echo '{_smtp_label} root' | nc {ip} {_port}",
+                                command=f"echo '{_smtp_label} {_smtp_user}' | nc {ip} {_port}",
                                 risk="MEDIUM",
                                 description=(
                                     f"The SMTP server at {ip}:{_port} responds to "
-                                    f"{_smtp_label} commands, allowing user enumeration. "
-                                    f"An attacker can discover valid email accounts "
-                                    f"for targeted phishing or brute-force attacks."
+                                    f"{_smtp_label} commands with a 250 confirmation, "
+                                    f"proving user enumeration is possible. "
+                                    f"Confirmed: {_smtp_label} {_smtp_user} → "
+                                    f"{_smtp_reply[:80]}. "
+                                    f"Disable {_smtp_label} or restrict it to "
+                                    f"authenticated sessions."
                                 ),
-                                output=f"{_smtp_label} root → {_smtp_reply.strip()[:200]}",
+                                output="\n".join(_gap24_lines),
                                 sources="scattershot3-smtp-probe",
                                 affected=f"{ip}:{_port}",
+                                output_file=str(_gap24_file),
                             )
                             break
+
+                    if not _gap24_file.exists():
+                        _gap24_file.write_text(
+                            "\n".join(_gap24_lines), encoding="utf-8")
+
                 _smtp_sock.sendall(b"QUIT\r\n")
                 _smtp_sock.close()
             except Exception:
@@ -8941,6 +9173,167 @@ def probe_uncertain_and_nonstandard_ports(
                             output_file=_ai_of,
                         )
 
+                    # ── MCP-specific findings ────────────────────────
+                    _mcp_tools_list = _ai_result.get("mcp_tools", [])
+                    _mcp_exec_list = _ai_result.get("mcp_exec_tools", [])
+                    _mcp_jsonrpc_flag = _ai_result.get("mcp_jsonrpc", False)
+                    _mcp_sse_flag = _ai_result.get("mcp_sse", False)
+                    _mcp_env_flag = _ai_result.get("mcp_env_exposed", False)
+                    _mcp_secrets = _ai_result.get("mcp_secrets", [])
+
+                    # SS-AI-006: MCP Tool Listing Exposed
+                    if _mcp_tools_list:
+                        _tool_names = ", ".join(_mcp_tools_list[:15])
+                        if len(_mcp_tools_list) > 15:
+                            _tool_names += f" (+{len(_mcp_tools_list)-15} more)"
+                        output_mgr.log_finding(
+                            title="MCP Tool Listing Exposed",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=f"# MCP tool enum {ip}:{_port}",
+                            risk="MEDIUM",
+                            description=(
+                                f"The service at {ip}:{_port} exposes an MCP "
+                                f"(Model Context Protocol) tool listing endpoint "
+                                f"that reveals {len(_mcp_tools_list)} available "
+                                f"tool(s). Tool enumeration discloses the "
+                                f"server's capabilities and attack surface, "
+                                f"enabling targeted tool abuse and prompt "
+                                f"injection attacks via tool descriptions."
+                            ),
+                            output=(
+                                f"Tools ({len(_mcp_tools_list)}): {_tool_names}"
+                            ),
+                            sources="scattershot3-mcp-probe",
+                            affected=f"{ip}:{_port}",
+                            output_file=_ai_of,
+                        )
+
+                    # SS-AI-007: MCP Exec-Capable Tool Exposed
+                    if _mcp_exec_list:
+                        output_mgr.log_finding(
+                            title="MCP Exec-Capable Tool Exposed",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=f"# MCP exec tool check {ip}:{_port}",
+                            risk="CRITICAL",
+                            description=(
+                                f"The MCP server at {ip}:{_port} exposes "
+                                f"tool(s) with command-execution capability: "
+                                f"{', '.join(_mcp_exec_list)}. An attacker "
+                                f"can invoke these tools via JSON-RPC to "
+                                f"execute arbitrary commands on the host, "
+                                f"achieving remote code execution."
+                            ),
+                            output=(
+                                f"Exec-capable tools: "
+                                f"{', '.join(_mcp_exec_list)}\n"
+                                f"All tools ({len(_mcp_tools_list)}): "
+                                f"{', '.join(_mcp_tools_list[:20])}"
+                            ),
+                            sources="scattershot3-mcp-probe",
+                            affected=f"{ip}:{_port}",
+                            output_file=_ai_of,
+                        )
+
+                    # SS-AI-008: MCP JSON-RPC Endpoint Exposed
+                    if _mcp_jsonrpc_flag:
+                        output_mgr.log_finding(
+                            title="MCP JSON-RPC Endpoint Exposed",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=f"# MCP JSON-RPC probe {ip}:{_port}",
+                            risk="HIGH",
+                            description=(
+                                f"The service at {ip}:{_port} responds to "
+                                f"JSON-RPC requests on an MCP endpoint. The "
+                                f"MCP protocol allows tool invocation, "
+                                f"resource access, and prompt manipulation "
+                                f"via JSON-RPC. Exposed MCP endpoints enable "
+                                f"direct interaction with the AI backend "
+                                f"without going through intended application "
+                                f"interfaces."
+                            ),
+                            output=(
+                                f"JSON-RPC: active on {ip}:{_port}"
+                            ),
+                            sources="scattershot3-mcp-probe",
+                            affected=f"{ip}:{_port}",
+                            output_file=_ai_of,
+                        )
+
+                    # SS-AI-009: MCP SSE Transport Exposed
+                    if _mcp_sse_flag:
+                        output_mgr.log_finding(
+                            title="MCP SSE Transport Exposed",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=f"# MCP SSE probe {ip}:{_port}",
+                            risk="MEDIUM",
+                            description=(
+                                f"The service at {ip}:{_port} exposes an MCP "
+                                f"Server-Sent Events (SSE) transport on "
+                                f"/events. SSE provides a real-time "
+                                f"bidirectional channel to the AI backend. "
+                                f"An attacker can subscribe to events to "
+                                f"observe model interactions or inject "
+                                f"payloads into the event stream."
+                            ),
+                            output=(
+                                f"SSE transport: active on "
+                                f"{ip}:{_port}/events"
+                            ),
+                            sources="scattershot3-mcp-probe",
+                            affected=f"{ip}:{_port}",
+                            output_file=_ai_of,
+                        )
+
+                    # SS-AI-010: Environment Variables Exposed
+                    if _mcp_env_flag:
+                        output_mgr.log_finding(
+                            title="Environment Variables Exposed",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=f"# env probe {ip}:{_port}",
+                            risk="HIGH",
+                            description=(
+                                f"The service at {ip}:{_port} exposes its "
+                                f"environment variables through the /env "
+                                f"endpoint. Environment variables commonly "
+                                f"contain API keys, database credentials, "
+                                f"and service tokens that enable lateral "
+                                f"movement and data exfiltration."
+                            ),
+                            output=(
+                                f"Env endpoint: {ip}:{_port}/env"
+                                f"{f' — Secret markers: {_mcp_secrets}' if _mcp_secrets else ''}"
+                            ),
+                            sources="scattershot3-mcp-probe",
+                            affected=f"{ip}:{_port}",
+                            output_file=_ai_of,
+                        )
+
+                    # SS-AI-011: Secrets in Debug/Environment Response
+                    if _mcp_secrets:
+                        output_mgr.log_finding(
+                            title="Secrets in Debug/Environment Response",
+                            ip=ip, port=_port, hostname=hostname,
+                            command=f"# secret scan {ip}:{_port}",
+                            risk="CRITICAL",
+                            description=(
+                                f"The /env or /debug endpoint at "
+                                f"{ip}:{_port} contains values matching "
+                                f"secret patterns "
+                                f"({', '.join(_mcp_secrets[:5])}). Exposed "
+                                f"secrets enable direct compromise of "
+                                f"connected services, cloud accounts, and "
+                                f"databases."
+                            ),
+                            output=(
+                                f"Secret markers found: "
+                                f"{', '.join(_mcp_secrets)}\n"
+                                f"Endpoint: {ip}:{_port}/env or /debug"
+                            ),
+                            sources="scattershot3-mcp-probe",
+                            affected=f"{ip}:{_port}",
+                            output_file=_ai_of,
+                        )
+
                     # ── Emit __CRUCIBLE_TARGET__ for AI service ───────
                     _vc.target(ip=ip, hostname=hostname, scope=None,
                                alive=True, source="scattershot3-ai-probe")
@@ -8971,6 +9364,34 @@ def probe_uncertain_and_nonstandard_ports(
                             "models_count": len(_ai_mods),
                         },
                     )
+
+                    # ── MCP-specific action item for pAIn ────────────
+                    if _mcp_tools_list:
+                        output_mgr.log_action_item(
+                            item_type="mcp_exploit",
+                            recommended_tool="pAIn",
+                            target=f"{'https' if _port in (443, 8443, 4443, 7443, 9443) else 'http'}://{ip}:{_port}",
+                            ip=ip,
+                            port=_port,
+                            hostname=hostname,
+                            title=f"MCP Exploit: {len(_mcp_tools_list)} tool(s) on {ip}:{_port}",
+                            description=(
+                                f"MCP server detected on {ip}:{_port} with "
+                                f"{len(_mcp_tools_list)} tool(s). "
+                                f"Recommend MCP-specific exploitation: "
+                                f"tool abuse, JSON-RPC method fuzzing, "
+                                f"RCE/LFI probing."
+                                f"{f' Exec-capable: {_mcp_exec_list}.' if _mcp_exec_list else ''}"
+                            ),
+                            source_finding="MCP Tool Listing Exposed",
+                            priority="CRITICAL" if _mcp_exec_list else "HIGH",
+                            metadata={
+                                "mcp_tools": _mcp_tools_list[:20],
+                                "mcp_exec_tools": _mcp_exec_list,
+                                "mcp_jsonrpc": _mcp_jsonrpc_flag,
+                                "mcp_sse": _mcp_sse_flag,
+                            },
+                        )
             except Exception:
                 pass
 
