@@ -6871,6 +6871,33 @@ _STANDARD_PORT_FOR_SERVICE: "dict[str, int]" = {
     "snmp": 161, "ntp": 123, "tftp": 69, "ipmi": 623,
 }
 
+# nmap service names that should normalize to our canonical names
+_SVC_NAME_NORMALIZE: "dict[str, str]" = {
+    "ldapssl": "ldaps",
+    "ms-sql-s": "ms-sql",
+    "ms-sql-m": "ms-sql",
+}
+
+# Well-known TLS/SSL ports for services (port implies encryption)
+_IMPLICIT_TLS_PORTS: "dict[str, set[int]]" = {
+    "ldap": {636, 3269},
+}
+
+
+def _probe_tls(ip: str, port: int, timeout: float = 5.0) -> bool:
+    """Return True when the port completes an SSL/TLS handshake."""
+    import ssl, socket
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    try:
+        with socket.create_connection((ip, port), timeout=timeout) as sock:
+            with ctx.wrap_socket(sock) as ssock:
+                ssock.do_handshake()
+                return True
+    except (ssl.SSLError, OSError, ConnectionRefusedError, TimeoutError):
+        return False
+
 
 # ── Database services → Auger action items ────────────────────────────────
 _DB_SERVICES: "dict[str, str]" = {
@@ -7633,6 +7660,17 @@ def probe_uncertain_and_nonstandard_ports(
         _product     = (_pinfo.get("product") or "").strip()
         _service     = _svc_raw
         _identified_via = ""
+
+        # Normalize nmap service names to our canonical names
+        if _service in _SVC_NAME_NORMALIZE:
+            _service = _SVC_NAME_NORMALIZE[_service]
+            _pinfo["name"] = _service
+
+        # LDAP on implicit-TLS ports: probe to distinguish ldap vs ldaps
+        if _service == "ldap" and _port in _IMPLICIT_TLS_PORTS.get("ldap", set()):
+            if _probe_tls(ip, _port):
+                _service = "ldaps"
+                _pinfo["name"] = _service
 
         # ── Phase D: identify the service when nmap left it blank/unknown ──
         if not _svc_raw or _svc_raw in ("unknown", "tcpwrapped"):
@@ -8996,6 +9034,38 @@ def probe_uncertain_and_nonstandard_ports(
                 sources="fracture-recon-port",
                 affected=f"{ip}:{_port}",
             )
+
+        # ── Phase G.1b: Unencrypted LDAP finding ───────────────────────────
+        if _service == "ldap":
+            _ldap_has_tls = _probe_tls(ip, _port)
+            if not _ldap_has_tls:
+                _is_std_ldap_port = (_port == 389)
+                output_mgr.log_finding(
+                    title="LDAP: Cleartext (Unencrypted) Transport",
+                    ip=ip, port=_port, hostname=hostname,
+                    command=f"# TLS probe against {ip}:{_port}",
+                    risk="HIGH" if output_mgr.scope == "ext" else "MEDIUM",
+                    description=(
+                        f"The LDAP service on {ip}:{_port} does not use TLS encryption. "
+                        f"Credentials and directory data transmitted over this connection "
+                        f"are sent in cleartext and can be intercepted via network sniffing "
+                        f"or man-in-the-middle attacks. "
+                        + (f"Port {_port} is a non-standard port for LDAP (standard: 389), "
+                           f"which may indicate an overlooked or misconfigured service instance."
+                           if not _is_std_ldap_port else
+                           "This is the standard LDAP port (389) — configure LDAPS (636) or "
+                           "enforce STARTTLS to protect authentication traffic.")
+                    ),
+                    output=(
+                        f"Service:    ldap\n"
+                        f"Port:       {_port}\n"
+                        f"TLS:        not detected\n"
+                        f"STARTTLS:   not validated (manual check recommended)\n"
+                        f"Standard:   {'yes (389)' if _is_std_ldap_port else f'no (standard: 389)'}"
+                    ),
+                    sources="scattershot3-ldap-tls-probe",
+                    affected=f"{ip}:{_port}",
+                )
 
         # ── Phase H: AI/ML service detection ──────────────────────────────
         # When a port matches a known AI service port or when the curl/banner
@@ -10837,6 +10907,7 @@ def _port_scan_worker(
 
         # ── SNMP community string check + snmpwalk ─────────────────────
         svc_name = info.get("name", "").lower()
+        svc_name = _SVC_NAME_NORMALIZE.get(svc_name, svc_name)
         is_snmp  = (svc_name in ("snmp", "snmptrap") or port in (161, 162))
         if is_snmp and snmpwalk_path and not getattr(args, "no_snmp", False):
             try:
@@ -11345,19 +11416,25 @@ def _port_scan_worker(
                                      output_mgr=output_mgr)
             except Exception as exc:
                 _tprint(f"{Fore.RED}  [!] LDAP null-bind probe error {ip}:{port}: {exc}{Style.RESET_ALL}")
-            if port == 389:
+            _ldap_is_encrypted = (svc_name in ("ldaps", "ldapssl") or
+                                  port in (636, 3269))
+            if not _ldap_is_encrypted:
+                _ldap_tls_ok = _probe_tls(ip, port)
+                if _ldap_tls_ok:
+                    _ldap_is_encrypted = True
+            if not _ldap_is_encrypted:
                 try:
                     output_mgr.log_action_item(
                         "ldap_cleartext", "Manual (Wireshark / ldapsearch)",
                         f"{ip}:{port}", ip, port,
                         title="LDAP: Cleartext Transport Check",
                         description=(
-                            f"LDAP service on {ip}:389 (unencrypted port). Verify "
+                            f"LDAP service on {ip}:{port} (unencrypted). Verify "
                             f"whether STARTTLS is enforced or if credentials transmit "
                             f"in cleartext.\n"
                             f"Next steps:\n"
-                            f"  1. ldapsearch -x -H ldap://{ip} -s base   (test cleartext bind)\n"
-                            f"  2. ldapsearch -x -ZZ -H ldap://{ip} -s base   (test STARTTLS)\n"
+                            f"  1. ldapsearch -x -H ldap://{ip}:{port} -s base   (test cleartext bind)\n"
+                            f"  2. ldapsearch -x -ZZ -H ldap://{ip}:{port} -s base   (test STARTTLS)\n"
                             f"  3. If STARTTLS fails: finding 'LDAP: Cleartext Authentication Permitted'"
                         ),
                         hostname=hostname,
