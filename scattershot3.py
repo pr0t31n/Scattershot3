@@ -3464,9 +3464,14 @@ class OutputManager:
 
                     # sslscan: weak ciphers
                     for cipher in ssl_result.get("ciphers", []):
+                        _cc = cipher.get("cipher", "")
+                        _cb = int(cipher.get("bits", "128"))
+                        if _cb == 64 and re.search(r"CCM.?8", _cc, re.IGNORECASE):
+                            _m = re.search(r"AES[_-]?(256|128)", _cc, re.IGNORECASE)
+                            _cb = int(_m.group(1)) if _m else 128
                         is_weak = (
-                            _RE_WEAK_CIPHER.search(cipher.get("cipher", ""))
-                            or int(cipher.get("bits", "128")) < 128
+                            _RE_WEAK_CIPHER.search(_cc)
+                            or _cb < 128
                         )
                         if is_weak:
                             vulns.append({
@@ -4091,7 +4096,7 @@ class OutputManager:
                     f"{', '.join(str(p) for p in sorted(_win_ports))}"
                 )
             self.log_finding(
-                title="OS Version Detected [Inferred]",
+                title=f"OS Version Detected [Inferred]: {_h_os}",
                 ip=_hip,
                 port=0,
                 command=[],
@@ -13451,6 +13456,12 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
                 except (ValueError, TypeError):
                     _cbits = 128
 
+                # sslscan reports the truncated tag size (64) for CCM-8
+                # ciphers instead of the actual AES key size — correct it
+                if _cbits == 64 and re.search(r"CCM.?8", _cn, re.IGNORECASE):
+                    _m = re.search(r"AES[_-]?(256|128)", _cn, re.IGNORECASE)
+                    _cbits = int(_m.group(1)) if _m else 128
+
                 is_weak = _RE_WEAK_CIPHER.search(_cn) or _cbits < 128
                 if is_weak:
                     output_mgr.log_finding(
@@ -13863,6 +13874,9 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
             if cipher_line:
                 cipher_name = cipher_line.group(1)
                 key_bits    = int(cipher_line.group(2)) if cipher_line.group(2) else 0
+                if key_bits == 64 and re.search(r"CCM.?8", cipher_name, re.IGNORECASE):
+                    _m = re.search(r"AES[_-]?(256|128)", cipher_name, re.IGNORECASE)
+                    key_bits = int(_m.group(1)) if _m else 128
                 is_weak = (
                     _RE_WEAK_CIPHER.search(cipher_name)
                     or key_bits < 128
@@ -14097,7 +14111,7 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                             _tsf_risk  = "LOW"
                         # ── Potential vulnerability — rename format ────────────
                         elif "potentially vulnerable" in _tsf_finding_lo:
-                            _tsf_title = "SSL/TLS Vulnerability (Potential)"; _tsf_affected = f"{_tsf_id} ({_tsf_affected or f'{ip}:{port}'})"
+                            _tsf_title = f"SSL/TLS Vulnerability (Potential): {_tsf_id_base}"; _tsf_affected = f"{_tsf_id} ({_tsf_affected or f'{ip}:{port}'})"
                             _tsf_risk  = "INFO"
                         # ── Cipher: No Cipher Order Configured ────────────────
                         elif _tsf_id_base.startswith("cipher_order"):
@@ -14276,12 +14290,12 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                             if "potentially" in _tsf_finding_lo:
                                 _tsf_title = "SSL/TLS Vulnerability (Potential): Lucky13"
                             else:
-                                _tsf_title = "SSL/TLS Vulnerability"; _tsf_affected = f"{_tsf_id_base} ({_tsf_affected or f'{ip}:{port}'})"
+                                _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id_base}"; _tsf_affected = f"{_tsf_id_base} ({_tsf_affected or f'{ip}:{port}'})"
                             _tsf_risk  = "MEDIUM" if _is_ext else "LOW"
                         elif _tsf_id_base == "SWEET32":
                             if "not vulnerable" in _tsf_finding_lo:
                                 continue
-                            _tsf_title = "SSL/TLS Vulnerability"; _tsf_affected = f"{_tsf_id_base} ({_tsf_affected or f'{ip}:{port}'})"
+                            _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id_base}"; _tsf_affected = f"{_tsf_id_base} ({_tsf_affected or f'{ip}:{port}'})"
                             _tsf_risk  = "MEDIUM" if _is_ext else "LOW"
                         elif _tsf_id_base == "LOGJAM":
                             if "not vulnerable" in _tsf_finding_lo:
@@ -14290,10 +14304,10 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                             _lj_small_dh = bool(re.search(
                                 r'(?:512|768|1024)\s*(?:bit|b\b)', _tsf_finding_lo))
                             if _lj_has_export or _lj_small_dh:
-                                _tsf_title = "SSL/TLS Vulnerability"; _tsf_affected = f"{_tsf_id_base} ({_tsf_affected or f'{ip}:{port}'})"
+                                _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id_base}"; _tsf_affected = f"{_tsf_id_base} ({_tsf_affected or f'{ip}:{port}'})"
                                 _tsf_risk  = "HIGH" if _is_ext else "MEDIUM"
                             else:
-                                _tsf_title = "SSL/TLS Vulnerability (Potential)"; _tsf_affected = f"{_tsf_id_base} ({_tsf_affected or f'{ip}:{port}'})"
+                                _tsf_title = f"SSL/TLS Vulnerability (Potential): {_tsf_id_base}"; _tsf_affected = f"{_tsf_id_base} ({_tsf_affected or f'{ip}:{port}'})"
                                 _tsf_risk  = "INFO"
                                 _tsf_finding = (
                                     "(Potential) testssl flagged LOGJAM due to a "
@@ -14303,20 +14317,20 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                                 )
                         # ── Auto-validated checks ───
                         elif _tsf_id_base == "insecure_redirect":
-                            _tsf_title = "SSL/TLS Vulnerability"; _tsf_affected = f"insecure_redirect ({_tsf_affected or f'{ip}:{port}'})"
+                            _tsf_title = "SSL/TLS Vulnerability: insecure_redirect"; _tsf_affected = f"insecure_redirect ({_tsf_affected or f'{ip}:{port}'})"
                             _tsf_risk  = "MEDIUM"
                         elif _tsf_id_base == "secure_client_renego":
-                            _tsf_title = "SSL/TLS Vulnerability"; _tsf_affected = f"secure_client_renego ({_tsf_affected or f'{ip}:{port}'})"
+                            _tsf_title = "SSL/TLS Vulnerability: secure_client_renego"; _tsf_affected = f"secure_client_renego ({_tsf_affected or f'{ip}:{port}'})"
                             _tsf_risk  = "LOW"
                         elif _tsf_id_base == "ipv4_in_header":
-                            _tsf_title = "SSL/TLS Vulnerability"; _tsf_affected = f"ipv4_in_header ({_tsf_affected or f'{ip}:{port}'})"
+                            _tsf_title = "SSL/TLS Vulnerability: ipv4_in_header"; _tsf_affected = f"ipv4_in_header ({_tsf_affected or f'{ip}:{port}'})"
                             _tsf_risk  = "LOW"
                         elif _tsf_id_base == "TLS_misses_extension_23":
                             if (_tsf_sev in ("OK", "INFO")
                                     or "detected" in _tsf_finding_lo
                                     or "offered" in _tsf_finding_lo):
                                 continue
-                            _tsf_title = "SSL/TLS Vulnerability"; _tsf_affected = f"TLS_misses_extension_23 ({_tsf_affected or f'{ip}:{port}'})"
+                            _tsf_title = "SSL/TLS Vulnerability: TLS_misses_extension_23"; _tsf_affected = f"TLS_misses_extension_23 ({_tsf_affected or f'{ip}:{port}'})"
                             _tsf_risk  = "MEDIUM" if _is_ext else "LOW"
                         elif _tsf_id_base in ("cert_notAfter",
                                          "cert_expirationStatus",
@@ -14356,7 +14370,7 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                             if ("not offered" in _tsf_finding_lo
                                     or "not vulnerable" in _tsf_finding_lo):
                                 continue
-                            _tsf_title = "SSL/TLS Vulnerability"; _tsf_affected = f"{_tsf_id_base} ({_tsf_affected or f'{ip}:{port}'})"
+                            _tsf_title = f"SSL/TLS Vulnerability: {_tsf_id_base}"; _tsf_affected = f"{_tsf_id_base} ({_tsf_affected or f'{ip}:{port}'})"
                             if _tsf_risk in ("HIGH", "CRITICAL") and not _is_ext:
                                 _tsf_risk = {"CRITICAL": "HIGH", "HIGH": "MEDIUM"}.get(_tsf_risk, _tsf_risk)
 
@@ -14507,13 +14521,17 @@ def print_ssl_results(ip: str, port: int, sslscan_result: dict | None, testssl_r
 
         # Weak ciphers (sslscan)
         if tool == "sslscan" and result.get("ciphers"):
+            def _real_bits(c):
+                b = int(c.get("bits", "128"))
+                cn = c.get("cipher", "")
+                if b == 64 and re.search(r"CCM.?8", cn, re.IGNORECASE):
+                    m = re.search(r"AES[_-]?(256|128)", cn, re.IGNORECASE)
+                    return int(m.group(1)) if m else 128
+                return b
             weak_ciphers = [
                 c for c in result["ciphers"]
-                # PERFORMANCE: use precompiled _RE_WEAK_CIPHER instead of an
-                # inline re.search() call (pattern was being compiled here on
-                # every invocation of this function, for every cipher entry).
                 if _RE_WEAK_CIPHER.search(c["cipher"])
-                or int(c.get("bits", "128")) < 128
+                or _real_bits(c) < 128
             ]
             if weak_ciphers:
                 print(f"    {label} {Fore.RED}Weak ciphers ({len(weak_ciphers)}):{Style.RESET_ALL}")
@@ -18905,7 +18923,7 @@ def record_software(
     else:
         _sw_title_prefix = "Software Detected"
     output_mgr.log_finding(
-        title=_sw_title_prefix,
+        title=f"{_sw_title_prefix}: {_sw_label}",
         ip=ip,
         port=port,
         command=[],
@@ -18922,7 +18940,7 @@ def record_software(
     if final_os:
         check_os_eol(output_mgr, ip, port, hostname, os_name=final_os, method=method)
         output_mgr.log_finding(
-            title="OS Version Detected",
+            title=f"OS Version Detected: {final_os}",
             ip=ip,
             port=port,
             command=[],
@@ -23664,7 +23682,7 @@ def run_shcheck(
                     f"on {ip}:{port}{Style.RESET_ALL}"
                 )
                 output_mgr.log_finding(
-                    title="Missing Security Header",
+                    title=f"Missing Security Header: {header_name}",
                     ip=ip, port=port, hostname=hostname,
                     risk=risk,
                     command=cmd_str,
@@ -23707,7 +23725,7 @@ def run_shcheck(
                 f"on {ip}:{port}{Style.RESET_ALL}"
             )
             output_mgr.log_finding(
-                title="Missing Security Header",
+                title=f"Missing Security Header: {header_name}",
                 ip=ip, port=port, hostname=hostname,
                 risk=risk,
                 command=cmd_str,
