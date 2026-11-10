@@ -10833,6 +10833,11 @@ def _port_scan_worker(
                             run_testssl, ip, port, testssl_path,
                             args.testssl_timeout, output_mgr, hostname,
                         )))
+                    if not getattr(args, "no_openssl", False):
+                        sub_futures.append(("openssl", sub.submit(
+                            run_openssl_showcerts, ip, port,
+                            30, output_mgr, hostname,
+                        )))
                 if is_web and web_result and web_result.get("responds"):
                     sub_futures.append(("webdl", sub.submit(
                         download_web_files,
@@ -10883,6 +10888,8 @@ def _port_scan_worker(
                                 if san and not san.startswith("*."):
                                     hbp.setdefault(port, san)
                                     break
+                        elif tag == "openssl":
+                            ssl_entry["openssl"] = res
                         elif tag == "webdl":
                             with _PRINT_LOCK:
                                 host_result["web_files"][port] = res
@@ -13396,22 +13403,24 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
                 )
 
             # Certificate key size — matches testssl's cert_keySize finding
+            # Thresholds per NIST SP 800-57 / PCI DSS: RSA ≥ 2048, EC ≥ 256
             _pk_type = result.get("cert_pk_type", "")
             _pk_bits = result.get("cert_pk_bits", 0)
             if _pk_type and _pk_bits:
-                _weak_key = (_pk_type.upper() == "RSA" and _pk_bits < 4096) or \
+                _weak_key = (_pk_type.upper() == "RSA" and _pk_bits < 2048) or \
                             (_pk_type.upper() in ("EC", "ECDSA") and _pk_bits < 256)
                 if _weak_key:
                     output_mgr.log_finding(
                         title="SSL/TLS Certificate: Weak Encryption Method",
                         ip=ip, port=port, command=cmd, hostname=hostname,
-                        risk="LOW",
+                        risk="MEDIUM" if output_mgr.scope == "ext" else "LOW",
                         description=(
-                            f"The server's TLS certificate uses {_pk_type} {_pk_bits} bits. "
-                            "Consider upgrading to RSA 4096+ or ECDSA 384+ for stronger key exchange."
+                            f"The server's leaf certificate uses {_pk_type} {_pk_bits} bits, "
+                            "which is below the minimum required by NIST SP 800-57 and PCI DSS "
+                            "(RSA 2048+, ECDSA 256+)."
                         ),
                         sources="sslscan",
-                        output=f"{_pk_type} {_pk_bits} bits (exponent is 65537)",
+                        output=f"Leaf certificate: {_pk_type} {_pk_bits} bits",
                         affected=f"{ip}:{port}",
                         output_file=_ss_out_file,
                     )
@@ -14457,6 +14466,382 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                   detail=err, category="Tool")
         if output_mgr:
             output_mgr.log_error("testssl", testssl_path, cmd, err,
+                                 extra={"target": f"{ip}:{port}"})
+
+    return result
+
+
+# ── Certificate chain analysis via openssl s_client ──────────────────────
+# Regex patterns for parsing openssl x509 -text output
+_RE_OSSL_SUBJECT   = re.compile(r"Subject:\s*(.+)")
+_RE_OSSL_ISSUER    = re.compile(r"Issuer:\s*(.+)")
+_RE_OSSL_NOT_BEFORE = re.compile(r"Not Before:\s*(.+)")
+_RE_OSSL_NOT_AFTER  = re.compile(r"Not After\s*:\s*(.+)")
+_RE_OSSL_SIG_ALG   = re.compile(r"Signature Algorithm:\s*(\S+)")
+_RE_OSSL_PK_ALG    = re.compile(r"Public Key Algorithm:\s*(\S+)")
+_RE_OSSL_PK_BITS   = re.compile(r"(?:RSA Public-Key|Public-Key):\s*\((\d+)\s*bit\)", re.IGNORECASE)
+_RE_OSSL_EC_BITS   = re.compile(r"(?:ASN1 OID|ECDSA).*?(\d+)\s*bit", re.IGNORECASE)
+_RE_OSSL_SERIAL    = re.compile(r"Serial Number:\s*\n?\s*([0-9a-fA-F:]+)")
+_RE_OSSL_VERIFY    = re.compile(r"Verify return code:\s*(\d+)\s*\(([^)]*)\)")
+_RE_OSSL_DEPTH     = re.compile(r"depth=(\d+)")
+
+
+def _parse_cert_text(text: str) -> dict:
+    """Parse output of `openssl x509 -noout -text` into a structured dict."""
+    cert: dict = {
+        "subject": "", "issuer": "", "not_before": "", "not_after": "",
+        "sig_alg": "", "pk_alg": "", "pk_bits": 0, "serial": "",
+        "is_ca": False, "is_self_signed": False, "expired": False,
+    }
+    for line in text.splitlines():
+        line = line.strip()
+        m = _RE_OSSL_SUBJECT.match(line)
+        if m:
+            cert["subject"] = m.group(1).strip()
+            continue
+        m = _RE_OSSL_ISSUER.match(line)
+        if m:
+            cert["issuer"] = m.group(1).strip()
+            continue
+        m = _RE_OSSL_NOT_BEFORE.match(line)
+        if m:
+            cert["not_before"] = m.group(1).strip()
+            continue
+        m = _RE_OSSL_NOT_AFTER.match(line)
+        if m:
+            cert["not_after"] = m.group(1).strip()
+            continue
+        m = _RE_OSSL_SIG_ALG.match(line)
+        if m and not cert["sig_alg"]:
+            cert["sig_alg"] = m.group(1).strip()
+            continue
+        m = _RE_OSSL_PK_ALG.match(line)
+        if m:
+            cert["pk_alg"] = m.group(1).strip()
+            continue
+        m = _RE_OSSL_PK_BITS.search(line)
+        if m:
+            cert["pk_bits"] = int(m.group(1))
+            continue
+        m = _RE_OSSL_EC_BITS.search(line)
+        if m and not cert["pk_bits"]:
+            cert["pk_bits"] = int(m.group(1))
+            continue
+        if "CA:TRUE" in line:
+            cert["is_ca"] = True
+
+    cert["is_self_signed"] = (
+        cert["subject"] != "" and cert["subject"] == cert["issuer"]
+    )
+
+    if cert["not_after"]:
+        try:
+            for fmt in ("%b %d %H:%M:%S %Y %Z", "%b  %d %H:%M:%S %Y %Z"):
+                try:
+                    exp = datetime.strptime(cert["not_after"], fmt)
+                    cert["expired"] = exp < datetime.now()
+                    break
+                except ValueError:
+                    continue
+        except Exception:
+            pass
+
+    return cert
+
+
+def _chain_position_label(idx: int, total: int, cert: dict) -> str:
+    """Return a human label for a cert's position in the chain."""
+    if idx == 0:
+        return "Leaf"
+    if cert.get("is_self_signed") and idx == total - 1:
+        return "Root CA"
+    return f"Intermediate (depth {idx})"
+
+
+def run_openssl_showcerts(
+    ip: str, port: int, timeout: int = 30,
+    output_mgr: "OutputManager | None" = None,
+    hostname: str | None = None,
+) -> dict:
+    """
+    Run `openssl s_client -connect ip:port -showcerts` to collect the full
+    certificate chain as evidence, then parse each certificate individually
+    to identify per-cert issues (weak keys, expired intermediates, SHA-1
+    signatures, incomplete chains, etc.).
+
+    Returns a structured result dict with the chain analysis.
+    """
+    result: dict = {
+        "tool": "openssl",
+        "raw": "",
+        "chain": [],
+        "verify_code": None,
+        "verify_msg": "",
+        "errors": [],
+        "output_file": None,
+    }
+
+    openssl_path = shutil.which("openssl")
+    if not openssl_path:
+        result["errors"].append("openssl binary not found")
+        return result
+
+    cmd = [
+        openssl_path, "s_client",
+        "-connect", f"{ip}:{port}",
+        "-showcerts",
+    ]
+    if hostname:
+        cmd += ["-servername", hostname]
+
+    _tprint(f"  {Fore.CYAN}[*] openssl s_client {ip}:{port}{Style.RESET_ALL}")
+    try:
+        _started = datetime.now().astimezone()
+        proc = _popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                       stdin=subprocess.PIPE)
+        try:
+            stdout_b, stderr_b = proc.communicate(input=b"", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_proc_tree(proc)
+            stdout_b, stderr_b = proc.communicate()
+            raise
+        _ended = datetime.now().astimezone()
+        _stdout = stdout_b.decode("utf-8", errors="replace")
+        _stderr = stderr_b.decode("utf-8", errors="replace")
+        raw_output = _stdout + "\n" + _stderr
+        result["raw"] = raw_output
+
+        # Save evidence file
+        if output_mgr:
+            ts_safe = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_ip = ip.replace(".", "_")
+            out_dir = output_mgr.web_path(ip, port)
+            out_path = out_dir / f"{safe_ip}_{port}_openssl_{ts_safe}.txt"
+            out_path.write_text(raw_output, encoding="utf-8")
+            try:
+                os.chmod(out_path, 0o644)
+            except OSError:
+                pass
+            result["output_file"] = str(out_path)
+
+            extra = {"target": f"{ip}:{port}", "exit_code": proc.returncode}
+            output_mgr.log_command(
+                "openssl", openssl_path, cmd, out_path, extra=extra,
+                stdout=_stdout, stderr=_stderr,
+                started=_started, ended=_ended, exit_code=proc.returncode,
+            )
+
+        # Parse verify return code from s_client output
+        m_verify = _RE_OSSL_VERIFY.search(raw_output)
+        if m_verify:
+            result["verify_code"] = int(m_verify.group(1))
+            result["verify_msg"] = m_verify.group(2)
+
+        # Extract individual PEM certificates from the chain
+        pem_blocks: list[str] = []
+        in_pem = False
+        current_pem: list[str] = []
+        for line in raw_output.splitlines():
+            if "-----BEGIN CERTIFICATE-----" in line:
+                in_pem = True
+                current_pem = [line]
+            elif "-----END CERTIFICATE-----" in line and in_pem:
+                current_pem.append(line)
+                pem_blocks.append("\n".join(current_pem))
+                in_pem = False
+                current_pem = []
+            elif in_pem:
+                current_pem.append(line)
+
+        # Parse each certificate with openssl x509 -noout -text
+        chain: list[dict] = []
+        for idx, pem in enumerate(pem_blocks):
+            try:
+                x509_proc = subprocess.run(
+                    [openssl_path, "x509", "-noout", "-text"],
+                    input=pem, capture_output=True, text=True, timeout=10,
+                )
+                cert = _parse_cert_text(x509_proc.stdout)
+                cert["pem_index"] = idx
+                cert["position"] = _chain_position_label(idx, len(pem_blocks), cert)
+                chain.append(cert)
+            except Exception:
+                chain.append({
+                    "pem_index": idx,
+                    "position": _chain_position_label(idx, len(pem_blocks), {}),
+                    "error": "failed to parse certificate",
+                })
+        result["chain"] = chain
+
+        # ── Generate findings from chain analysis ─────────────────────────
+        _ossl_out_file = result.get("output_file") or ""
+        if output_mgr and chain:
+            _is_ext = (output_mgr.scope == "ext")
+
+            for cert in chain:
+                if cert.get("error"):
+                    continue
+                pos = cert["position"]
+
+                # Weak key on any cert in the chain
+                pk_alg = cert.get("pk_alg", "").lower()
+                pk_bits = cert.get("pk_bits", 0)
+                if pk_alg and pk_bits:
+                    _is_rsa = "rsa" in pk_alg
+                    _is_ec = "ec" in pk_alg or "ecdsa" in pk_alg
+                    _weak = (_is_rsa and pk_bits < 2048) or (_is_ec and pk_bits < 256)
+                    if _weak and cert["pem_index"] > 0:
+                        output_mgr.log_finding(
+                            title=f"SSL/TLS Certificate Chain: {pos} Certificate Weak Key",
+                            ip=ip, port=port, command=cmd, hostname=hostname,
+                            risk="MEDIUM" if _is_ext else "LOW",
+                            description=(
+                                f"The {pos.lower()} certificate in the chain uses "
+                                f"{cert.get('pk_alg', 'unknown')} {pk_bits} bits, "
+                                "below NIST SP 800-57 minimums (RSA 2048+, ECDSA 256+)."
+                            ),
+                            sources="openssl",
+                            output=(
+                                f"Chain position: {pos}\n"
+                                f"Subject: {cert.get('subject', '')}\n"
+                                f"Issuer: {cert.get('issuer', '')}\n"
+                                f"Key: {cert.get('pk_alg', '')} {pk_bits} bits"
+                            ),
+                            affected=f"{ip}:{port}",
+                            output_file=_ossl_out_file,
+                        )
+
+                # Expired certificate at any position
+                if cert.get("expired"):
+                    _exp_risk = "HIGH" if cert["pem_index"] == 0 else "MEDIUM"
+                    if not _is_ext and _exp_risk == "HIGH":
+                        _exp_risk = "MEDIUM"
+                    output_mgr.log_finding(
+                        title=f"SSL/TLS Certificate Chain: {pos} Certificate Expired",
+                        ip=ip, port=port, command=cmd, hostname=hostname,
+                        risk=_exp_risk,
+                        description=(
+                            f"The {pos.lower()} certificate expired on "
+                            f"{cert.get('not_after', 'unknown')}. "
+                            + ("An expired leaf certificate causes browser warnings and "
+                               "breaks trust validation."
+                               if cert["pem_index"] == 0
+                               else "An expired intermediate certificate breaks chain "
+                                    "validation even if the leaf certificate is valid.")
+                        ),
+                        sources="openssl",
+                        output=(
+                            f"Chain position: {pos}\n"
+                            f"Subject: {cert.get('subject', '')}\n"
+                            f"Not After: {cert.get('not_after', '')}"
+                        ),
+                        affected=f"{ip}:{port}",
+                        output_file=_ossl_out_file,
+                    )
+
+                # SHA-1 signature algorithm (deprecated since 2017)
+                sig = cert.get("sig_alg", "").lower()
+                if "sha1" in sig and not cert.get("is_self_signed"):
+                    output_mgr.log_finding(
+                        title=f"SSL/TLS Certificate Chain: {pos} Certificate Uses SHA-1 Signature",
+                        ip=ip, port=port, command=cmd, hostname=hostname,
+                        risk="MEDIUM" if _is_ext else "LOW",
+                        description=(
+                            f"The {pos.lower()} certificate is signed with {cert.get('sig_alg', '')}, "
+                            "which is deprecated and vulnerable to collision attacks "
+                            "(SHAttered, CVE-2005-4900). Modern browsers reject SHA-1 "
+                            "signed certificates."
+                        ),
+                        sources="openssl", cves="CVE-2005-4900",
+                        output=(
+                            f"Chain position: {pos}\n"
+                            f"Subject: {cert.get('subject', '')}\n"
+                            f"Signature Algorithm: {cert.get('sig_alg', '')}"
+                        ),
+                        affected=f"{ip}:{port}",
+                        output_file=_ossl_out_file,
+                    )
+
+                # Self-signed intermediate (not root, not leaf)
+                if (cert.get("is_self_signed") and cert["pem_index"] > 0
+                        and cert["pem_index"] < len(chain) - 1):
+                    output_mgr.log_finding(
+                        title="SSL/TLS Certificate Chain: Self-Signed Intermediate Certificate",
+                        ip=ip, port=port, command=cmd, hostname=hostname,
+                        risk="HIGH" if _is_ext else "MEDIUM",
+                        description=(
+                            "An intermediate certificate in the chain is self-signed, "
+                            "which breaks chain-of-trust validation. This may indicate "
+                            "a misconfigured certificate chain or a rogue CA."
+                        ),
+                        sources="openssl",
+                        output=(
+                            f"Chain position: {pos}\n"
+                            f"Subject: {cert.get('subject', '')}\n"
+                            f"Issuer: {cert.get('issuer', '')}"
+                        ),
+                        affected=f"{ip}:{port}",
+                        output_file=_ossl_out_file,
+                    )
+
+            # Incomplete chain — openssl verify code 21 = unable to verify first cert
+            # code 2 = unable to get issuer cert, code 20 = unable to get local issuer
+            if result["verify_code"] in (2, 20, 21):
+                output_mgr.log_finding(
+                    title="SSL/TLS Certificate Chain: Incomplete Certificate Chain",
+                    ip=ip, port=port, command=cmd, hostname=hostname,
+                    risk="MEDIUM" if _is_ext else "LOW",
+                    description=(
+                        f"The server did not send a complete certificate chain. "
+                        f"OpenSSL verify: {result['verify_msg']} (code {result['verify_code']}). "
+                        "Clients that do not cache intermediate certificates will fail "
+                        "to validate the server's identity."
+                    ),
+                    sources="openssl",
+                    output=(
+                        f"Verify return code: {result['verify_code']} ({result['verify_msg']})\n"
+                        f"Certificates in chain: {len(chain)}"
+                    ),
+                    affected=f"{ip}:{port}",
+                    output_file=_ossl_out_file,
+                )
+
+            # Root CA sent in chain (unnecessary, wastes bandwidth)
+            if len(chain) >= 2 and chain[-1].get("is_self_signed") and chain[-1].get("is_ca"):
+                output_mgr.log_finding(
+                    title="SSL/TLS Certificate Chain: Root CA Included in Chain",
+                    ip=ip, port=port, command=cmd, hostname=hostname,
+                    risk="INFO",
+                    description=(
+                        "The server includes the root CA certificate in the TLS handshake. "
+                        "Since clients must already trust the root CA locally, sending it "
+                        "is unnecessary and adds overhead to the handshake."
+                    ),
+                    sources="openssl",
+                    output=(
+                        f"Root CA subject: {chain[-1].get('subject', '')}\n"
+                        f"Certificates in chain: {len(chain)}"
+                    ),
+                    affected=f"{ip}:{port}",
+                    output_file=_ossl_out_file,
+                )
+
+        _tprint(f"  {Fore.GREEN}[+] openssl chain analysis complete: {ip}:{port} "
+                f"({len(chain)} cert{'s' if len(chain) != 1 else ''} in chain){Style.RESET_ALL}")
+
+    except subprocess.TimeoutExpired:
+        err = f"openssl s_client timed out after {timeout}s"
+        result["errors"].append(err)
+        _vc.log(f"openssl timed out on {ip}:{port} after {timeout}s", "WARNING")
+        if output_mgr:
+            output_mgr.log_error("openssl", openssl_path or "openssl", cmd, err,
+                                 extra={"target": f"{ip}:{port}"})
+    except Exception as e:
+        err = str(e)
+        result["errors"].append(err)
+        _vc.log(f"openssl s_client failed on {ip}:{port}: {err}", "ERROR")
+        if output_mgr:
+            output_mgr.log_error("openssl", openssl_path or "openssl", cmd, err,
                                  extra={"target": f"{ip}:{port}"})
 
     return result
