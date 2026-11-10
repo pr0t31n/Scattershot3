@@ -1892,6 +1892,9 @@ _RE_INTERNAL_HOSTNAME = re.compile(
     r"\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+(?:local|internal|corp|lan|intranet|private|home|localdomain)\b",
     re.IGNORECASE,
 )
+_RE_CERT_EMAIL = re.compile(
+    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
+)
 
 
 def classify_ip(ip: str) -> str:
@@ -2078,7 +2081,7 @@ class OutputManager:
         │       ├── portscan_<ts>.txt    nmap output
         │       ├── portscan_<ts>.xml
         │       ├── banners/
-        │       │   └── <port>_banner.txt
+        │       │   └── <ip>_<port>_banner.txt
         │       ├── web/
         │       │   └── <port>/          SSL, HTTP, gobuster, shcheck, wpscan, webanalyze
         │       └── services/
@@ -2424,7 +2427,8 @@ class OutputManager:
     def banner_path(self, ip: str, port: int) -> Path:
         d = self.host_path(ip) / "banners"
         d.mkdir(parents=True, exist_ok=True)
-        return d / f"{port}_banner.txt"
+        safe_ip = ip.replace(".", "_").replace(":", "_")
+        return d / f"{safe_ip}_{port}_banner.txt"
 
     def host_path(self, ip: str) -> Path:
         """Return (creating if needed) the output dir for a single host: <root>/hosts/<safe_ip>/"""
@@ -3182,7 +3186,8 @@ class OutputManager:
     def write_ssl_output(self, tool: str, ip: str, port: int, raw_output: str) -> Path:
         """Save raw SSL tool output to the host's web/<port>/ directory."""
         ts_safe = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out = self.web_path(ip, port) / f"{tool}_{ts_safe}.txt"
+        safe_ip = ip.replace(".", "_").replace(":", "_")
+        out = self.web_path(ip, port) / f"{safe_ip}_{port}_{tool}_{ts_safe}.txt"
         out.write_text(raw_output, encoding="utf-8")
         try:
             os.chmod(out, 0o644)
@@ -10480,7 +10485,7 @@ def _port_scan_worker(
                     try:
                         _http_dir = output_mgr.service_path(ip, "http")
                         _http_safe_ip = ip.replace(".", "_")
-                        _http_file = _http_dir / f"{port}_http.txt"
+                        _http_file = _http_dir / f"{_http_safe_ip}_{port}_http.txt"
                         _http_scheme = (web_result.get("scheme")
                                         or ("https" if port_is_tls(port, web_result) else "http"))
                         _http_url = _clean_url(_http_scheme, ip, port)
@@ -11849,7 +11854,7 @@ def _port_scan_worker(
                 if _http_ttl: _http_aff_parts.append(f"Title: {_http_ttl}")
                 if _http_rdr: _http_aff_parts.append(f"Redirects to: {_http_rdr}")
                 # Reference the saved http output file if it exists
-                _http_out_file = output_mgr.service_path(ip, "http") / f"{port}_http.txt"
+                _http_out_file = output_mgr.service_path(ip, "http") / f"{ip.replace('.', '_')}_{port}_http.txt"
                 _http_risk = "MEDIUM"
                 output_mgr.log_finding(
                     title="Insecure Protocol Detected: HTTP",
@@ -13170,6 +13175,7 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
         "cert_issuer":  None,
         "cert_expiry":  None,
         "cert_valid":   None,
+        "cert_san_emails": [],
         "heartbleed":   None,
         "errors":       [],
         "output_file":  None,
@@ -13321,14 +13327,28 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
                             "bits":     _ss_cipher_el.get("bits", "128"),
                             "cipher":   _ss_cipher_el.get("cipher", ""),
                         })
-                # Certificate public key type and size
+                # Certificate public key type and size + SAN emails
                 for _ss_cert_el in _ss_root.findall(".//certificate"):
-                    _pk_type = _ss_cert_el.get("pk-type", "")
-                    _pk_bits = _ss_cert_el.get("pk-bits", "")
-                    if _pk_type and _pk_bits:
-                        result["cert_pk_type"] = _pk_type
-                        result["cert_pk_bits"] = int(_pk_bits)
-                        break
+                    _pk_el = _ss_cert_el.find("pk")
+                    if _pk_el is not None:
+                        _pk_type = _pk_el.get("type", "")
+                        _pk_bits = _pk_el.get("bits", "")
+                        if _pk_type and _pk_bits:
+                            result["cert_pk_type"] = _pk_type
+                            result["cert_pk_bits"] = int(_pk_bits)
+                    _altnames_el = _ss_cert_el.find("altnames")
+                    if _altnames_el is not None and _altnames_el.text:
+                        for _an_part in _altnames_el.text.split(","):
+                            _an_part = _an_part.strip()
+                            if _an_part.lower().startswith("email:"):
+                                _email = _an_part[6:].strip()
+                                if _email and _email not in result["cert_san_emails"]:
+                                    result["cert_san_emails"].append(_email)
+                            else:
+                                _em = _RE_CERT_EMAIL.search(_an_part)
+                                if _em and _em.group(0) not in result["cert_san_emails"]:
+                                    result["cert_san_emails"].append(_em.group(0))
+                    break
             except Exception:
                 pass  # fall back to text-parser results
 
@@ -13397,6 +13417,35 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
                         f"Certificate subject: {result.get('cert_subject') or '(unknown)'}\n"
                         f"Certificate issuer: {result.get('cert_issuer') or '(unknown)'}\n"
                         f"Certificate status: self-signed"
+                    ),
+                    affected=f"{ip}:{port}",
+                    output_file=_ss_out_file,
+                )
+
+            # Email address in certificate SAN
+            _san_emails = result.get("cert_san_emails", [])
+            if _san_emails:
+                _email_str = ", ".join(_san_emails)
+                output_mgr.log_finding(
+                    title="Information Disclosure: Email Address in Certificate",
+                    ip=ip, port=port, command=cmd, hostname=hostname,
+                    risk="LOW",
+                    description=(
+                        f"The SSL/TLS certificate on {ip}:{port} contains "
+                        f"{len(_san_emails)} email address(es) in its Subject "
+                        f"Alternative Names (SAN) extension: {_email_str}. "
+                        f"Email addresses embedded in certificates are visible "
+                        f"to any client that connects to the service, disclosing "
+                        f"personnel information that can be used for targeted "
+                        f"phishing, social engineering, or OSINT reconnaissance. "
+                        f"Remove email addresses from the SAN field and use DNS "
+                        f"names only."
+                    ),
+                    sources="sslscan",
+                    output=(
+                        f"Email(s) in SAN: {_email_str}\n"
+                        f"Certificate subject: {result.get('cert_subject') or '(unknown)'}\n"
+                        f"Certificate issuer: {result.get('cert_issuer') or '(unknown)'}"
                     ),
                     affected=f"{ip}:{port}",
                     output_file=_ss_out_file,
@@ -14191,6 +14240,29 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                                     sources="testssl",
                                     affected=f"{ip}:{port}",
                                 )
+                            _san_emails_ts = sorted(set(
+                                m.group(0) for m in _RE_CERT_EMAIL.finditer(_tsf_finding)
+                            ))
+                            if _san_emails_ts:
+                                _ts_email_str = ", ".join(_san_emails_ts)
+                                output_mgr.log_finding(
+                                    title="Information Disclosure: Email Address in Certificate",
+                                    ip=ip, port=port, command=cmd, hostname=hostname,
+                                    risk="LOW",
+                                    description=(
+                                        f"The SSL/TLS certificate on {ip}:{port} contains "
+                                        f"{len(_san_emails_ts)} email address(es) in its "
+                                        f"Subject Alternative Names: {_ts_email_str}. "
+                                        f"Email addresses embedded in certificates are "
+                                        f"visible to any client that connects, disclosing "
+                                        f"personnel information usable for targeted "
+                                        f"phishing, social engineering, or OSINT. "
+                                        f"Remove email addresses from the SAN field."
+                                    ),
+                                    output=f"Email(s) in SAN: {_ts_email_str}\nFull SAN: {_tsf_finding[:512]}",
+                                    sources="testssl",
+                                    affected=f"{ip}:{port}",
+                                )
                         elif _tsf_id_base.lower().startswith("hsts"):
                             # HSTS positively present: finding says "offered" without negation
                             if ("offered" in _tsf_finding_lo
@@ -14492,6 +14564,7 @@ def _parse_cert_text(text: str) -> dict:
         "subject": "", "issuer": "", "not_before": "", "not_after": "",
         "sig_alg": "", "pk_alg": "", "pk_bits": 0, "serial": "",
         "is_ca": False, "is_self_signed": False, "expired": False,
+        "emails": [],
     }
     for line in text.splitlines():
         line = line.strip()
@@ -14529,6 +14602,11 @@ def _parse_cert_text(text: str) -> dict:
             continue
         if "CA:TRUE" in line:
             cert["is_ca"] = True
+        if "email:" in line.lower():
+            for _em in _RE_CERT_EMAIL.finditer(line):
+                _ev = _em.group(0)
+                if _ev not in cert["emails"]:
+                    cert["emails"].append(_ev)
 
     cert["is_self_signed"] = (
         cert["subject"] != "" and cert["subject"] == cert["issuer"]
@@ -14822,6 +14900,33 @@ def run_openssl_showcerts(
                         f"Root CA subject: {chain[-1].get('subject', '')}\n"
                         f"Certificates in chain: {len(chain)}"
                     ),
+                    affected=f"{ip}:{port}",
+                    output_file=_ossl_out_file,
+                )
+
+            # Email addresses in any certificate in the chain
+            _ossl_emails: list[str] = []
+            for cert in chain:
+                for em in cert.get("emails", []):
+                    if em not in _ossl_emails:
+                        _ossl_emails.append(em)
+            if _ossl_emails:
+                _ossl_email_str = ", ".join(_ossl_emails)
+                output_mgr.log_finding(
+                    title="Information Disclosure: Email Address in Certificate",
+                    ip=ip, port=port, command=cmd, hostname=hostname,
+                    risk="LOW",
+                    description=(
+                        f"The SSL/TLS certificate chain on {ip}:{port} contains "
+                        f"{len(_ossl_emails)} email address(es): {_ossl_email_str}. "
+                        f"Email addresses embedded in certificates are visible to "
+                        f"any client that connects, disclosing personnel information "
+                        f"usable for targeted phishing, social engineering, or "
+                        f"OSINT reconnaissance. Remove email addresses from "
+                        f"certificate SAN fields and use DNS names only."
+                    ),
+                    sources="openssl",
+                    output=f"Email(s) found: {_ossl_email_str}",
                     affected=f"{ip}:{port}",
                     output_file=_ossl_out_file,
                 )
@@ -20818,7 +20923,7 @@ def take_web_screenshot(
     """Capture a screenshot of the web service at scheme://ip:port using
     Selenium with a headless Chrome/Chromium browser.
 
-    Saved as: <scope>/web/<ip>_<port>/screenshot.png
+    Saved as: <scope>/web/<port>/<ip>_<port>_screenshot.png
     TLS errors are ignored; Host header is spoofed via --host-resolver-rules
     when a hostname is provided so SNI-based virtual hosts render correctly.
 
@@ -20836,7 +20941,8 @@ def take_web_screenshot(
         url = f"{scheme}://{host_part}:{port}/"
 
     save_dir = output_mgr.web_path(ip, port)
-    out_path  = save_dir / "screenshot.png"
+    _ss_safe_ip = ip.replace(".", "_").replace(":", "_")
+    out_path  = save_dir / f"{_ss_safe_ip}_{port}_screenshot.png"
     timeout_s = max(1, timeout_ms // 1000)
 
     try:
