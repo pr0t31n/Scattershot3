@@ -20855,6 +20855,50 @@
       "_x_metasploit": [],
       "_x_exploitdb": [],
       "_x_owasp": "A02:2021 Cryptographic Failures"
+    },
+    {
+      "id": "SS3-246",
+      "title": "LDAP: Cleartext (Unencrypted) Transport",
+      "aliases": [
+        "LDAP Cleartext",
+        "Unencrypted LDAP",
+        "LDAP Without TLS"
+      ],
+      "source_tools": ["scattershot3"],
+      "risk": "HIGH",
+      "description": "The LDAP service does not use TLS encryption. Credentials (including plaintext passwords and NTLM hashes during LDAP simple bind) and all directory queries are transmitted in cleartext, allowing any attacker with network access to intercept authentication credentials, enumerate directory objects, and capture sensitive organizational data through passive network sniffing or active man-in-the-middle attacks.",
+      "impact": "An attacker positioned on the network segment can passively capture LDAP bind credentials (usernames and passwords) transmitted in cleartext. With captured domain credentials, the attacker can authenticate to Active Directory, enumerate all domain objects, escalate privileges through group membership abuse, and move laterally across the environment. On unencrypted LDAP, NTLM relay attacks become trivial — an attacker can relay captured NTLM authentication to other services including LDAP itself, potentially gaining Domain Admin access through delegation abuse or ACL modification.",
+      "cwe": ["CWE-319", "CWE-523"],
+      "cve_examples": [],
+      "cvss_v3_base": 7.5,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
+      "nessus_plugin_ids": [10863],
+      "qualys_qids": [],
+      "owasp_web": "",
+      "owasp_api": "",
+      "nist_csf2": ["PR.DS-02", "PR.DS-01"],
+      "nist_800_53": ["SC-8", "SC-23", "IA-5"],
+      "nist_800_171": ["3.13.8"],
+      "pci_dss_4": ["4.2.1"],
+      "iso_27001": ["A.8.24"],
+      "iso_27002": ["8.24"],
+      "soc2": ["CC6.1", "CC6.7"],
+      "hitrust": ["09.m"],
+      "gdpr": ["Article 32"],
+      "mitre_attack": [
+        {"technique": "T1557.001", "tactic": "Credential Access", "name": "LLMNR/NBT-NS Poisoning and SMB Relay"},
+        {"technique": "T1040", "tactic": "Credential Access", "name": "Network Sniffing"}
+      ],
+      "searchsploit_terms": [],
+      "metasploit_modules": ["auxiliary/gather/ldap_hashdump"],
+      "kev": false,
+      "remediation_brief": "Configure LDAPS (LDAP over TLS on port 636) with a valid certificate or enforce STARTTLS on port 389. Set the Active Directory domain controller LDAP signing requirement to 'Require signing' via Group Policy (Domain controller: LDAP server signing requirements). Enable LDAP channel binding (EPA) to prevent NTLM relay. Disable plaintext LDAP simple bind via the 'Domain controller: LDAP server channel binding token requirements' GPO. Monitor Windows Event ID 2887 (number of unsigned LDAP binds) to track cleartext usage.",
+      "remediation_component": "Network",
+      "remediation_category": "Cryptography",
+      "remediation_effort": "Moderate",
+      "validation_tools": ["ldapsearch", "nmap", "wireshark"],
+      "_x_category": "LDAP",
+      "_x_owasp": ""
     }
   ]
 }
