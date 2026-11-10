@@ -3071,7 +3071,8 @@ class OutputManager:
             fname = self._safe_filename([ip, scan_type, ts_safe], "txt")
             out   = self.scope_tool_path("nmap_discovery") / fname
         elif "." in ip or ":" in ip:
-            out = self.host_path(ip) / f"{scan_type}_{ts_safe}.txt"
+            _safe_ip = ip.replace(".", "_").replace(":", "_")
+            out = self.host_path(ip) / f"{_safe_ip}_{scan_type}_{ts_safe}.txt"
         else:
             fname = self._safe_filename([ip, scan_type, ts_safe], "txt")
             out   = self.scope_tool_path("nmap_discovery") / fname
@@ -3164,10 +3165,27 @@ class OutputManager:
                 _nmap_lines.append(
                     f"{_pid+'/'+_proto:<9}{_pstate:<9}{_svc:<15} {_vlabel}"
                 )
+                for _script in _p.findall("script"):
+                    _sid = _script.get("id", "")
+                    _sout = _script.get("output", "")
+                    if _sid and _sout:
+                        for _sl in _sout.splitlines():
+                            _nmap_lines.append(f"|  {_sl}")
             if _port_descs:
                 _gnmap_lines.append(
                     f"Host: {_addr} ({_hostname})\tPorts: " + ", ".join(_port_descs)
                 )
+            _hs_el = _h.find("hostscript")
+            if _hs_el is not None:
+                _nmap_lines.append("")
+                _nmap_lines.append("Host script results:")
+                for _script in _hs_el.findall("script"):
+                    _sid = _script.get("id", "")
+                    _sout = _script.get("output", "")
+                    if _sid and _sout:
+                        _nmap_lines.append(f"| {_sid}: ")
+                        for _sl in _sout.splitlines():
+                            _nmap_lines.append(f"|  {_sl}")
 
         try:
             _gnmap_path = _base.with_suffix(".gnmap")
@@ -6281,7 +6299,7 @@ def _parse_nse_findings(
             # detection via smb-vuln-ms17-010 NSE warrants CRITICAL, and that
             # emits its own dedicated finding below.
             output_mgr.log_finding(
-                title="SMBv1 Protocol Enabled (EternalBlue risk)",
+                title="SMB Vulnerability: SMBv1 Protocol Enabled (EternalBlue Risk)",
                 ip=ip, port=port, command=cmd, hostname=hostname, risk="HIGH",
                 description=(
                     "SMBv1 is a legacy protocol with multiple critical vulnerabilities. "
@@ -8968,7 +8986,7 @@ def probe_uncertain_and_nonstandard_ports(
                                         "evidence", "cert_check")
                                     os.makedirs(_cev_dir, exist_ok=True)
                                     _cev_ts = _dt_cert.now().strftime("%Y%m%d_%H%M%S")
-                                    _cev_fn = f"{ip}_{_port}_cert_mismatch_{_cev_ts}.txt"
+                                    _cev_fn = f"{ip.replace('.', '_').replace(':', '_')}_{_port}_cert_mismatch_{_cev_ts}.txt"
                                     _cev_abs = os.path.join(_cev_dir, _cev_fn)
                                     _cev_lines = [
                                         f"# TLS Certificate Hostname Mismatch Evidence",
@@ -9582,7 +9600,7 @@ def port_scan(
     oA_base  = None
     if output_mgr:
         safe_ip = ip.replace(".", "_")
-        oA_base = str(output_mgr.host_path(ip) / f"portscan_{ts_safe}")
+        oA_base = str(output_mgr.host_path(ip) / f"{safe_ip}_portscan_{ts_safe}")
 
     # cmd_list is what gets logged (python-nmap builds the real subprocess itself)
     if scope == "ext":
@@ -9685,7 +9703,7 @@ def port_scan(
             # Save the captured XML AND synthesised .gnmap + .nmap siblings
             # as the -oA trio. python-nmap won't allow real -oA in its args
             # so we generate them from the XML it captured.
-            _nmap_xml_path = output_mgr.host_path(ip) / f"portscan_{ts_safe}.xml"
+            _nmap_xml_path = output_mgr.host_path(ip) / f"{safe_ip}_portscan_{ts_safe}.xml"
             if raw.lstrip().startswith("<?xml"):
                 try:
                     output_mgr.write_nmap_oA_siblings(
@@ -9695,7 +9713,7 @@ def port_scan(
                     pass
 
             # Write placeholder .txt (human-readable summary written after parse)
-            out_path = output_mgr.host_path(ip) / f"portscan_{ts_safe}.txt"
+            out_path = output_mgr.host_path(ip) / f"{safe_ip}_portscan_{ts_safe}.txt"
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(f"Nmap port scan: {ip}\n(results will appear after parsing)\n",
                                 encoding="utf-8")
@@ -9966,12 +9984,28 @@ def port_scan(
                         for port in nm_nse[ip][proto].keys():
                             nse_scripts_out = nm_nse[ip][proto][port].get("script", {})
                             if nse_scripts_out and port in results:
-                                # Merge script output into existing port result
                                 results[port].setdefault("scripts", {}).update(
                                     nse_scripts_out
                                 )
                                 if output_mgr:
                                     _nse_pending.append((port, nse_scripts_out))
+                    # Host-level scripts (e.g. smb-protocols, smb-vuln-ms17-010)
+                    # live in <hostscript>, not under a port.  python-nmap
+                    # exposes them via nm[host].get("hostscript", []).
+                    _hostscripts_raw = nm_nse[ip].get("hostscript", [])
+                    if _hostscripts_raw and isinstance(_hostscripts_raw, list):
+                        _hs_dict: dict[str, str] = {}
+                        for _hs in _hostscripts_raw:
+                            _hs_id = _hs.get("id", "")
+                            if _hs_id:
+                                _hs_dict[_hs_id] = _hs.get("output", "")
+                        if _hs_dict:
+                            for _smb_port in (445, 139):
+                                if _smb_port in results:
+                                    results[_smb_port].setdefault("scripts", {}).update(_hs_dict)
+                                    if output_mgr:
+                                        _nse_pending.append((_smb_port, _hs_dict))
+                                    break
                 if output_mgr:
                     nse_raw = _decode_nmap_output(
                         nm_nse.get_nmap_last_output()
@@ -9985,13 +10019,13 @@ def port_scan(
                     if _is_ssh_nse:
                         _ssh_dir = output_mgr.service_path(ip, "ssh")
                         _ssh_fname = output_mgr._safe_filename(
-                            [ip, "ssh_nse", datetime.now().strftime("%Y%m%d_%H%M%S")], "txt"
+                            [ip, f"p{ports_str.replace(',','_')}", "ssh_nse", datetime.now().strftime("%Y%m%d_%H%M%S")], "txt"
                         )
                         nse_out = _ssh_dir / _ssh_fname
                         nse_out.write_text(nse_raw, encoding="utf-8")
                     else:
                         nse_out = output_mgr.write_nmap_output(
-                            ip, f"nse_{scripts.split(',')[0]}", nse_raw
+                            ip, f"p{ports_str.replace(',','_')}_nse_{scripts.split(',')[0]}", nse_raw
                         )
                     # Now parse findings — output_file is known
                     for _nse_port, _nse_scripts in _nse_pending:
@@ -10047,7 +10081,7 @@ def port_scan(
             if output_mgr:
                 _xml_smb = str(
                     output_mgr.host_path(ip) /
-                    f"smb_udp_{ts_safe_udp}.xml"
+                    f"{safe_ip_udp}_smb_udp_137_139_{ts_safe_udp}.xml"
                 )
                 smb_udp_cmd += ["-oX", _xml_smb]
             smb_udp_cmd.append(ip)
@@ -10059,7 +10093,7 @@ def port_scan(
                 if output_mgr:
                     _udp_txt = (
                         output_mgr.host_path(ip) /
-                        f"smb_udp_{ts_safe_udp}.txt"
+                        f"{safe_ip_udp}_smb_udp_137_139_{ts_safe_udp}.txt"
                     )
                     try:
                         _udp_txt.parent.mkdir(parents=True, exist_ok=True)
@@ -11491,7 +11525,7 @@ def _port_scan_worker(
                 _dns_svc_dir = _dns_host_dir / "dns"
                 _dns_svc_dir.mkdir(parents=True, exist_ok=True)
                 _dns_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                _dns_xml = _dns_svc_dir / f"{ip.replace('.','_')}_dns_nse_{_dns_ts}.xml"
+                _dns_xml = _dns_svc_dir / f"{ip.replace('.','_')}_{port}_dns_nse_{_dns_ts}.xml"
                 _dns_cmd = [
                     nmap_path, "-n", "-Pn", "-sU", "-p", str(port),
                     "--script", "dns-recursion,dns-zone-transfer,dns-nsid",
@@ -11558,7 +11592,7 @@ def _port_scan_worker(
                 _tftp_svc_dir = _tftp_host_dir / "services"
                 _tftp_svc_dir.mkdir(parents=True, exist_ok=True)
                 _tftp_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                _tftp_xml = _tftp_svc_dir / f"{ip.replace('.','_')}_tftp_{_tftp_ts}.xml"
+                _tftp_xml = _tftp_svc_dir / f"{ip.replace('.','_')}_{port}_tftp_{_tftp_ts}.xml"
                 _tftp_cmd = [
                     nmap_path, "-n", "-Pn", "-sU", "-p", str(port),
                     "--script", "tftp-enum",
@@ -12213,7 +12247,7 @@ def probe_ntp_monlist(ip: str, *, output_dir: "Path", output_mgr) -> dict:
         return {"ok": False, "reason": "ntpq/ntpdc not installed"}
     ntp_dir = Path(output_dir) / "ntp"
     ntp_dir.mkdir(parents=True, exist_ok=True)
-    out_path = ntp_dir / f"monlist_{ip}.txt"
+    out_path = ntp_dir / f"{ip.replace('.', '_')}_123_monlist.txt"
     monlist_cmd = ["ntpdc", "-c", "monlist", ip] if _shu.which("ntpdc") else None
     if monlist_cmd is None:
         # Fall back to ntpq with mrulist (which is the modern equivalent)
@@ -23101,7 +23135,7 @@ def run_enum4linux(
     # findings to appear in findings.csv without a corresponding output file.
     out_dir = output_mgr.service_path(ip, "enum4linux")
     safe_ip  = ip.replace(".", "_")
-    out_path = out_dir / f"{safe_ip}_enum4linux.txt"
+    out_path = out_dir / f"{safe_ip}_445_enum4linux.txt"
 
     try:
         proc = _popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -23248,9 +23282,32 @@ def run_enum4linux(
                 )
 
         # ── 4. SMB Dialect / version ───────────────────────────────────────
-        if re.search(r"SMB\s+dialect.*?1\b|smb1|smb\s+version\s*[=:]\s*1",
-                     raw, re.IGNORECASE):
-            _ef("SMB Version 1 (SMBv1) Enabled", "HIGH",
+        # enum4linux ALWAYS prints "Reconnecting with SMB1 for workgroup
+        # listing" followed by "Unable to connect with SMB1 -- no workgroup
+        # available" as part of its standard workflow.  These are status
+        # messages about a failed SMB1 fallback attempt — NOT evidence that
+        # SMBv1 is enabled.  The old regex r"smb1" matched "SMB1" in those
+        # messages and produced false positives on pure SMBv2/v3 hosts.
+        #
+        # Reliable SMBv1 indicators:
+        #   - "NT LM 0.12" — the canonical SMBv1 dialect name in protocol
+        #     negotiation output (smbclient, rpcclient, Wireshark)
+        #   - "smb version: 1" / "smb version = 1" — explicit version label
+        #   - "SMBv1" or "SMB1" that is NOT part of a failed-connection or
+        #     reconnection status message
+        _smbv1_positive = re.search(
+            r"NT\s+LM\s+0\.12"
+            r"|smb\s+version\s*[=:]\s*1(?:\.0)?\b",
+            raw, re.IGNORECASE,
+        )
+        _smbv1_status_only = re.search(
+            r"(?:Reconnecting|Unable\s+to\s+connect)\s+with\s+SMB1",
+            raw, re.IGNORECASE,
+        )
+        _smbv1_generic = re.search(r"\bSMBv?1\b", raw, re.IGNORECASE)
+        if _smbv1_positive or (_smbv1_generic and not _smbv1_status_only):
+            _ef("SMB Vulnerability: SMBv1 Protocol Enabled (EternalBlue Risk)",
+                "HIGH",
                 f"SMBv1 is enabled on {ip}. SMBv1 is exploited by EternalBlue "
                 f"(MS17-010/WannaCry) and should be disabled immediately.",
                 "SMBv1 enabled")
