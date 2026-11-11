@@ -37382,6 +37382,55 @@ def main():
                 f"{sum(len(v) for v in _psr_svcs.values())} service(s), "
                 f"{_psr_fc} finding(s){Style.RESET_ALL}"
             )
+            # ── Emit TARGET tokens for discovered IPs ─────────────
+            if _CRUCIBLE_MANAGED and _psr_ips:
+                for _ps_ip in _psr_ips:
+                    try:
+                        sys.stdout.write(
+                            _CP_TARGET
+                            + json.dumps({
+                                "ts": datetime.now().isoformat(),
+                                "ip": _ps_ip,
+                                "hostname": "",
+                                "scope": "int",
+                                "alive": True,
+                                "source": "passive-seed",
+                            })
+                            + "\n"
+                        )
+                        sys.stdout.flush()
+                    except Exception:
+                        pass
+
+            # ── Emit PORT tokens for discovered services ──────────
+            if _CRUCIBLE_MANAGED and _psr_svcs:
+                for _ps_ip, _ps_svc_list in _psr_svcs.items():
+                    for _ps_svc_str in _ps_svc_list:
+                        try:
+                            _ps_parts = _ps_svc_str.split("/", 1)
+                            _ps_proto = _ps_parts[0] if len(_ps_parts) == 2 else "tcp"
+                            _ps_pnum = int(_ps_parts[1]) if len(_ps_parts) == 2 else int(_ps_parts[0])
+                            sys.stdout.write(
+                                _CP_PORT
+                                + json.dumps({
+                                    "ts": datetime.now().isoformat(),
+                                    "ip": _ps_ip,
+                                    "port": _ps_pnum,
+                                    "proto": _ps_proto,
+                                    "name": "",
+                                    "product": "",
+                                    "version": "",
+                                    "extrainfo": "",
+                                    "state": "open",
+                                    "scope": "int",
+                                    "hostname": None,
+                                })
+                                + "\n"
+                            )
+                            sys.stdout.flush()
+                        except Exception:
+                            pass
+
             if _psr_fc and _psr_trawler_out:
                 _pr_findings_path = Path(_psr_trawler_out) / "findings.json"
                 if _pr_findings_path.exists():
@@ -37413,6 +37462,31 @@ def main():
                                     _existing.append(f)
                                     _existing_keys.add(key)
                                     _merged_count += 1
+                                    # ── Emit FINDING token ────────
+                                    if _CRUCIBLE_MANAGED:
+                                        try:
+                                            sys.stdout.write(
+                                                _CP_FINDING
+                                                + json.dumps({
+                                                    "title": f.get("title", ""),
+                                                    "ip": f.get("ip", ""),
+                                                    "port": f.get("port", 0),
+                                                    "hostname": f.get("hostname", ""),
+                                                    "risk": f.get("risk", "INFO"),
+                                                    "description": f.get("description", ""),
+                                                    "sources": f.get("sources", "trawler"),
+                                                    "service": f.get("service", ""),
+                                                    "affected": f.get("affected", ""),
+                                                    "cves": f.get("cves", ""),
+                                                    "output_file": f.get("output_file", ""),
+                                                    "confidence": f.get("confidence", ""),
+                                                    "remediation": f.get("remediation", ""),
+                                                }, ensure_ascii=False)
+                                                + "\n"
+                                            )
+                                            sys.stdout.flush()
+                                        except Exception:
+                                            pass
                             if _merged_count:
                                 _int_findings.write_text(
                                     json.dumps(_existing, indent=2,
