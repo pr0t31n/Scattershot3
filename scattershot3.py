@@ -21050,8 +21050,11 @@ def _register_screenshot(root: Path, png_path, url: str = "",
                 "page_title": page_title or "",
                 "path": str(dest.relative_to(root)) if root else str(dest),
             })
-    except Exception:
-        pass
+    except Exception as exc:
+        import logging
+        logging.getLogger("ss3.screenshots").warning(
+            "_register_screenshot failed for %s:%s — %s: %s",
+            ip, port, type(exc).__name__, exc)
 
 
 def take_web_screenshot(
