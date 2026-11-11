@@ -141,9 +141,16 @@ def _pip_installed(pkg_spec):
 # ---------------------------------------------------------------------------
 def _brew_installed_set():
     bp = shutil.which("brew") or "/opt/homebrew/bin/brew"
+    if not os.path.isfile(bp):
+        return set()
+    cmd = [bp, "list", "--formula", "-1"]
+    if is_root():
+        user = get_sudo_user()
+        if not user:
+            return set()
+        cmd = ["sudo", "-u", user, "-H"] + cmd
     try:
-        r = subprocess.run([bp, "list", "--formula", "-1"],
-                           capture_output=True, text=True, timeout=30)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         return set(r.stdout.split()) if r.returncode == 0 else set()
     except Exception:
         return set()
@@ -948,7 +955,7 @@ def install_git():
             elif OS in ("dnf", "zypper"):
                 run([OS, "install", "-y", "krb5-devel"], check=False)
             elif OS == "macos":
-                run(["brew", "install", "krb5"], check=False)
+                brew_install("krb5")
         for dep in ["ldap3", "impacket", "gssapi"]:
             if _pip_installed(dep):
                 info(f"  ✓ {dep} already installed")
