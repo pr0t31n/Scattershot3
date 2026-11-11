@@ -298,10 +298,50 @@ BREW_PACKAGES = [
     "go",
 ]
 BREW_CASK_PACKAGES = [
-    "owasp-zap",
     "chromedriver",
-    "metasploit",
 ]
+
+_MSF_PATHS = [
+    "/opt/metasploit-framework/bin/msfconsole",
+    "/usr/local/bin/msfconsole",
+    "/usr/bin/msfconsole",
+]
+
+def _find_msf():
+    found = shutil.which("msfconsole")
+    if found:
+        return found
+    for p in _MSF_PATHS:
+        if os.path.isfile(p):
+            return p
+    return None
+
+def install_metasploit():
+    if _find_msf():
+        info("  ✓ metasploit already installed")
+        return
+    info("Installing Metasploit via msfinstall …")
+    try:
+        r = subprocess.run(
+            ["sh", "-c", "curl https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb > /tmp/msfinstall && chmod 755 /tmp/msfinstall && /tmp/msfinstall"],
+            check=False, timeout=600)
+        if r.returncode == 0 and _find_msf():
+            info("  ✓ metasploit installed")
+        else:
+            warn("metasploit install returned non-zero — check output above")
+    except Exception as e:
+        warn(f"metasploit install failed: {e}")
+
+def install_zap():
+    for name in ["zap", "zaproxy", "owasp-zap"]:
+        if shutil.which(name):
+            info(f"  ✓ ZAP already installed ({name})")
+            return
+    zap_app = "/Applications/OWASP ZAP.app"
+    if os.path.isdir(zap_app):
+        info("  ✓ ZAP already installed (OWASP ZAP.app)")
+        return
+    note("OWASP ZAP cask disabled by Homebrew (Gatekeeper). Install manually from https://www.zaproxy.org/download/")
 
 def install_nbtscan_from_source():
     """Build nbtscan from source on macOS (no Homebrew formula)."""
@@ -407,6 +447,8 @@ def install_system():
         for pkg in BREW_CASK_PACKAGES:
             brew_install(pkg, cask=True)
         brew_install("wpscanteam/tap/wpscan")
+        install_metasploit()
+        install_zap()
         install_nbtscan_from_source()
     elif OS == "windows":
         note("Windows: system package installation not supported. Install tools manually.")
@@ -1065,8 +1107,7 @@ def install_msfconsole():
         if not _dpkg_installed("metasploit-framework"):
             run(["apt-get", "install", "-y", "metasploit-framework"], check=False)
     elif OS == "macos":
-        info("Installing metasploit via brew cask …")
-        brew_install("metasploit", cask=True)
+        install_metasploit()
     else:
         note("msfconsole not found. Install manually: https://docs.metasploit.com/docs/using-metasploit/getting-started/nightly-installers.html")
 
@@ -1115,11 +1156,25 @@ VERIFY_PYTHON = [
     "bloodhound", "o365spray",
 ]
 
+_EXTRA_PATHS = {
+    "msfconsole": ["/opt/metasploit-framework/bin/msfconsole"],
+    "zaproxy": ["/Applications/OWASP ZAP.app/Contents/Java/zap.sh"],
+}
+
+def _find_tool(name):
+    found = shutil.which(name)
+    if found:
+        return found
+    for p in _EXTRA_PATHS.get(name, []):
+        if os.path.isfile(p):
+            return p
+    return None
+
 def run_check():
     banner("Post-install verification")
     print(f"\n{C}Binary tools:{W}")
     for tool in VERIFY_TOOLS:
-        found = shutil.which(tool)
+        found = _find_tool(tool)
         if found:
             info(f"{tool:30s} {G}FOUND{W} ({found})")
         else:
