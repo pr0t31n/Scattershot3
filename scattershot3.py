@@ -17550,7 +17550,7 @@ def run_ssh_audit(
         )
 
     # Bastion cross-tool: SSH config audit
-    _has_ssh_issues = bool(cve_findings) or bool(sev_buckets) or bool(per_algo_findings)
+    _has_ssh_issues = bool(cves_block) or bool(sev_buckets) or bool(per_algo_findings)
     if _has_ssh_issues:
         output_mgr.log_action_item(
             "config_audit", "Bastion", f"{ip}:{port}",
@@ -19293,7 +19293,9 @@ def correlate_software_cves(
 
         output_mgr.log_finding(
             title=f"Vulnerability (Version Based): {name} {version}",
-            ip=ip, port=int(port), hostname=hostname,
+            ip=ip, port=int(port),
+            command=f"{source}-cve-correlation: {name} {version}",
+            hostname=hostname,
             risk=highest_risk,
             description=(
                 f"{len(vulns[:10])} known vulnerability(ies) identified for "
