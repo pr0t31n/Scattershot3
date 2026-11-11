@@ -1079,6 +1079,14 @@ import uuid as _uuid
 # Detect when running as a managed subprocess under Crucible
 _CRUCIBLE_MANAGED = os.environ.get("CRUCIBLE_MANAGED", "") == "1"
 
+try:
+    import sys as _sys_ie
+    if "/opt/pr0t31n/shared" not in _sys_ie.path:
+        _sys_ie.path.insert(0, "/opt/pr0t31n/shared")
+    import pr0t31n_intel_emitter as _ie
+except ImportError:
+    _ie = None
+
 _CP_LOG     = "__CRUCIBLE_LOG__:"
 _CP_ERR     = "__CRUCIBLE_ERR__:"
 _CP_PROMPT  = "__CRUCIBLE_PROMPT__:"
@@ -4216,6 +4224,11 @@ class OutputManager:
                 _rt.replace(_roles_path)
             except Exception:
                 pass
+            if _ie and _CRUCIBLE_MANAGED:
+                try:
+                    _ie.emit_intel("server_role", _all_roles, bulk=True)
+                except Exception:
+                    pass
 
         # ── Hostname Intelligence ─────────────────────────────────────
         # Analyse every hostname for environment, applications, hardware
@@ -4296,6 +4309,28 @@ class OutputManager:
                 _hit.replace(_hip_path)
             except Exception:
                 pass
+            if _ie and _CRUCIBLE_MANAGED:
+                try:
+                    _hi_rows = []
+                    for _hie_emit in _hi_hosts:
+                        _hi_rows.append({
+                            "hostname":         _hie_emit.get("hostname", ""),
+                            "ip":               _hie_emit.get("ip", ""),
+                            "environment_tag":  _hie_emit.get("environment", ""),
+                            "application_hint": ", ".join(
+                                a.get("name", "") for a in _hie_emit.get("applications", [])
+                            ),
+                            "hardware_hint":    (
+                                (_hie_emit.get("hardware") or {}).get("model", "")
+                            ),
+                            "role_hint":        ", ".join(
+                                r.get("role", "") for r in _hie_emit.get("roles", [])
+                            ),
+                        })
+                    if _hi_rows:
+                        _ie.emit_intel("hostname_intel", _hi_rows, bulk=True)
+                except Exception:
+                    pass
             _hi_rel = str(_hip_path.relative_to(self.root))
 
             for _hie in _hi_hosts:
@@ -8965,6 +9000,21 @@ def probe_uncertain_and_nonstandard_ports(
                     if _cert_cn:
                         _cert_all_names.add(_cert_cn.lower())
                     _cert_all_names.update(s.lower() for s in _cert_sans)
+                    if _ie and _CRUCIBLE_MANAGED:
+                        try:
+                            _ie.emit_intel("certificate", {
+                                "ip":           ip,
+                                "port":         _port,
+                                "hostname":     hostname or "",
+                                "subject":      _cert_cn,
+                                "sans":         _cert_sans[:50],
+                                "issuer":       _cert_obj.issuer.rfc4514_string(),
+                                "not_before":   str(_cert_obj.not_valid_before_utc),
+                                "not_after":    str(_cert_obj.not_valid_after_utc),
+                                "serial":       str(_cert_obj.serial_number),
+                            })
+                        except Exception:
+                            pass
                     if hostname and hostname.lower() not in _cert_all_names:
                         _wildcard_match = any(
                             n.startswith("*.") and hostname.lower().endswith(n[1:])
@@ -19429,6 +19479,11 @@ def record_software(
                 break
         if not _dominated:
             existing.append(entry)
+            if _ie and _CRUCIBLE_MANAGED:
+                try:
+                    _ie.emit_intel("software", entry)
+                except Exception:
+                    pass
         output_mgr.software_inventory.write_text(
             json.dumps(existing, indent=2), encoding="utf-8"
         )
@@ -32370,6 +32425,22 @@ def run_hostname_resolution(
         json.dumps(resolved, indent=2, default=str), encoding="utf-8"
     )
     tmp.replace(out_path)
+
+    if _ie and _CRUCIBLE_MANAGED:
+        try:
+            _dns_rows = []
+            for _dns_ip, _dns_data in resolved.items():
+                if _dns_data.get("hostname"):
+                    _dns_rows.append({
+                        "hostname": _dns_data["hostname"],
+                        "rtype":    "PTR",
+                        "value":    _dns_ip,
+                        "source":   ",".join(_dns_data.get("methods", [])),
+                    })
+            if _dns_rows:
+                _ie.emit_intel("dns_record", _dns_rows, bulk=True)
+        except Exception:
+            pass
 
     resolved_count = sum(1 for d in resolved.values() if d["hostname"])
     _tprint(
