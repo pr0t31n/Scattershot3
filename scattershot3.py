@@ -10623,6 +10623,17 @@ def _port_scan_worker(
                             affected=_http_url,
                             output_file=str(_http_file),
                         )
+                        if _ie and web_result:
+                            _srv = web_result.get("server", "")
+                            _hdrs = web_result.get("headers") or {}
+                            if _srv or _hdrs.get("X-Powered-By"):
+                                _ie.emit_intel("webapp_intel", {
+                                    "ip": ip, "port": port,
+                                    "hostname": hostname or "",
+                                    "server": _srv,
+                                    "x_powered_by": _hdrs.get("X-Powered-By", ""),
+                                    "technologies": [],
+                                })
                         # ── Action Item: web app → Fracture ──────────
                         output_mgr.log_action_item(
                             item_type="web_app",
@@ -10844,6 +10855,13 @@ def _port_scan_worker(
                                 affected=_http_url,
                                 output_file=str(_http_file),
                             )
+                if _ie and _sc_cookies:
+                    for _sc in _sc_cookies:
+                        _ie.emit_intel("cookie", {
+                            "ip": ip, "port": port,
+                            "hostname": hostname or "",
+                            "raw": _sc[:500],
+                        })
 
                 # Record server header software
                 server_hdr = (web_result.get("server") or "").strip()
@@ -21021,6 +21039,17 @@ def _register_screenshot(root: Path, png_path, url: str = "",
             "timestamp": datetime.datetime.now().isoformat(),
         }
         dest.with_suffix(".json").write_text(json.dumps(sidecar, indent=2))
+        if _ie:
+            _ie.emit_intel("screenshot", {
+                "url": url, "ip": ip, "port": int(port) if port else 0,
+                "hostname": hostname, "scheme": _scheme,
+                "title": title, "description": _cls,
+                "classification": _cls,
+                "status_code": int(status_code) if status_code else None,
+                "server": server or "",
+                "page_title": page_title or "",
+                "path": str(dest.relative_to(root)) if root else str(dest),
+            })
     except Exception:
         pass
 
