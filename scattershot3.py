@@ -1197,9 +1197,7 @@ class CrucibleConsole:
                source: str = "nmap") -> None:
         """Emit a live target-discovery event so Crucible can incrementally
         update the Targets tab as IPs are confirmed alive (no-op when run
-        outside Crucible)."""
-        if not self._managed:
-            return
+        outside Crucible). Always writes to tool DB."""
         entry = {
             "ts":       datetime.now().isoformat(),
             "ip":       ip,
@@ -1208,9 +1206,16 @@ class CrucibleConsole:
             "alive":    alive,
             "source":   source,
         }
-        with self._lock:
-            sys.stdout.write(_CP_TARGET + json.dumps(entry) + "\n")
-            sys.stdout.flush()
+        if _ie:
+            try:
+                _ie.emit_intel("host", {"ip": ip, "hostname": hostname or "",
+                                        "scope": scope or "", "alive": alive})
+            except Exception:
+                pass
+        if self._managed:
+            with self._lock:
+                sys.stdout.write(_CP_TARGET + json.dumps(entry) + "\n")
+                sys.stdout.flush()
 
     def port(self, ip: str, port: int, proto: str = "tcp",
              name: str = "", product: str = "", version: str = "",
@@ -1218,10 +1223,8 @@ class CrucibleConsole:
              scope: "str | None" = None,
              hostname: "str | None" = None) -> None:
         """Emit a live port-discovery event so Crucible can incrementally
-        update the Targets tab as open ports are found (no-op when run
-        outside Crucible)."""
-        if not self._managed:
-            return
+        update the Targets tab as open ports are found. Always writes to
+        tool DB."""
         entry = {
             "ts":        datetime.now().isoformat(),
             "ip":        ip,
@@ -1235,9 +1238,18 @@ class CrucibleConsole:
             "scope":     scope,
             "hostname":  hostname,
         }
-        with self._lock:
-            sys.stdout.write(_CP_PORT + json.dumps(entry) + "\n")
-            sys.stdout.flush()
+        if _ie:
+            try:
+                _ie.emit_intel("port", {"ip": ip, "port": int(port),
+                                        "proto": proto, "name": name,
+                                        "product": product, "version": version,
+                                        "state": state})
+            except Exception:
+                pass
+        if self._managed:
+            with self._lock:
+                sys.stdout.write(_CP_PORT + json.dumps(entry) + "\n")
+                sys.stdout.flush()
 
     def action_item(self, entry: dict) -> None:
         """Emit a live action-item event so Crucible can update the
@@ -2154,16 +2166,17 @@ class OutputManager:
         self._tool_versions: dict = {}
         self._action_items_lock = threading.Lock()
         self._fdb = None
-        _db_path = os.environ.get("PR0T31N_FINDINGS_DB")
-        if _db_path:
-            try:
-                import sys as _s
-                if "/opt/pr0t31n/shared" not in _s.path:
-                    _s.path.insert(0, "/opt/pr0t31n/shared")
-                import pr0t31n_findings_db
-                self._fdb = pr0t31n_findings_db.FindingsDB(_db_path)
-            except Exception:
-                self._fdb = None
+        _db_path = os.environ.get("PR0T31N_FINDINGS_DB") or str(self.root / "findings.db")
+        try:
+            import sys as _s
+            if "/opt/pr0t31n/shared" not in _s.path:
+                _s.path.insert(0, "/opt/pr0t31n/shared")
+            import pr0t31n_findings_db
+            self._fdb = pr0t31n_findings_db.FindingsDB(_db_path)
+        except Exception:
+            self._fdb = None
+        if self._fdb and _ie:
+            _ie.init_db(self._fdb)
         self._setup_dirs()
 
     # ── Directory setup ───────────────────────
@@ -2923,18 +2936,29 @@ class OutputManager:
             if not merged:
                 existing_all.append(entry)
 
-            # ── Write findings.json ─────────────────────────────────────────
+            # ── DB first ───────────────────────────────────────────────────
+            if self._fdb:
+                try:
+                    if merged:
+                        _merged_entry = next(
+                            (e for e in existing_all
+                             if (e.get("title","").strip().lower(),
+                                 (e.get("ip","")).strip(),
+                                 int(e.get("port") or 0)) == _norm_key),
+                            None)
+                        if _merged_entry:
+                            self._fdb.insert_finding(_merged_entry)
+                    else:
+                        self._fdb.insert_finding(entry)
+                except Exception:
+                    pass
+
+            # ── JSON copy ──────────────────────────────────────────────────
             tmp = self.findings_json.with_suffix(".tmp")
             tmp.write_text(json.dumps(existing_all, indent=2), encoding="utf-8")
             tmp.replace(self.findings_json)
 
-            if self._fdb and not merged:
-                try:
-                    self._fdb.insert_finding(entry)
-                except Exception:
-                    pass
-
-            # ── Write findings.csv ──────────────────────────────────────────
+            # ── CSV copy ───────────────────────────────────────────────────
             if not merged:
                 with self.findings_csv.open("a", newline="", encoding="utf-8") as f:
                     writer = csv.DictWriter(f, fieldnames=self.FINDINGS_CSV_FIELDS,
@@ -4217,6 +4241,11 @@ class OutputManager:
                     ),
                 )
         if _all_roles:
+            if _ie:
+                try:
+                    _ie.emit_intel("server_role", _all_roles, bulk=True)
+                except Exception:
+                    pass
             _roles_path = self.root / "server_roles.json"
             try:
                 _rt = _roles_path.with_suffix(".tmp")
@@ -4224,11 +4253,6 @@ class OutputManager:
                 _rt.replace(_roles_path)
             except Exception:
                 pass
-            if _ie and _CRUCIBLE_MANAGED:
-                try:
-                    _ie.emit_intel("server_role", _all_roles, bulk=True)
-                except Exception:
-                    pass
 
         # ── Hostname Intelligence ─────────────────────────────────────
         # Analyse every hostname for environment, applications, hardware
@@ -4300,16 +4324,7 @@ class OutputManager:
                 },
                 "hosts": _hi_hosts,
             }
-            _hip_path = self.root / "hostname_intelligence.json"
-            try:
-                _hit = _hip_path.with_suffix(".tmp")
-                _hit.write_text(
-                    json.dumps(_hi_out, indent=2), encoding="utf-8"
-                )
-                _hit.replace(_hip_path)
-            except Exception:
-                pass
-            if _ie and _CRUCIBLE_MANAGED:
+            if _ie:
                 try:
                     _hi_rows = []
                     for _hie_emit in _hi_hosts:
@@ -4331,6 +4346,15 @@ class OutputManager:
                         _ie.emit_intel("hostname_intel", _hi_rows, bulk=True)
                 except Exception:
                     pass
+            _hip_path = self.root / "hostname_intelligence.json"
+            try:
+                _hit = _hip_path.with_suffix(".tmp")
+                _hit.write_text(
+                    json.dumps(_hi_out, indent=2), encoding="utf-8"
+                )
+                _hit.replace(_hip_path)
+            except Exception:
+                pass
             _hi_rel = str(_hip_path.relative_to(self.root))
 
             for _hie in _hi_hosts:
@@ -9000,7 +9024,7 @@ def probe_uncertain_and_nonstandard_ports(
                     if _cert_cn:
                         _cert_all_names.add(_cert_cn.lower())
                     _cert_all_names.update(s.lower() for s in _cert_sans)
-                    if _ie and _CRUCIBLE_MANAGED:
+                    if _ie:
                         try:
                             _ie.emit_intel("certificate", {
                                 "ip":           ip,
@@ -19479,7 +19503,7 @@ def record_software(
                 break
         if not _dominated:
             existing.append(entry)
-            if _ie and _CRUCIBLE_MANAGED:
+            if _ie:
                 try:
                     _ie.emit_intel("software", entry)
                 except Exception:
@@ -32418,15 +32442,8 @@ def run_hostname_resolution(
         else:
             hostnames.setdefault(ip, None)
 
-    # ── Write merged hostnames.json ───────────────────────────────────────────
-    out_path = out_dir / "hostnames.json"
-    tmp = out_path.with_suffix(".tmp")
-    tmp.write_text(
-        json.dumps(resolved, indent=2, default=str), encoding="utf-8"
-    )
-    tmp.replace(out_path)
-
-    if _ie and _CRUCIBLE_MANAGED:
+    # ── DB first via emitter ──────────────────────────────────────────────────
+    if _ie:
         try:
             _dns_rows = []
             for _dns_ip, _dns_data in resolved.items():
@@ -32441,6 +32458,14 @@ def run_hostname_resolution(
                 _ie.emit_intel("dns_record", _dns_rows, bulk=True)
         except Exception:
             pass
+
+    # ── JSON copy ──────────────────────────────────────────────────────────────
+    out_path = out_dir / "hostnames.json"
+    tmp = out_path.with_suffix(".tmp")
+    tmp.write_text(
+        json.dumps(resolved, indent=2, default=str), encoding="utf-8"
+    )
+    tmp.replace(out_path)
 
     resolved_count = sum(1 for d in resolved.values() if d["hostname"])
     _tprint(
