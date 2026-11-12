@@ -21038,7 +21038,7 @@ def _register_screenshot(root: Path, png_path, url: str = "",
             "status_code": int(status_code) if status_code else None,
             "server": server or "",
             "page_title": page_title or "",
-            "timestamp": datetime.datetime.now().isoformat(),
+            "timestamp": datetime.now().isoformat(),
         }
         dest.with_suffix(".json").write_text(json.dumps(sidecar, indent=2))
         if _ie:
