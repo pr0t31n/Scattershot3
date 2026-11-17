@@ -4332,13 +4332,13 @@ class OutputManager:
                             "hostname":         _hie_emit.get("hostname", ""),
                             "ip":               _hie_emit.get("ip", ""),
                             "environment_tag":  _hie_emit.get("environment", ""),
-                            "application_hint": ", ".join(
+                            "application_tag": ", ".join(
                                 a.get("name", "") for a in _hie_emit.get("applications", [])
                             ),
-                            "hardware_hint":    (
+                            "hardware_tag":    (
                                 (_hie_emit.get("hardware") or {}).get("model", "")
                             ),
-                            "role_hint":        ", ".join(
+                            "role_tag":        ", ".join(
                                 r.get("role", "") for r in _hie_emit.get("roles", [])
                             ),
                         })
