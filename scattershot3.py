@@ -2177,6 +2177,7 @@ class OutputManager:
             self._fdb = None
         if self._fdb and _ie:
             _ie.init_db(self._fdb)
+        self._domain_intel = DomainIntelCollector()
         self._setup_dirs()
 
     # ── Directory setup ───────────────────────
@@ -4300,6 +4301,14 @@ class OutputManager:
                 _hi_domains[_hinf["domain"]] = (
                     _hi_domains.get(_hinf["domain"], 0) + 1
                 )
+                self._domain_intel.record(
+                    domain_name=_hinf["domain"],
+                    domain_type="dns_domain",
+                    dns_name=_hinf["domain"],
+                    source_ip=_hip,
+                    hostname=_hn,
+                    source="hostname-fqdn",
+                )
 
         if _hi_hosts:
             _hi_out = {
@@ -4446,6 +4455,14 @@ class OutputManager:
                         ),
                         affected=_hip2, output_file=_hi_rel,
                     )
+
+        # ── Domain Intelligence ──────────────────────────────────────
+        _di_result = self._domain_intel.finalize(self, _ie)
+        if _di_result:
+            _di_count = _di_result["summary"]["domains_discovered"]
+            _tprint(f"  {Fore.CYAN}[*] Domain intelligence: {_di_count} domain(s) "
+                    f"discovered from {len(_di_result['summary']['sources_used'])} source(s)"
+                    f"{Style.RESET_ALL}")
 
         targets = {"hosts": net_hosts}
         out_path = self.root / "targets.json"
@@ -6177,13 +6194,23 @@ def _resolve_hostname_single(
                 capture_output=True, text=True,
                 timeout=timeout, errors="replace",
             )
+            _nbl_di = getattr(output_mgr, "_domain_intel", None)
             for line in proc.stdout.splitlines():
                 line = line.strip()
                 if "<00>" in line or "<20>" in line:
                     parts = line.split()
                     if parts and not parts[0].startswith("\\"):
                         candidate = parts[0].strip()
-                        if "<GROUP>" not in line and candidate:
+                        if "<GROUP>" in line:
+                            if _nbl_di and candidate:
+                                _nbl_di.record(
+                                    domain_name=candidate.lower(),
+                                    domain_type="workgroup",
+                                    netbios_name=candidate,
+                                    source_ip=ip,
+                                    source="nmblookup",
+                                )
+                        elif candidate:
                             hostname = candidate
                             methods.append("nmblookup")
                             break
@@ -6269,6 +6296,59 @@ def _load_discovery_checkpoint(
         return None
 
 
+def _parse_ntlm_info(scripts, script_name, ip, port, hostname, cmd,
+                     output_mgr, output_file, domain_intel):
+    raw = scripts.get(script_name, "")
+    if not raw:
+        return
+    _ntlm_fields = {}
+    for _line in raw.splitlines():
+        _m = re.match(r"\s+(Target_Name|NetBIOS_Domain_Name|NetBIOS_Computer_Name"
+                      r"|DNS_Domain_Name|DNS_Computer_Name|DNS_Tree_Name"
+                      r"|Product_Version):\s+(.+)", _line)
+        if _m:
+            _ntlm_fields[_m.group(1)] = _m.group(2).strip()
+    if not _ntlm_fields:
+        return
+    _domain = _ntlm_fields.get("NetBIOS_Domain_Name",
+              _ntlm_fields.get("Target_Name", ""))
+    _comp = _ntlm_fields.get("NetBIOS_Computer_Name", "")
+    _dns  = _ntlm_fields.get("DNS_Domain_Name", "")
+    _ver  = _ntlm_fields.get("Product_Version", "")
+    _parts = []
+    if _domain: _parts.append(f"Domain: {_domain}")
+    if _comp:   _parts.append(f"Host: {_comp}")
+    if _dns:    _parts.append(f"DNS: {_dns}")
+    if _ver:    _parts.append(f"Version: {_ver}")
+    _svc_labels = {
+        "rdp-ntlm-info": "RDP", "http-ntlm-info": "HTTP",
+        "smtp-ntlm-info": "SMTP", "ms-sql-ntlm-info": "MSSQL",
+    }
+    _svc = _svc_labels.get(script_name, script_name.upper())
+    output_mgr.log_finding(
+        title=f"{_svc}: NTLM Information Disclosure",
+        ip=ip, port=port, command=cmd, hostname=hostname, risk="INFO",
+        description=(
+            f"The {_svc} service discloses internal network information via NTLM "
+            f"authentication handshake: {', '.join(_parts)}. This reveals the "
+            f"Windows domain structure, computer name, and OS version to "
+            f"unauthenticated remote attackers."
+        ),
+        output=raw, sources="nmap-nse",
+        affected=f"{ip}:{port}", output_file=output_file,
+    )
+    if domain_intel and (_dns or _domain):
+        domain_intel.record(
+            domain_name=_dns or _domain.lower(),
+            domain_type="ad_domain" if _dns else "workgroup",
+            netbios_name=_domain, dns_name=_dns,
+            dns_tree=_ntlm_fields.get("DNS_Tree_Name", ""),
+            computer_name=_comp,
+            source_ip=ip, source_port=port, hostname=hostname or "",
+            source=script_name, evidence=", ".join(_parts),
+        )
+
+
 def _parse_nse_findings(
     output_mgr: "OutputManager",
     ip: str,
@@ -6337,7 +6417,7 @@ def _parse_nse_findings(
     # ── smb-os-discovery ──────────────────────────────────────────────────
     smb_os_out = scripts.get("smb-os-discovery", "")
     if smb_os_out:
-        # Parse OS, workgroup, hostname for software inventory
+        _smb_disc: dict = {}
         for line in smb_os_out.splitlines():
             line = line.strip()
             os_m = re.match(r"OS:\s*(.+)", line, re.IGNORECASE)
@@ -6347,6 +6427,34 @@ def _parse_nse_findings(
                     software_name=os_m.group(1).strip(),
                     version=None, os_info=os_m.group(1).strip(),
                     method="smb-os-discovery",
+                )
+                continue
+            _wg_m = re.match(r"(?:Workgroup|NetBIOS domain name):\s*(.+)", line, re.IGNORECASE)
+            if _wg_m:
+                _smb_disc["workgroup"] = _wg_m.group(1).strip()
+                continue
+            _cn_m = re.match(r"(?:Computer name|NetBIOS computer name):\s*(.+)", line, re.IGNORECASE)
+            if _cn_m:
+                _smb_disc["computer_name"] = _cn_m.group(1).strip()
+                continue
+            _dn_m = re.match(r"(?:Domain name|FQDN):\s*(.+)", line, re.IGNORECASE)
+            if _dn_m:
+                _smb_disc["domain_name"] = _dn_m.group(1).strip()
+                continue
+        _sdi = getattr(output_mgr, "_domain_intel", None)
+        if _smb_disc and _sdi:
+            _sd_domain = _smb_disc.get("domain_name") or _smb_disc.get("workgroup", "")
+            if _sd_domain:
+                _sd_type = "ad_domain" if _smb_disc.get("domain_name") else "workgroup"
+                _sdi.record(
+                    domain_name=_sd_domain.lower(),
+                    domain_type=_sd_type,
+                    netbios_name=_smb_disc.get("workgroup", ""),
+                    dns_name=_smb_disc.get("domain_name", ""),
+                    computer_name=_smb_disc.get("computer_name", ""),
+                    source_ip=ip, source_port=port,
+                    hostname=hostname or "",
+                    source="smb-os-discovery",
                 )
 
     # ── smb-protocols: flag SMBv1 ─────────────────────────────────────────
@@ -6492,41 +6600,12 @@ def _parse_nse_findings(
                 output_file=output_file,
             )
 
-    # ── rdp-ntlm-info: Windows domain/hostname disclosure via NTLM ──────────
-    rdp_ntlm_out = scripts.get("rdp-ntlm-info", "")
-    if rdp_ntlm_out:
-        _ntlm_fields = {}
-        for _line in rdp_ntlm_out.splitlines():
-            _m = re.match(r"\s+(Target_Name|NetBIOS_Domain_Name|NetBIOS_Computer_Name"
-                          r"|DNS_Domain_Name|DNS_Computer_Name|DNS_Tree_Name"
-                          r"|Product_Version):\s+(.+)", _line)
-            if _m:
-                _ntlm_fields[_m.group(1)] = _m.group(2).strip()
-        if _ntlm_fields:
-            _domain = _ntlm_fields.get("NetBIOS_Domain_Name",
-                      _ntlm_fields.get("Target_Name", ""))
-            _comp = _ntlm_fields.get("NetBIOS_Computer_Name", "")
-            _dns  = _ntlm_fields.get("DNS_Domain_Name", "")
-            _ver  = _ntlm_fields.get("Product_Version", "")
-            _parts = []
-            if _domain: _parts.append(f"Domain: {_domain}")
-            if _comp:   _parts.append(f"Host: {_comp}")
-            if _dns:    _parts.append(f"DNS: {_dns}")
-            if _ver:    _parts.append(f"Version: {_ver}")
-            output_mgr.log_finding(
-                title="RDP: NTLM Information Disclosure",
-                ip=ip, port=port, command=cmd, hostname=hostname, risk="INFO",
-                description=(
-                    f"The RDP service discloses internal network information via NTLM "
-                    f"authentication handshake: {', '.join(_parts)}. This reveals the "
-                    f"Windows domain structure, computer name, and OS version to "
-                    f"unauthenticated remote attackers."
-                ),
-                output=rdp_ntlm_out,
-                sources="nmap-nse",
-                affected=f"{ip}:{port}",
-                output_file=output_file,
-            )
+    # ── NTLM information disclosure (all protocols) ──────────────────────
+    _di = getattr(output_mgr, "_domain_intel", None)
+    for _ntlm_script in ("rdp-ntlm-info", "http-ntlm-info",
+                          "smtp-ntlm-info", "ms-sql-ntlm-info"):
+        _parse_ntlm_info(scripts, _ntlm_script, ip, port, hostname,
+                         cmd, output_mgr, output_file, _di)
 
     # ── ipmi-cipher-zero: IPMI 2.0 auth bypass + hash capture ────────────────
     # FP-control per 2026-06-11 review: the prior pattern matched "supported"
@@ -9039,6 +9118,12 @@ def probe_uncertain_and_nonstandard_ports(
                             })
                         except Exception:
                             pass
+                    _cdi = getattr(output_mgr, "_domain_intel", None)
+                    if _cdi and _cert_sans:
+                        _cdi.record_cert_domain(
+                            source_ip=ip, source_port=_port,
+                            san_list=_cert_sans, hostname=hostname or "",
+                        )
                     if hostname and hostname.lower() not in _cert_all_names:
                         _wildcard_match = any(
                             n.startswith("*.") and hostname.lower().endswith(n[1:])
@@ -9941,6 +10026,9 @@ def port_scan(
         mongo_ports = [p for p, d in results.items()
                        if d.get("name", "").lower() in ("mongodb", "mongod")
                        or p == 27017]
+        mssql_ports = [p for p, d in results.items()
+                       if d.get("name", "").lower() in ("ms-sql-s", "mssql", "ms-sql")
+                       or p in (1433, 1434)]
         all_open  = list(results.keys())
 
         nse_passes: list[tuple[list[int], str]] = []
@@ -9994,6 +10082,16 @@ def port_scan(
                     mysql_scripts.append(_s)
             if mysql_scripts:
                 nse_passes.append((mysql_ports, ",".join(mysql_scripts)))
+        mssql_ports = [p for p, d in results.items()
+                       if d.get("name", "").lower() in ("ms-sql-s", "mssql", "ms-sql")
+                       or p in (1433, 1434)]
+        if mssql_ports:
+            mssql_nse = []
+            for _s in ("ms-sql-ntlm-info", "ms-sql-info"):
+                if _script_exists(_s):
+                    mssql_nse.append(_s)
+            if mssql_nse:
+                nse_passes.append((mssql_ports, ",".join(mssql_nse)))
         if ftp_ports:
             ftp_nse = []
             for _s in ("ftp-anon", "ftp-bounce", "ftp-syst",
@@ -10004,7 +10102,7 @@ def port_scan(
                 nse_passes.append((ftp_ports, ",".join(ftp_nse)))
         if smtp_ports:
             smtp_nse = []
-            for _s in ("smtp-commands",):
+            for _s in ("smtp-commands", "smtp-ntlm-info"):
                 if _script_exists(_s):
                     smtp_nse.append(_s)
             if smtp_nse:
@@ -10018,7 +10116,7 @@ def port_scan(
                 nse_passes.append((dns_ports, ",".join(dns_nse)))
         if http_ports:
             http_nse = []
-            for _s in ("http-methods",):
+            for _s in ("http-methods", "http-ntlm-info"):
                 if _script_exists(_s):
                     http_nse.append(_s)
             if http_nse:
@@ -10037,6 +10135,13 @@ def port_scan(
                     mongo_nse.append(_s)
             if mongo_nse:
                 nse_passes.append((mongo_ports, ",".join(mongo_nse)))
+        if mssql_ports:
+            mssql_nse = []
+            for _s in ("ms-sql-ntlm-info", "ms-sql-info"):
+                if _script_exists(_s):
+                    mssql_nse.append(_s)
+            if mssql_nse:
+                nse_passes.append((mssql_ports, ",".join(mssql_nse)))
         if all_open and _script_exists("vulners"):
             nse_passes.append((all_open, "vulners"))
 
@@ -12316,6 +12421,16 @@ def probe_dns_axfr(domain: str, ns_host: str, *,
                 affected=f"{ns_host}:53 zone={domain}",
                 output_file=str(out_path.relative_to(Path(output_dir))),
             )
+            _axfr_di = getattr(output_mgr, "_domain_intel", None)
+            if _axfr_di:
+                _axfr_di.record(
+                    domain_name=domain.lower(),
+                    domain_type="dns_domain",
+                    dns_name=domain,
+                    source_ip=ns_host,
+                    source="dns-axfr",
+                    evidence=f"Zone transfer of {domain} from {ns_host} ({record_count} records)",
+                )
             return {"ok": True, "records": record_count, "out_file": str(out_path)}
     except _sp.TimeoutExpired:
         out_path.write_text(f"$ {' '.join(cmd)}\n[TIMEOUT after 60s]\n", encoding="utf-8")
@@ -12505,6 +12620,20 @@ def probe_ldap_null_bind(ip: str, port: int, *, output_dir: "Path",
         if _nc_m:
             _search_base = _nc_m.group(1)
         if _search_base:
+            _ldap_di = getattr(output_mgr, "_domain_intel", None)
+            if _ldap_di:
+                _dc_parts = re.findall(r"DC=([^,]+)", _search_base, re.IGNORECASE)
+                if _dc_parts:
+                    _ldap_domain = ".".join(_dc_parts).lower()
+                    _ldap_di.record(
+                        domain_name=_ldap_domain,
+                        domain_type="ad_domain",
+                        dns_name=_ldap_domain,
+                        source_ip=ip, source_port=port,
+                        hostname="",
+                        source="ldap-rootdse",
+                        evidence=f"defaultNamingContext: {_search_base}",
+                    )
             try:
                 # Enumerate users (capped at 500)
                 conn2 = ldap3.Connection(server, auto_bind=True)
@@ -18391,6 +18520,187 @@ _HOSTNAME_ROLE_SKIP = frozenset({
 })
 
 
+# ── Domain / Workgroup Intelligence Collector ────────────────────────────────
+
+class DomainIntelCollector:
+    """Thread-safe collector for domain/workgroup intel from all discovery sources."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._observations: list[dict] = []
+
+    def record(self, domain_name: str, *, domain_type: str = "",
+               netbios_name: str = "", dns_name: str = "",
+               dns_tree: str = "", sid: str = "",
+               source_ip: str = "", source_port: int = 0,
+               computer_name: str = "", hostname: str = "",
+               is_dc: bool = False, source: str = "",
+               evidence: str = "") -> None:
+        if not domain_name or not domain_name.strip():
+            return
+        entry = {
+            "domain_name": domain_name.strip().lower(),
+            "domain_type": domain_type,
+            "netbios_name": netbios_name.strip().upper() if netbios_name else "",
+            "dns_name": dns_name.strip().lower() if dns_name else "",
+            "dns_tree": dns_tree.strip().lower() if dns_tree else "",
+            "sid": sid.strip() if sid else "",
+            "source_ip": source_ip,
+            "source_port": source_port,
+            "computer_name": computer_name.strip().upper() if computer_name else "",
+            "hostname": hostname.strip().lower() if hostname else "",
+            "is_dc": is_dc,
+            "source": source,
+            "evidence": evidence[:500] if evidence else "",
+        }
+        with self._lock:
+            self._observations.append(entry)
+
+    def record_cert_domain(self, source_ip: str, source_port: int,
+                           san_list: list, hostname: str = "") -> None:
+        seen: set[str] = set()
+        for san in san_list:
+            san = san.strip().lower().lstrip("*.")
+            if not san or san in seen:
+                continue
+            seen.add(san)
+            parts = san.split(".")
+            if len(parts) < 2:
+                continue
+            tld = parts[-1]
+            if tld in ("local", "internal", "corp", "lan", "intranet", "private",
+                       "home", "localdomain", "ad", "ds"):
+                domain = ".".join(parts[-2:]) if len(parts) >= 2 else san
+            else:
+                domain = ".".join(parts[-2:])
+            if domain not in seen:
+                seen.add(domain)
+                self.record(
+                    domain_name=domain,
+                    domain_type="dns_domain",
+                    dns_name=domain,
+                    source_ip=source_ip,
+                    source_port=source_port,
+                    hostname=hostname,
+                    source="tls-cert-san",
+                    evidence=f"SAN: {san}",
+                )
+
+    def finalize(self, output_mgr: "OutputManager",
+                 intel_emitter=None) -> "dict | None":
+        with self._lock:
+            observations = list(self._observations)
+        if not observations:
+            return None
+
+        domains_map: dict[str, dict] = {}
+        for obs in observations:
+            dn = obs["domain_name"]
+            if dn not in domains_map:
+                domains_map[dn] = {
+                    "name": dn, "type": "", "netbios_name": "",
+                    "dns_tree": "", "sid": "",
+                    "domain_controllers": [], "members": {},
+                    "certificates_referencing": set(), "source_count": {},
+                }
+            d = domains_map[dn]
+            if obs["domain_type"] and not d["type"]:
+                d["type"] = obs["domain_type"]
+            if obs["domain_type"] == "ad_domain":
+                d["type"] = "ad_domain"
+            if obs["netbios_name"] and not d["netbios_name"]:
+                d["netbios_name"] = obs["netbios_name"]
+            if obs["dns_tree"] and not d["dns_tree"]:
+                d["dns_tree"] = obs["dns_tree"]
+            if obs["sid"] and not d["sid"]:
+                d["sid"] = obs["sid"]
+            src = obs["source"]
+            d["source_count"][src] = d["source_count"].get(src, 0) + 1
+            if src == "tls-cert-san" and obs["evidence"]:
+                san_val = obs["evidence"].replace("SAN: ", "")
+                d["certificates_referencing"].add(san_val)
+            ip = obs["source_ip"]
+            if ip:
+                if obs["is_dc"]:
+                    dc_ips = {dc["ip"] for dc in d["domain_controllers"]}
+                    if ip not in dc_ips:
+                        d["domain_controllers"].append({
+                            "ip": ip, "hostname": obs["hostname"],
+                            "computer_name": obs["computer_name"],
+                            "sources": [src],
+                        })
+                    else:
+                        for dc in d["domain_controllers"]:
+                            if dc["ip"] == ip and src not in dc["sources"]:
+                                dc["sources"].append(src)
+                elif src != "tls-cert-san":
+                    if ip not in d["members"]:
+                        d["members"][ip] = {
+                            "ip": ip, "computer_name": obs["computer_name"],
+                            "hostname": obs["hostname"], "sources": [src],
+                        }
+                    else:
+                        m = d["members"][ip]
+                        if obs["computer_name"] and not m["computer_name"]:
+                            m["computer_name"] = obs["computer_name"]
+                        if obs["hostname"] and not m["hostname"]:
+                            m["hostname"] = obs["hostname"]
+                        if src not in m["sources"]:
+                            m["sources"].append(src)
+
+        all_sources = set()
+        for obs in observations:
+            if obs["source"]:
+                all_sources.add(obs["source"])
+
+        domains_list = []
+        total_dcs = 0
+        total_members = 0
+        for d in sorted(domains_map.values(), key=lambda x: x["name"]):
+            total_dcs += len(d["domain_controllers"])
+            total_members += len(d["members"])
+            domains_list.append({
+                "name": d["name"],
+                "type": d["type"] or "unknown",
+                "netbios_name": d["netbios_name"],
+                "dns_tree": d["dns_tree"],
+                "sid": d["sid"],
+                "domain_controllers": d["domain_controllers"],
+                "members": sorted(d["members"].values(), key=lambda x: x["ip"]),
+                "certificates_referencing": sorted(d["certificates_referencing"]),
+                "source_count": dict(sorted(d["source_count"].items(), key=lambda x: -x[1])),
+            })
+
+        result = {
+            "generated": datetime.now().isoformat(),
+            "schema_version": "1.0",
+            "summary": {
+                "domains_discovered": len(domains_list),
+                "domain_controllers": total_dcs,
+                "member_hosts": total_members,
+                "sources_used": sorted(all_sources),
+            },
+            "domains": domains_list,
+            "observations": observations,
+        }
+
+        try:
+            out_path = output_mgr.root / "domain_intelligence.json"
+            tmp = out_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
+            tmp.replace(out_path)
+        except Exception:
+            pass
+
+        if intel_emitter:
+            try:
+                intel_emitter.emit_intel("domain_intel", observations, bulk=True)
+            except Exception:
+                pass
+
+        return result
+
+
 def _infer_from_hostname(
     hostname: str,
 ) -> dict:
@@ -22505,6 +22815,20 @@ def run_smb_null_session(
                     affected=f"{ip}:{port}",
                     output_file=str(out_path),
                 )
+                _rpc_dom_m = re.search(r"Domain Name:\s*(\S+)", raw, re.IGNORECASE)
+                if not _rpc_dom_m:
+                    _rpc_dom_m = re.search(r"domain_name:\s*(\S+)", raw, re.IGNORECASE)
+                if _rpc_dom_m:
+                    _rpc_di = getattr(output_mgr, "_domain_intel", None)
+                    if _rpc_di:
+                        _rpc_di.record(
+                            domain_name=_rpc_dom_m.group(1).strip().lower(),
+                            domain_type="workgroup",
+                            netbios_name=_rpc_dom_m.group(1).strip(),
+                            source_ip=ip, source_port=port,
+                            hostname=hostname or "",
+                            source="rpcclient",
+                        )
         except Exception:
             pass
 
@@ -22571,6 +22895,20 @@ def run_rpc_null_session(
                 affected=f"{ip}:{port}",
                 output_file=_rpc_rel,
             )
+            _rpc2_dom_m = re.search(r"Domain Name:\s*(\S+)", raw, re.IGNORECASE)
+            if not _rpc2_dom_m:
+                _rpc2_dom_m = re.search(r"domain_name:\s*(\S+)", raw, re.IGNORECASE)
+            if _rpc2_dom_m:
+                _rpc2_di = getattr(output_mgr, "_domain_intel", None)
+                if _rpc2_di:
+                    _rpc2_di.record(
+                        domain_name=_rpc2_dom_m.group(1).strip().lower(),
+                        domain_type="workgroup",
+                        netbios_name=_rpc2_dom_m.group(1).strip(),
+                        source_ip=ip, source_port=port,
+                        hostname=hostname or "",
+                        source="rpcclient",
+                    )
         else:
             _tprint(f"  {Fore.GREEN}[+] RPC null session denied: {ip}:{port}{Style.RESET_ALL}")
     except Exception:
@@ -23297,6 +23635,7 @@ def run_enum4linux(
         _dom_m = re.search(r"Domain Name\s*[=:]\s*(\S+)", raw, re.IGNORECASE)
         if not _dom_m:
             _dom_m = re.search(r"Workgroup\s*[=:]\s*(\S+)", raw, re.IGNORECASE)
+        dom_name = ""
         if _dom_m:
             dom_name = _dom_m.group(1).strip()
             _tprint(f"  {Fore.CYAN}[+] enum4linux: Domain/Workgroup = {dom_name}{Style.RESET_ALL}")
@@ -23306,6 +23645,16 @@ def run_enum4linux(
                 f"enum4linux identified the domain/workgroup name as '{dom_name}' on {ip}.",
                 f"Domain Name: {dom_name}",
             )
+            _e4_di = getattr(output_mgr, "_domain_intel", None)
+            if _e4_di:
+                _e4_di.record(
+                    domain_name=dom_name.lower(),
+                    domain_type="workgroup",
+                    netbios_name=dom_name,
+                    source_ip=ip, source_port=_port_smb,
+                    hostname=hostname or "",
+                    source="enum4linux",
+                )
 
         # ── 2. Domain SID ──────────────────────────────────────────────────
         _sid_m = re.search(r"Domain SID\s*[=:]\s*(S-\d-\d[\d\-]+)", raw, re.IGNORECASE)
@@ -23315,6 +23664,15 @@ def run_enum4linux(
                 f"Domain SID identified on {ip}: {sid}. "
                 f"The SID can be used to enumerate user RIDs.",
                 f"Domain SID: {sid}")
+            _e4_di2 = getattr(output_mgr, "_domain_intel", None)
+            if _e4_di2 and dom_name:
+                _e4_di2.record(
+                    domain_name=dom_name.lower(),
+                    sid=sid,
+                    source_ip=ip, source_port=_port_smb,
+                    hostname=hostname or "",
+                    source="enum4linux",
+                )
 
         # ── 3. OS / Host information ───────────────────────────────────────
         # enum4linux srvinfo exposes platform_id, os version, server type,
@@ -35678,6 +36036,18 @@ def scan_scope(
 
     # ── Phase 12: Active Directory Assessment ────────────────────────────────
     _dcs = _detect_domain_controllers(all_results)
+    for _dc_ip_feed, _dc_hn_feed in _dcs:
+        _dc_domain_feed = _dc_hn_feed.split(".", 1)[-1] if _dc_hn_feed and "." in _dc_hn_feed else ""
+        if _dc_domain_feed:
+            output_mgr._domain_intel.record(
+                domain_name=_dc_domain_feed,
+                domain_type="ad_domain",
+                source_ip=_dc_ip_feed,
+                hostname=_dc_hn_feed or "",
+                is_dc=True,
+                source="port-combo",
+                evidence="Ports 88/389/3268 open",
+            )
     _domain_hint = getattr(args, "domain", None)
     if scope == "int" and _dcs and not getattr(args, "no_ad", False):
         _dc_ip, _dc_hn = _dcs[0]
