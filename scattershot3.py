@@ -10733,10 +10733,11 @@ def _port_scan_worker(
                             _hdrs = web_result.get("headers") or {}
                             if _srv or _hdrs.get("X-Powered-By"):
                                 _ie.emit_intel("webapp_intel", {
+                                    "url": _http_url,
                                     "ip": ip, "port": port,
                                     "hostname": hostname or "",
                                     "server": _srv,
-                                    "x_powered_by": _hdrs.get("X-Powered-By", ""),
+                                    "powered_by": _hdrs.get("X-Powered-By", ""),
                                     "technologies": [],
                                 })
                         # ── Action Item: web app → Fracture ──────────
@@ -10962,10 +10963,47 @@ def _port_scan_worker(
                             )
                 if _ie and _sc_cookies:
                     for _sc in _sc_cookies:
+                        if not _sc:
+                            continue
+                        _ck_lo = _sc.lower()
+                        _ck_parts = _sc.split(";")
+                        _ck_kv = _ck_parts[0].strip()
+                        _ck_eq = _ck_kv.find("=")
+                        if _ck_eq <= 0:
+                            continue
+                        _ck_name = _ck_kv[:_ck_eq].strip()
+                        _ck_val = _ck_kv[_ck_eq + 1:].strip()
+                        _ck_domain = ""
+                        _ck_path = ""
+                        _ck_secure = "secure" in _ck_lo
+                        _ck_httponly = "httponly" in _ck_lo
+                        _ck_samesite = ""
+                        for _ck_attr in _ck_parts[1:]:
+                            _ck_attr_lo = _ck_attr.strip().lower()
+                            if _ck_attr_lo.startswith("domain="):
+                                _ck_domain = _ck_attr.strip().split("=", 1)[1].strip()
+                            elif _ck_attr_lo.startswith("path="):
+                                _ck_path = _ck_attr.strip().split("=", 1)[1].strip()
+                            elif _ck_attr_lo.startswith("samesite="):
+                                _ck_samesite = _ck_attr.strip().split("=", 1)[1].strip()
+                        _ck_issues = []
+                        if not _ck_httponly:
+                            _ck_issues.append("HttpOnly")
+                        if not _ck_secure:
+                            _ck_issues.append("Secure")
+                        if not _ck_samesite:
+                            _ck_issues.append("SameSite")
                         _ie.emit_intel("cookie", {
-                            "ip": ip, "port": port,
-                            "hostname": hostname or "",
-                            "raw": _sc[:500],
+                            "name": _ck_name,
+                            "value": _ck_val[:200],
+                            "domain": _ck_domain,
+                            "path": _ck_path,
+                            "secure": _ck_secure,
+                            "httponly": _ck_httponly,
+                            "samesite": _ck_samesite,
+                            "url": _http_url,
+                            "risk": "LOW" if _ck_issues else "INFO",
+                            "issues": ("Missing: " + ", ".join(_ck_issues)) if _ck_issues else "",
                         })
 
                 # Record server header software
@@ -21360,7 +21398,7 @@ def _register_screenshot(root: Path, png_path, url: str = "",
                 "status_code": int(status_code) if status_code else None,
                 "server": server or "",
                 "page_title": page_title or "",
-                "path": str(dest.relative_to(root)) if root else str(dest),
+                "file_path": str(dest.relative_to(root)) if root else str(dest),
             })
     except Exception as exc:
         import logging
