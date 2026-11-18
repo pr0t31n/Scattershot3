@@ -4240,14 +4240,20 @@ class OutputManager:
                 _sw_by_ip.get(_hip, []), _port_set, _svc_map,
             )
             for _role, _role_ev in _roles:
-                _all_roles.append({
+                _role_entry = {
                     "ip":       _hip,
                     "hostname": h.get("hostname") or "",
                     "os":       h.get("os") or "",
                     "role":     _role,
                     "evidence": _role_ev,
                     "ports":    sorted(_port_set),
-                })
+                }
+                _all_roles.append(_role_entry)
+                if _ie:
+                    try:
+                        _ie.emit_intel("server_role", _role_entry)
+                    except Exception:
+                        pass
                 self.log_finding(
                     title="Discovery: Server Role Identified",
                     ip=_hip,
@@ -4307,6 +4313,18 @@ class OutputManager:
                 "subdomain":   _hinf["subdomain"],
             }
             _hi_hosts.append(_hi_entry)
+            if _ie:
+                try:
+                    _ie.emit_intel("hostname_intel", {
+                        "hostname":        _hn,
+                        "ip":              _hip,
+                        "environment_tag": _hinf["environment"],
+                        "application_tag": ", ".join(a.get("name", "") for a in _hinf["applications"]),
+                        "hardware_tag":    (_hinf.get("hardware") or {}).get("model", ""),
+                        "role_tag":        ", ".join(r.get("role", "") for r in _hinf["roles"]),
+                    })
+                except Exception:
+                    pass
             if _hinf["environment"]:
                 _hi_env_counts[_hinf["environment"]] = (
                     _hi_env_counts.get(_hinf["environment"], 0) + 1
@@ -35353,6 +35371,40 @@ def scan_scope(
                                 "role_tag": ", ".join(
                                     r.get("role", "") for r in _hinf.get("roles", [])),
                             })
+                        except Exception:
+                            pass
+                    if _ie and host_result.get("open_ports"):
+                        try:
+                            _sw_per = []
+                            try:
+                                _si_raw = json.loads(
+                                    output_mgr.software_inventory.read_text(encoding="utf-8"))
+                                _sw_per = [s for s in _si_raw if s.get("ip") == result_ip]
+                            except Exception:
+                                pass
+                            _ports_set = set(int(p) for p in host_result["open_ports"])
+                            _os_inf = _infer_host_os(result_ip, _sw_per, _ports_set)
+                            if _os_inf:
+                                _inf_os = _os_inf[0]
+                                _inf_ol = _inf_os.lower()
+                                if "windows" in _inf_ol:
+                                    _inf_fam = "Windows"
+                                elif any(k in _inf_ol for k in ("linux", "ubuntu", "debian",
+                                         "centos", "rhel", "fedora", "suse", "alpine")):
+                                    _inf_fam = "Linux"
+                                elif "freebsd" in _inf_ol:
+                                    _inf_fam = "FreeBSD"
+                                elif "esxi" in _inf_ol or "vmware" in _inf_ol:
+                                    _inf_fam = "VMware"
+                                elif any(k in _inf_ol for k in ("macos", "mac os", "darwin")):
+                                    _inf_fam = "macOS"
+                                else:
+                                    _inf_fam = "Other"
+                                _ie.emit_intel("host_os", {
+                                    "ip": result_ip, "os_family": _inf_fam,
+                                    "os_name": _inf_os,
+                                    "hostname": hostnames.get(result_ip, ""),
+                                })
                         except Exception:
                             pass
 
