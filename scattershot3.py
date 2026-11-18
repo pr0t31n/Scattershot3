@@ -4176,10 +4176,35 @@ class OutputManager:
         # Software Inventory intelligence tab shows OS for every row on hosts
         # where we successfully inferred the operating system.
         _os_map: dict = {}  # ip → inferred os string
+        _os_updates: list[dict] = []
         for _hip, h in hosts_map.items():
             _h_os = h.get("os")
             if _h_os:
                 _os_map[_hip] = _h_os
+                _ol = _h_os.lower()
+                if "windows" in _ol:
+                    _ofam = "Windows"
+                elif any(k in _ol for k in ("linux", "ubuntu", "debian",
+                         "centos", "rhel", "fedora", "suse", "alpine")):
+                    _ofam = "Linux"
+                elif "freebsd" in _ol:
+                    _ofam = "FreeBSD"
+                elif "esxi" in _ol or "vmware" in _ol:
+                    _ofam = "VMware"
+                elif any(k in _ol for k in ("macos", "mac os", "darwin")):
+                    _ofam = "macOS"
+                else:
+                    _ofam = "Other"
+                _os_updates.append({
+                    "ip": _hip, "os_family": _ofam,
+                    "os_name": _h_os,
+                    "hostname": h.get("hostname") or "",
+                })
+        if _os_updates:
+            try:
+                _ie.emit_intel("host_os", _os_updates, bulk=True)
+            except Exception:
+                pass
         if _os_map:
             try:
                 _si = json.loads(
@@ -6296,6 +6321,27 @@ def _load_discovery_checkpoint(
         return None
 
 
+_NTLM_BUILD_TO_OS: dict[str, str] = {
+    "5.1":  "Windows XP", "5.2": "Windows Server 2003",
+    "6.0":  "Windows Server 2008", "6.1": "Windows Server 2008 R2",
+    "6.2":  "Windows Server 2012", "6.3": "Windows Server 2012 R2",
+    "10.0.14393": "Windows Server 2016",
+    "10.0.17763": "Windows Server 2019",
+    "10.0.20348": "Windows Server 2022",
+    "10.0.26100": "Windows Server 2025",
+}
+
+def _ntlm_ver_to_os(ver: str) -> str:
+    """Map an NTLM Product_Version (e.g. '10.0.20348') to a Windows edition."""
+    ver = (ver or "").strip()
+    if not ver:
+        return ""
+    if ver in _NTLM_BUILD_TO_OS:
+        return _NTLM_BUILD_TO_OS[ver]
+    prefix = ".".join(ver.split(".")[:2])
+    return _NTLM_BUILD_TO_OS.get(prefix, f"Windows (build {ver})")
+
+
 def _parse_ntlm_info(scripts, script_name, ip, port, hostname, cmd,
                      output_mgr, output_file, domain_intel):
     raw = scripts.get(script_name, "")
@@ -6347,6 +6393,16 @@ def _parse_ntlm_info(scripts, script_name, ip, port, hostname, cmd,
             source_ip=ip, source_port=port, hostname=hostname or "",
             source=script_name, evidence=", ".join(_parts),
         )
+    if _ver and _ie:
+        _os_label = _ntlm_ver_to_os(_ver)
+        if _os_label:
+            try:
+                _ie.emit_intel("host", {
+                    "ip": ip, "hostname": hostname or "",
+                    "os_family": "Windows", "os_name": _os_label,
+                })
+            except Exception:
+                pass
 
 
 def _parse_nse_findings(
@@ -18483,6 +18539,8 @@ _HOSTNAME_ROLE_TOKENS: dict[str, str] = {
     "pdc":       "Domain Controller",
     "bdc":       "Domain Controller",
     "gc":        "Global Catalog Server",
+    "file":      "File Server",
+    "fileserver": "File Server",
     "nfs":       "File Server (NFS)",
     "nas":       "NAS / File Server",
     "san":       "Storage Server",
@@ -18531,6 +18589,8 @@ _HOSTNAME_ROLE_TOKENS: dict[str, str] = {
     "bak":       "Backup Server",
     "dr":        "DR Server",
     "repo":      "Repository Server",
+    "svn":       "Version Control Server",
+    "git":       "Version Control Server",
     "docker":    "Container Host",
     "k8s":       "Kubernetes Node",
     "kube":      "Kubernetes Node",
@@ -18820,6 +18880,15 @@ def _infer_from_hostname(
                 "role": role,
                 "evidence": f"'{tok}' token in hostname",
             })
+
+    if not seen_roles:
+        for role_key, role_name in _HOSTNAME_ROLE_TOKENS.items():
+            if len(role_key) >= 3 and role_key in host_part and role_name not in seen_roles:
+                seen_roles.add(role_name)
+                result["roles"].append({
+                    "role": role_name,
+                    "evidence": f"'{role_key}' substring in hostname '{host_part}'",
+                })
 
     # ── Hardware model detection ──────────────────────────────────
     for pat, manufacturer, model_tmpl in _HW_PATTERNS:
@@ -35221,6 +35290,51 @@ def scan_scope(
 
                     if run_nuclei_flag and host_result.get("open_ports"):
                         _nuclei_batch_ips.append(result_ip)
+
+                    if _ie and host_result.get("open_ports"):
+                        try:
+                            _ports = set(int(p) for p in host_result["open_ports"])
+                            _svc_map = {}
+                            for pk, pi in host_result["open_ports"].items():
+                                try:
+                                    _svc_map[int(pk)] = pi.get("name", "")
+                                except (ValueError, TypeError):
+                                    pass
+                            _sw_list = []
+                            try:
+                                _si_data = json.loads(
+                                    output_mgr.software_inventory.read_text(encoding="utf-8"))
+                                _sw_list = [s for s in _si_data
+                                            if s.get("ip") == result_ip]
+                            except Exception:
+                                pass
+                            _roles = _infer_host_roles(_sw_list, _ports, _svc_map)
+                            if _roles:
+                                _hn = hostnames.get(result_ip, "")
+                                for _role, _ev in _roles:
+                                    _ie.emit_intel("server_role", {
+                                        "ip": result_ip,
+                                        "hostname": _hn or "",
+                                        "role": _role,
+                                        "evidence": _ev,
+                                    })
+                        except Exception:
+                            pass
+                    if _ie and hostnames.get(result_ip):
+                        try:
+                            _hinf = _infer_from_hostname(hostnames[result_ip])
+                            _ie.emit_intel("hostname_intel", {
+                                "hostname": hostnames[result_ip],
+                                "ip": result_ip,
+                                "environment_tag": _hinf.get("environment") or "",
+                                "application_tag": ", ".join(
+                                    a.get("name", "") for a in _hinf.get("applications", [])),
+                                "hardware_tag": ((_hinf.get("hardware") or {}).get("model", "")),
+                                "role_tag": ", ".join(
+                                    r.get("role", "") for r in _hinf.get("roles", [])),
+                            })
+                        except Exception:
+                            pass
 
                 except Exception as exc:
                     _tprint(
