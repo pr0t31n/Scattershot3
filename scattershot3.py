@@ -2177,7 +2177,7 @@ class OutputManager:
             self._fdb = None
         if self._fdb and _ie:
             _ie.init_db(self._fdb)
-        self._domain_intel = DomainIntelCollector()
+        self._domain_intel = DomainIntelCollector(intel_emitter=_ie)
         self._setup_dirs()
 
     # ── Directory setup ───────────────────────
@@ -9846,13 +9846,12 @@ def port_scan(
 
     results: dict[int, dict] = {}
     _port_states: dict[str, int] = {"open": 0, "closed": 0, "filtered": 0, "scanned": 0}
+    out_path = None
 
     try:
         # ── Phase A: base scan via python-nmap (parses XML from its own pipe) ─
         nm = nmap.PortScanner()
         nm.scan(hosts=ip, arguments=nmap_args)
-
-        out_path = None
         if output_mgr:
             # Capture the XML python-nmap already has
             raw_bytes = (nm.get_nmap_last_output()
@@ -18563,9 +18562,10 @@ _HOSTNAME_ROLE_SKIP = frozenset({
 class DomainIntelCollector:
     """Thread-safe collector for domain/workgroup intel from all discovery sources."""
 
-    def __init__(self):
+    def __init__(self, intel_emitter=None):
         self._lock = threading.Lock()
         self._observations: list[dict] = []
+        self._ie = intel_emitter
 
     def record(self, domain_name: str, *, domain_type: str = "",
                netbios_name: str = "", dns_name: str = "",
@@ -18593,6 +18593,11 @@ class DomainIntelCollector:
         }
         with self._lock:
             self._observations.append(entry)
+        if self._ie:
+            try:
+                self._ie.emit_intel("domain_intel", entry)
+            except Exception:
+                pass
 
     def record_cert_domain(self, source_ip: str, source_port: int,
                            san_list: list, hostname: str = "") -> None:
@@ -18730,7 +18735,7 @@ class DomainIntelCollector:
         except Exception:
             pass
 
-        if intel_emitter:
+        if intel_emitter and not self._ie:
             try:
                 intel_emitter.emit_intel("domain_intel", observations, bulk=True)
             except Exception:
@@ -19876,6 +19881,23 @@ def record_software(
                     _ie.emit_intel("software", entry)
                 except Exception:
                     pass
+            if final_os and _ie:
+                _os_fam = "Windows" if "windows" in final_os.lower() else (
+                    "Linux" if any(d in final_os.lower() for d in
+                        ("ubuntu","debian","rhel","centos","rocky","alma",
+                         "fedora","suse","linux","kali","raspbian")) else
+                    "macOS" if "macos" in final_os.lower() or "mac os" in final_os.lower() else
+                    "BSD" if any(b in final_os.lower() for b in ("freebsd","openbsd","netbsd")) else
+                    "VMware" if "esxi" in final_os.lower() or "vmware" in final_os.lower() else
+                    "")
+                if _os_fam:
+                    try:
+                        _ie.emit_intel("host", {
+                            "ip": ip, "hostname": hostname or "",
+                            "os_family": _os_fam, "os_name": final_os,
+                        })
+                    except Exception:
+                        pass
         output_mgr.software_inventory.write_text(
             json.dumps(existing, indent=2), encoding="utf-8"
         )
