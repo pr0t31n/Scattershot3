@@ -14621,7 +14621,7 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
                                 _tsf_risk     = "LOW" if _is_ext else "INFO"
                             else:
                                 _tsf_title    = "Missing Security Header: Strict-Transport-Security"
-                                _tsf_risk     = "LOW"
+                                _tsf_risk     = "MEDIUM" if _is_ext else "LOW"
                         elif _tsf_id_base == "cert_keySize":
                             _tsf_title = "SSL/TLS Certificate: Weak Encryption Method"
                             _tsf_risk  = "LOW"
@@ -24749,6 +24749,26 @@ def run_shcheck(
         "Public-Key-Pins",   # HPKP — deprecated in all browsers
         "X-XSS-Protection",  # All browsers removed support; use CSP instead
     })
+    _SEC_HDR_EXT_RISK: dict = {
+        "Strict-Transport-Security": "MEDIUM",
+        "Content-Security-Policy":   "LOW",
+        "X-Frame-Options":           "LOW",
+        "X-Content-Type-Options":    "LOW",
+        "Referrer-Policy":           "LOW",
+        "Cache-Control":             "LOW",
+        "Permissions-Policy":        "LOW",
+    }
+    _SEC_HDR_INT_RISK: dict = {
+        "Strict-Transport-Security": "LOW",
+        "Content-Security-Policy":   "INFO",
+        "X-Frame-Options":           "INFO",
+        "X-Content-Type-Options":    "INFO",
+        "Referrer-Policy":           "INFO",
+        "Cache-Control":             "INFO",
+        "Permissions-Policy":        "INFO",
+    }
+    _is_ext = (output_mgr.scope == "ext")
+    _hdr_risk_map = _SEC_HDR_EXT_RISK if _is_ext else _SEC_HDR_INT_RISK
     cmd_str = " ".join(str(c) for c in _used_cmd)
 
     # ── Try JSON parser first ─────────────────────────────────────────────────
@@ -24824,10 +24844,10 @@ def run_shcheck(
                 if header_name == _HSTS_HEADER and scheme != "https":
                     continue
                 _seen_headers.add(header_name)
-                risk = "LOW"
+                risk = _hdr_risk_map.get(header_name, "LOW")
                 _tprint(
                     f"  {Fore.YELLOW}[~] Missing header: {header_name} "
-                    f"on {ip}:{port}{Style.RESET_ALL}"
+                    f"({risk}) on {ip}:{port}{Style.RESET_ALL}"
                 )
                 output_mgr.log_finding(
                     title=f"Missing Security Header: {header_name}",
@@ -24867,10 +24887,10 @@ def run_shcheck(
                 continue
             if header_name == _HSTS_HEADER and scheme != "https":
                 continue
-            risk = "LOW"
+            risk = _hdr_risk_map.get(header_name, "LOW")
             _tprint(
                 f"  {Fore.YELLOW}[~] Missing header: {header_name} "
-                f"on {ip}:{port}{Style.RESET_ALL}"
+                f"({risk}) on {ip}:{port}{Style.RESET_ALL}"
             )
             output_mgr.log_finding(
                 title=f"Missing Security Header: {header_name}",
