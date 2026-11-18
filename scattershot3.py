@@ -24751,8 +24751,8 @@ def run_shcheck(
     })
     _SEC_HDR_EXT_RISK: dict = {
         "Strict-Transport-Security": "MEDIUM",
-        "Content-Security-Policy":   "LOW",
-        "X-Frame-Options":           "LOW",
+        "Content-Security-Policy":   "MEDIUM",
+        "X-Frame-Options":           "MEDIUM",
         "X-Content-Type-Options":    "LOW",
         "Referrer-Policy":           "LOW",
         "Cache-Control":             "LOW",
