@@ -35388,6 +35388,25 @@ def scan_scope(
                 )
 
             # ── Collect port-scan results ─────────────────────────────────
+            _pf_total = len(port_futures)
+            _pf_done = 0
+            if _pf_total:
+                _pf_ips = ", ".join(
+                    sorted(port_futures.values(),
+                           key=lambda a: int(ipaddress.ip_address(a)))
+                )
+                print(
+                    f"{Fore.CYAN}[*] {scope_label} Waiting for "
+                    f"{_pf_total} port-scan worker(s): "
+                    f"{_pf_ips}{Style.RESET_ALL}",
+                    flush=True,
+                )
+                _vc.status(
+                    f"{scope}_p2_portscan",
+                    label="Phase 2: Port Scan & Service Analysis",
+                    status="running",
+                    step=f"0/{_pf_total} hosts complete",
+                )
             _nuclei_base = getattr(args, "nuclei_timeout", 600)
             for future in as_completed(port_futures):
                 _check_pause()
@@ -35533,6 +35552,14 @@ def scan_scope(
                         "ssl_results": {}, "hostnames_by_port": {},
                         "web_files": {},
                     }
+                _pf_done += 1
+                if _pf_total > 1:
+                    _vc.status(
+                        f"{scope}_p2_portscan",
+                        label="Phase 2: Port Scan & Service Analysis",
+                        status="running",
+                        step=f"{_pf_done}/{_pf_total} hosts complete",
+                    )
 
             # ── Batch Nuclei IP scan ──────────────────────────────────────
             if _nuclei_batch_ips:
