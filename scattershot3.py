@@ -33081,7 +33081,7 @@ def run_sploitus(cves: "list[str]", output_mgr: "OutputManager", scope: str) -> 
                         f"Published: {ex.get('published', '')}"
                     ),
                     cves=cve,
-                    affected=f"{cve} ({ip}:{port})",
+                    affected=cve,
                     exploitdb=True,
                     exploit_details=[_sploitus_rec],
                     output_file=str(sploitus_dir / "sploitus_results.json"),
@@ -33317,7 +33317,7 @@ def run_metasploit_search(
                 + "Modules:\n"
                 + "\n".join(f"  {m['path']} (rank={m.get('rank','')})" for m in all_mods[:10])
             ),
-            affected=f"{cve} ({ip}:{port})",
+            affected=cve,
             output_file=str(out_file),
             metasploit=True,
             exploit_details=exploit_recs,
