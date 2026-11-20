@@ -5809,7 +5809,11 @@ def host_discovery_range(
 
     nm = nmap.PortScanner()
     try:
-        nm.scan(hosts=hosts_str, arguments=nmap_args, timeout=600)
+        _ht = 30 if scope == "ext" else 15
+        _mp = discovery_min_parallelism or 20
+        _nh = max(len(nmap_targets), len(ips), 1)
+        _dyn_timeout = max(600, int((_nh / _mp) * _ht * 1.5) + 120)
+        nm.scan(hosts=hosts_str, arguments=nmap_args, timeout=_dyn_timeout)
 
         _scan_errors = (nm._scan_result.get("nmap", {})
                         .get("scaninfo", {}).get("error", []))
@@ -35042,14 +35046,19 @@ def scan_scope(
     print()
 
     # ── Discovery + Phase 2 pipeline ─────────────────────────────────────────
-    # When raw_specs describe large ranges (>4096 IPs), discovery is chunked
-    # into /20 subnets.  Each chunk's alive hosts are submitted to the Phase 2
+    # External scans chunk at 256+ IPs (firewalled hosts eat the full
+    # --host-timeout, so even 500 IPs can exceed the monolithic timeout).
+    # Internal scans chunk at 4096+ (ARP probes resolve in <1s).
+    # Chunked discovery has partial salvage, aggressive retry, and
+    # per-chunk checkpointing — all critical for unreliable networks.
+    # Each chunk's alive hosts are submitted to the Phase 2
     # port-scan pool immediately, so discovery and port scanning overlap.
     # Hostname resolution moves per-host (inside the port-scan worker) and
     # rescue runs per-chunk instead of as a single background thread.
     #
     # For smaller target sets, the original monolithic pipeline is used.
-    _use_chunked = bool(raw_specs) and _n_targets > 4096
+    _chunk_floor = 256 if scope == "ext" else 4096
+    _use_chunked = bool(raw_specs) and _n_targets > _chunk_floor
 
     # ── Per-phase checkpoint: check if Phases 1+2 already completed ──────
     _p12_key = f"{scope}_p1p2"
@@ -35592,7 +35601,7 @@ def scan_scope(
 
     else:
         # ══════════════════════════════════════════════════════════════════════
-        # ORIGINAL MONOLITHIC DISCOVERY PIPELINE — small target sets
+        # MONOLITHIC DISCOVERY PIPELINE — small target sets (ext<256 / int<4096)
         # ══════════════════════════════════════════════════════════════════════
         _spec_desc = (f"{len(raw_specs)} spec(s) → {_n_targets:,} IP(s)"
                       if raw_specs and len(raw_specs) != _n_targets
