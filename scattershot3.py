@@ -4151,6 +4151,15 @@ class OutputManager:
                     f"  Windows-associated ports: "
                     f"{', '.join(str(p) for p in sorted(_win_ports))}"
                 )
+            _ps_files = sorted(
+                self.host_path(_hip).glob("*_portscan_*.txt"),
+                key=lambda p: p.stat().st_mtime, reverse=True,
+            )
+            _ev_file = (
+                str(_ps_files[0].relative_to(self.root))
+                if _ps_files
+                else str(self.host_path(_hip).relative_to(self.root))
+            )
             self.log_finding(
                 title=f"OS Version Detected [Inferred]: {_h_os}",
                 ip=_hip,
@@ -4166,9 +4175,7 @@ class OutputManager:
                 sources="scattershot3",
                 output="\n".join(_ev_lines),
                 affected=f"{_h_os} ({_hip})",
-                output_file=str(
-                    self.software_inventory.relative_to(self.root)
-                ),
+                output_file=_ev_file,
             )
             check_os_eol(self, _hip, 0, h.get("hostname"), os_name=_h_os, method="inference", inferred=True)
 
@@ -4254,6 +4261,15 @@ class OutputManager:
                         _ie.emit_intel("server_role", _role_entry)
                     except Exception:
                         pass
+                _rps = sorted(
+                    self.host_path(_hip).glob("*_portscan_*.txt"),
+                    key=lambda p: p.stat().st_mtime, reverse=True,
+                )
+                _rev_file = (
+                    str(_rps[0].relative_to(self.root))
+                    if _rps
+                    else str(self.host_path(_hip).relative_to(self.root))
+                )
                 self.log_finding(
                     title="Discovery: Server Role Identified",
                     ip=_hip,
@@ -4268,9 +4284,7 @@ class OutputManager:
                     sources="scattershot3",
                     output=f"Role: {_role}\n{_role_ev}",
                     affected=f"{_role} ({_hip})",
-                    output_file=str(
-                        self.software_inventory.relative_to(self.root)
-                    ),
+                    output_file=_rev_file,
                 )
         if _all_roles:
             if _ie:
@@ -4754,10 +4768,15 @@ class OutputManager:
 
         ports_lines   = []
         targets_lines = []
+        _fm = getattr(self, "fqdn_map", {}) or {}
         for (ip_int, port), scheme in sorted_entries:
             ip_str = str(ipaddress.ip_address(ip_int))
             ports_lines.append(f"{ip_str}:{port}")
             targets_lines.append(f"{scheme}://{ip_str}:{port}/")
+            for _fqdn in _fm.get(ip_str, []):
+                _fqdn_url = _clean_url(scheme, _fqdn, port)
+                if _fqdn_url + "/" not in targets_lines and _fqdn_url not in targets_lines:
+                    targets_lines.append(f"{_fqdn_url}/")
 
         ports_path.write_text("\n".join(ports_lines) + ("\n" if ports_lines else ""),
                               encoding="utf-8")
@@ -5146,13 +5165,53 @@ def _resolve_hostname_to_ips(hostname: str) -> list[str]:
     return sorted(resolved, key=lambda ip: int(ipaddress.ip_address(ip)))
 
 
-def _resolve_url_fqdn_targets(specs: list[str]) -> list[str]:
+def _resolve_url_fqdn_targets(
+    specs: list[str],
+    cidr_specs: "list[str] | None" = None,
+) -> "tuple[list[str], dict[str, list[str]]]":
     """
     Replace any URL or FQDN entries in *specs* with their resolved IPv4
     addresses.  Plain IPs, CIDRs, and ranges are passed through unchanged.
     Unresolvable hostnames are dropped with a warning.
+
+    Returns (resolved_specs, fqdn_map) where fqdn_map maps each resolved
+    IP to the list of FQDNs that pointed at it.  When *cidr_specs* are
+    provided, resolved IPs that fall inside any of those CIDRs are flagged
+    as already-covered (deduplicated from the result list but still present
+    in fqdn_map so their FQDNs are scanned on the matching IP).
     """
     result: list[str] = []
+    fqdn_map: dict[str, list[str]] = {}
+
+    cidr_nets: list = []
+    cidr_ips: set = set()
+    if cidr_specs:
+        for cs in cidr_specs:
+            cs = cs.strip()
+            if not cs:
+                continue
+            hostname = _extract_hostname_from_spec(cs)
+            if hostname is not None:
+                continue
+            try:
+                net = ipaddress.ip_network(cs, strict=False)
+                if net.prefixlen < net.max_prefixlen:
+                    cidr_nets.append(net)
+                else:
+                    cidr_ips.add(str(net.network_address))
+            except ValueError:
+                if "-" not in cs:
+                    cidr_ips.add(cs)
+
+    def _ip_in_existing_specs(ip_str: str) -> bool:
+        if ip_str in cidr_ips:
+            return True
+        try:
+            addr = ipaddress.ip_address(ip_str)
+            return any(addr in net for net in cidr_nets)
+        except ValueError:
+            return False
+
     for spec in specs:
         spec = spec.strip()
         if not spec:
@@ -5163,13 +5222,29 @@ def _resolve_url_fqdn_targets(specs: list[str]) -> list[str]:
             continue
         ips = _resolve_hostname_to_ips(hostname)
         if ips:
-            print(f"{Fore.CYAN}[*] Resolved {hostname} → "
-                  f"{', '.join(ips)}{Style.RESET_ALL}")
-            result.extend(ips)
+            _overlap = []
+            _new = []
+            for rip in ips:
+                fqdn_map.setdefault(rip, [])
+                if hostname not in fqdn_map[rip]:
+                    fqdn_map[rip].append(hostname)
+                if _ip_in_existing_specs(rip):
+                    _overlap.append(rip)
+                else:
+                    _new.append(rip)
+            if _new:
+                print(f"{Fore.CYAN}[*] Resolved {hostname} → "
+                      f"{', '.join(_new)}{Style.RESET_ALL}")
+                result.extend(_new)
+            if _overlap:
+                print(f"{Fore.CYAN}[*] Resolved {hostname} → "
+                      f"{', '.join(_overlap)} (already in scope — "
+                      f"FQDN retained for hostname-aware scanning)"
+                      f"{Style.RESET_ALL}")
         else:
             print(f"{Fore.YELLOW}[!] Could not resolve '{hostname}' "
                   f"(from '{spec}') — skipping.{Style.RESET_ALL}")
-    return result
+    return result, fqdn_map
 
 
 def expand_targets(raw_targets: list) -> list:
@@ -5550,7 +5625,8 @@ def _probe_http_curl(ip: str, port: int, scheme: str,
         return None
 
 
-def probe_http(ip: str, port: int, timeout: int = 4) -> dict:
+def probe_http(ip: str, port: int, timeout: int = 4,
+               hostname: "str | None" = None) -> dict:
     """
     Probe a port for HTTP/HTTPS service and return structured findings.
 
@@ -5562,6 +5638,10 @@ def probe_http(ip: str, port: int, timeout: int = 4) -> dict:
 
     Uses the module-level _HTTP_SESSION (shared requests.Session) so that
     TCP connections are reused across hosts via keep-alive pooling.
+
+    When *hostname* is provided, the URL is constructed with the hostname
+    (providing the correct Host header and SNI) but the connection is
+    resolved to the IP address.
 
     When Python's requests library cannot negotiate TLS (SSLError on a
     canonical TLS port), falls back to curl, which supports a far wider
@@ -5579,8 +5659,9 @@ def probe_http(ip: str, port: int, timeout: int = 4) -> dict:
         "set_cookies": [],
     }
 
+    _target_host = hostname or ip
     for scheme in ("https", "http"):
-        url = _clean_url(scheme, ip, port)
+        url = _clean_url(scheme, _target_host, port)
         try:
             r = _HTTP_SESSION.get(
                 url, timeout=timeout, verify=False, allow_redirects=True,
@@ -7725,6 +7806,21 @@ def _probe_ai_service(
     if not _detected_service:
         return result
 
+    # If detection came purely from svc_hint (port heuristic) and no probe
+    # got an actual HTTP response (even a 401/403), the port isn't running
+    # the hinted service — treat as not detected.
+    _got_any_http = _data_plane_hit or _auth_required or _mcp_detected
+    if not _got_any_http and _detected_service == (svc_hint or ""):
+        _all_refused = all(
+            "connection refused" in line.lower()
+            or "timeout" in line.lower()
+            or "error:" in line.lower()
+            for line in _evidence_lines
+            if line.strip()
+        )
+        if _all_refused:
+            return result
+
     # ── Classify AI type ──────────────────────────────────────────────
     _sl = _detected_service.lower()
     if _sl in ("ollama", "vllm", "localai", "litellm", "openai-compat"):
@@ -8463,7 +8559,7 @@ def probe_uncertain_and_nonstandard_ports(
                     # Phase G.5: .git exposure (SS-078)
                     try:
                         _git_r = subprocess.run(
-                            f"curl -sk --max-time 5 {_scheme}://{_curl_host}:{_port}/.git/HEAD",
+                            f"curl -sk --max-time 5 {_scheme}://{hostname or ip}:{_port}/.git/HEAD",
                             shell=True, capture_output=True, timeout=10,
                         )
                         _git_body = _git_r.stdout.decode("utf-8", errors="replace").strip()
@@ -8471,7 +8567,7 @@ def probe_uncertain_and_nonstandard_ports(
                             output_mgr.log_finding(
                                 title="Sensitive File Exposed: Git Repository Exposed via Web",
                                 ip=ip, port=_port, hostname=hostname,
-                                command=f"curl -sk {_scheme}://{_curl_host}:{_port}/.git/HEAD",
+                                command=f"curl -sk {_scheme}://{hostname or ip}:{_port}/.git/HEAD",
                                 risk="HIGH",
                                 description=(
                                     f"The web server at {_scheme}://{ip}:{_port} exposes "
@@ -8494,7 +8590,7 @@ def probe_uncertain_and_nonstandard_ports(
                     # Phase G.6: HTTP methods enumeration (SS-079/SS-080)
                     try:
                         _opt_r = subprocess.run(
-                            f"curl -sk --max-time 5 -X OPTIONS -I {_scheme}://{_curl_host}:{_port}/",
+                            f"curl -sk --max-time 5 -X OPTIONS -I {_scheme}://{hostname or ip}:{_port}/",
                             shell=True, capture_output=True, timeout=10,
                         )
                         _opt_out = _opt_r.stdout.decode("utf-8", errors="replace")
@@ -8506,7 +8602,7 @@ def probe_uncertain_and_nonstandard_ports(
                                 output_mgr.log_finding(
                                     title="HTTP Methods: Unsafe Methods Enabled",
                                     ip=ip, port=_port, hostname=hostname,
-                                    command=f"curl -sk -X OPTIONS -I {_scheme}://{_curl_host}:{_port}/",
+                                    command=f"curl -sk -X OPTIONS -I {_scheme}://{hostname or ip}:{_port}/",
                                     risk="MEDIUM",
                                     description=(
                                         f"The web server at {_scheme}://{ip}:{_port} allows "
@@ -8525,7 +8621,7 @@ def probe_uncertain_and_nonstandard_ports(
                         pass
                     try:
                         _trace_r = subprocess.run(
-                            f"curl -sk --max-time 5 -X TRACE {_scheme}://{_curl_host}:{_port}/",
+                            f"curl -sk --max-time 5 -X TRACE {_scheme}://{hostname or ip}:{_port}/",
                             shell=True, capture_output=True, timeout=10,
                         )
                         _trace_body = _trace_r.stdout.decode("utf-8", errors="replace")
@@ -8533,7 +8629,7 @@ def probe_uncertain_and_nonstandard_ports(
                             output_mgr.log_finding(
                                 title="HTTP Methods: Unsafe Methods Enabled",
                                 ip=ip, port=_port, hostname=hostname,
-                                command=f"curl -sk -X TRACE {_scheme}://{_curl_host}:{_port}/",
+                                command=f"curl -sk -X TRACE {_scheme}://{hostname or ip}:{_port}/",
                                 risk="MEDIUM",
                                 description=(
                                     f"The web server at {_scheme}://{ip}:{_port} responds "
@@ -8556,7 +8652,7 @@ def probe_uncertain_and_nonstandard_ports(
                     ):
                         try:
                             _ss_r = subprocess.run(
-                                f"curl -sk --max-time 5 {_scheme}://{_curl_host}:{_port}{_status_ep}",
+                                f"curl -sk --max-time 5 {_scheme}://{hostname or ip}:{_port}{_status_ep}",
                                 shell=True, capture_output=True, timeout=10,
                             )
                             _ss_body = _ss_r.stdout.decode("utf-8", errors="replace")
@@ -8566,7 +8662,7 @@ def probe_uncertain_and_nonstandard_ports(
                                 output_mgr.log_finding(
                                     title="Sensitive File Exposed: Status Page Exposed",
                                     ip=ip, port=_port, hostname=hostname,
-                                    command=f"curl -sk {_scheme}://{_curl_host}:{_port}{_status_ep}",
+                                    command=f"curl -sk {_scheme}://{hostname or ip}:{_port}{_status_ep}",
                                     risk="MEDIUM",
                                     description=(
                                         f"The {_status_label} page at {_scheme}://{ip}:{_port}"
@@ -8621,7 +8717,7 @@ def probe_uncertain_and_nonstandard_ports(
                     ):
                         try:
                             _dbg_r = subprocess.run(
-                                f"curl -sk --max-time 5 {_scheme}://{_curl_host}:{_port}{_dbg_ep}",
+                                f"curl -sk --max-time 5 {_scheme}://{hostname or ip}:{_port}{_dbg_ep}",
                                 shell=True, capture_output=True, timeout=10,
                             )
                             _dbg_body = _dbg_r.stdout.decode("utf-8", errors="replace").strip()
@@ -8638,7 +8734,7 @@ def probe_uncertain_and_nonstandard_ports(
                                 output_mgr.log_finding(
                                     title="Debug Endpoint Exposed",
                                     ip=ip, port=_port, hostname=hostname,
-                                    command=f"curl -sk {_scheme}://{_curl_host}:{_port}{_dbg_ep}",
+                                    command=f"curl -sk {_scheme}://{hostname or ip}:{_port}{_dbg_ep}",
                                     risk="MEDIUM",
                                     description=(
                                         f"The {_dbg_label} endpoint at "
@@ -8663,7 +8759,7 @@ def probe_uncertain_and_nonstandard_ports(
                     for _php_ep in ("/phpinfo.php", "/info.php"):
                         try:
                             _php_r = subprocess.run(
-                                f"curl -sk --max-time 5 {_scheme}://{_curl_host}:{_port}{_php_ep}",
+                                f"curl -sk --max-time 5 {_scheme}://{hostname or ip}:{_port}{_php_ep}",
                                 shell=True, capture_output=True, timeout=10,
                             )
                             _php_body = _php_r.stdout.decode("utf-8", errors="replace")
@@ -8675,7 +8771,7 @@ def probe_uncertain_and_nonstandard_ports(
                                 output_mgr.log_finding(
                                     title="Sensitive File Exposed: PHP Info Page Exposed",
                                     ip=ip, port=_port, hostname=hostname,
-                                    command=f"curl -sk {_scheme}://{_curl_host}:{_port}{_php_ep}",
+                                    command=f"curl -sk {_scheme}://{hostname or ip}:{_port}{_php_ep}",
                                     risk="HIGH",
                                     description=(
                                         f"A phpinfo() page is accessible at "
@@ -8726,7 +8822,7 @@ def probe_uncertain_and_nonstandard_ports(
                     # Phase G.12: robots.txt sensitive paths (SS-088)
                     try:
                         _rob_r = subprocess.run(
-                            f"curl -sk --max-time 5 {_scheme}://{_curl_host}:{_port}/robots.txt",
+                            f"curl -sk --max-time 5 {_scheme}://{hostname or ip}:{_port}/robots.txt",
                             shell=True, capture_output=True, timeout=10,
                         )
                         _rob_body = _rob_r.stdout.decode("utf-8", errors="replace")
@@ -8738,7 +8834,7 @@ def probe_uncertain_and_nonstandard_ports(
                                 output_mgr.log_finding(
                                     title="Information Disclosure: Sensitive Path in robots.txt",
                                     ip=ip, port=_port, hostname=hostname,
-                                    command=f"curl -sk {_scheme}://{_curl_host}:{_port}/robots.txt",
+                                    command=f"curl -sk {_scheme}://{hostname or ip}:{_port}/robots.txt",
                                     risk="INFO",
                                     description=(
                                         f"The robots.txt file at {_scheme}://{ip}:{_port} "
@@ -9377,6 +9473,7 @@ def probe_uncertain_and_nonstandard_ports(
                     output_mgr.log_finding(
                         title="AI/ML: Service Exposed",
                         ip=ip, port=_port, hostname=hostname,
+                        service=_ai_svc,
                         command=f"# AI probe {ip}:{_port}",
                         risk="MEDIUM",
                         description=(
@@ -10462,6 +10559,7 @@ def _port_scan_worker(
     nmblookup_path: "str | None" = None,
     avahi_resolve_path: "str | None" = None,
     hostnames_out: "dict | None" = None,
+    fqdn_list: "list[str] | None" = None,
 ) -> "tuple[str, dict]":
     """
     Self-contained worker: port scan one IP then run all per-port secondary
@@ -10503,7 +10601,26 @@ def _port_scan_worker(
         if hostnames_out is not None:
             hostnames_out[ip] = hostname
 
-    _tprint(f"  {Fore.WHITE}[>] Scanning {ip}...{Style.RESET_ALL}", flush=True)
+    # ── Build effective FQDN list for hostname-aware scanning ────────────
+    # Priority: user-supplied FQDNs > reverse-DNS hostname.
+    # When FQDNs are present, the first one becomes the primary hostname
+    # for port-scan display and non-web tools.  All FQDNs are iterated
+    # for web tools / TLS tools to cover virtual hosts.
+    _fqdns: list[str] = list(fqdn_list or [])
+    if _fqdns:
+        if hostname and hostname not in _fqdns:
+            _fqdns.append(hostname)
+        hostname = _fqdns[0]
+    elif hostname:
+        _fqdns = [hostname]
+
+    _fqdn_note = ""
+    if len(_fqdns) > 1:
+        _fqdn_note = f" ({len(_fqdns)} vhosts: {', '.join(_fqdns)})"
+    elif _fqdns:
+        _fqdn_note = f" ({_fqdns[0]})"
+
+    _tprint(f"  {Fore.WHITE}[>] Scanning {ip}{_fqdn_note}...{Style.RESET_ALL}", flush=True)
 
     open_ports, _ps_out_path, _port_states = port_scan(
         ip,
@@ -10763,7 +10880,8 @@ def _port_scan_worker(
         # ── Web probe ──────────────────────────────────────────────────────
         web_result = None
         if is_web and not getattr(args, "no_web", False):
-            web_result = probe_http(ip, port, timeout=args.web_timeout)
+            web_result = probe_http(ip, port, timeout=args.web_timeout,
+                                    hostname=hostname)
             out["web"] = web_result
             if web_result.get("responds"):
                 with _PRINT_LOCK:
@@ -11267,6 +11385,35 @@ def _port_scan_worker(
                 with _PRINT_LOCK:
                     if ssl_entry:
                         host_result["ssl_results"][port] = ssl_entry
+
+                # ── Additional FQDN TLS passes ──────────────────────────
+                # When multiple FQDNs resolve to this IP, run sslscan/testssl
+                # for each additional FQDN so we get the correct certificate
+                # for each virtual host (SNI-routed).
+                _extra_tls_fqdns = [f for f in _fqdns if f != hostname] if len(_fqdns) > 1 else []
+                for _vhost_tls in _extra_tls_fqdns:
+                    if not is_tls:
+                        break
+                    _tprint(
+                        f"  {Fore.CYAN}[*] TLS vhost pass: "
+                        f"{_vhost_tls} → {ip}:{port}{Style.RESET_ALL}"
+                    )
+                    if sslscan_path:
+                        try:
+                            run_sslscan(
+                                ip, port, sslscan_path,
+                                args.sslscan_timeout, output_mgr, _vhost_tls,
+                            )
+                        except Exception:
+                            pass
+                    if testssl_path:
+                        try:
+                            run_testssl(
+                                ip, port, testssl_path,
+                                args.testssl_timeout, output_mgr, _vhost_tls,
+                            )
+                        except Exception:
+                            pass
 
         # ── SNMP community string check + snmpwalk ─────────────────────
         svc_name = info.get("name", "").lower()
@@ -12100,6 +12247,63 @@ def _port_scan_worker(
                     )
                 except Exception as exc:
                     _tprint(f"{Fore.RED}  [!] wpscan error {ip}:{port}: {exc}{Style.RESET_ALL}")
+
+            # ── Additional FQDN passes (virtual host coverage) ───────────
+            # The primary hostname was already used above.  For every
+            # additional user-supplied FQDN that resolved to this IP, run
+            # a lightweight web tool pass so each vhost gets its own
+            # headers/directories/technology scan.
+            _extra_fqdns = [f for f in _fqdns if f != hostname] if len(_fqdns) > 1 else []
+            for _vhost in _extra_fqdns:
+                _tprint(
+                    f"  {Fore.CYAN}[*] Additional vhost pass: "
+                    f"{_vhost} → {ip}:{port}{Style.RESET_ALL}"
+                )
+                _vh_result = probe_http(
+                    ip, port, timeout=args.web_timeout, hostname=_vhost,
+                )
+                if not _vh_result.get("responds"):
+                    continue
+                _vh_scheme = (_vh_result.get("scheme")
+                              or ("https" if port_is_tls(port, _vh_result) else "http"))
+                if shcheck_path and not getattr(args, "no_shcheck", False):
+                    try:
+                        run_shcheck(
+                            ip, port, _vh_scheme, _vhost,
+                            shcheck_path, output_mgr, timeout=60,
+                        )
+                    except Exception:
+                        pass
+                if webanalyze_path and not getattr(args, "no_webanalyze", False) and not _WEBANALYZE_ARCH_SKIP:
+                    try:
+                        _vh_wp = run_webanalyze(
+                            ip, port, _vh_scheme, _vhost,
+                            webanalyze_path, output_mgr,
+                            timeout=getattr(args, "web_timeout", 60),
+                        )
+                    except Exception:
+                        _vh_wp = False
+                else:
+                    _vh_wp = False
+                if gobuster_path and not getattr(args, "no_gobuster", False):
+                    try:
+                        run_gobuster(
+                            ip, port, _vh_scheme, _vhost,
+                            gobuster_path, output_mgr,
+                            timeout=getattr(args, "gobuster_timeout", 600),
+                        )
+                    except Exception:
+                        pass
+                if _vh_wp and wpscan_path and not getattr(args, "no_wpscan", False):
+                    try:
+                        run_wpscan(
+                            ip, port, _vh_scheme, _vhost,
+                            wpscan_path, output_mgr,
+                            timeout=getattr(args, "wpscan_timeout", 300),
+                            wpscan_token=wpscan_token,
+                        )
+                    except Exception:
+                        pass
 
         return out
 
@@ -13526,7 +13730,7 @@ def port_is_tls(port: int, web_result: dict | None) -> bool:
     return False
 
 
-def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
+def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 120,
                 output_mgr: "OutputManager | None" = None,
                 hostname: str | None = None) -> dict:
     """
@@ -13563,10 +13767,13 @@ def run_sslscan(ip: str, port: int, sslscan_path: str, timeout: int = 60,
         "--no-groups",
         "--no-renegotiation",
     ]
+    if hostname:
+        cmd.append(f"--sni-name={hostname}")
     if xml_file:
         cmd.append(f"--xml={xml_file}")
     cmd.append(f"{ip}:{port}")
-    _tprint(f"  {Fore.CYAN}[*] sslscan {ip}:{port}{Style.RESET_ALL}")
+    _sni_note = f" (SNI: {hostname})" if hostname else ""
+    _tprint(f"  {Fore.CYAN}[*] sslscan {ip}:{port}{_sni_note}{Style.RESET_ALL}")
     try:
         # Use Popen + communicate() instead of _run() so that we can
         # call _kill_proc_tree(proc) on timeout.  _run(timeout=N) raises
@@ -14031,8 +14238,13 @@ def run_testssl(ip: str, port: int, testssl_path: str, timeout: int = 300,
     ]
     if json_file_ts:
         cmd += ["--jsonfile", str(json_file_ts)]
-    cmd.append(f"{ip}:{port}")
-    _tprint(f"  {Fore.CYAN}[*] testssl {ip}:{port}{Style.RESET_ALL}")
+    if hostname:
+        cmd += ["--ip", ip]
+        cmd.append(f"{hostname}:{port}")
+    else:
+        cmd.append(f"{ip}:{port}")
+    _sni_note = f" (SNI: {hostname})" if hostname else ""
+    _tprint(f"  {Fore.CYAN}[*] testssl {ip}:{port}{_sni_note}{Style.RESET_ALL}")
     try:
         # Use Popen + communicate() instead of _run() so that we can
         # call _kill_proc_tree(proc) on timeout.  _run(timeout=N) raises
@@ -15671,7 +15883,7 @@ _ARGPARSE_DEFAULTS: dict = {
     "port_scan_workers":  _SCAN_CONCURRENCY,
     "web_timeout":        4,
     "banner_timeout":     3.0,
-    "sslscan_timeout":    60,
+    "sslscan_timeout":    120,
     "testssl_timeout":    300,
     "nuclei_timeout":     600,
     "hydra_timeout":      300,
@@ -15718,7 +15930,7 @@ _SETTINGS_TEMPLATE: dict = {
         "port_scan_workers": _SCAN_CONCURRENCY,
         "web_timeout":       4,
         "banner_timeout":    3.0,
-        "sslscan_timeout":   60,
+        "sslscan_timeout":   120,
         "testssl_timeout":   300,
         "nuclei_timeout":    600,
         "brutespray_timeout": 600,
@@ -19396,7 +19608,12 @@ _CPE_VENDOR_MAP = {
     "vsftpd": "beasts", "proftpd": "proftpd_project", "pure-ftpd": "pureftpd",
     "mysql": "oracle", "mariadb": "mariadb", "postgresql": "postgresql",
     "php": "php", "wordpress": "wordpress", "drupal": "drupal", "joomla": "joomla",
-    "tomcat": "apache", "iis": "microsoft", "lighttpd": "lighttpd",
+    "tomcat": "apache", "iis": "microsoft", "microsoft iis": "microsoft",
+    "microsoft-iis": "microsoft", "microsoft httpapi": "microsoft",
+    "microsoft-httpapi": "microsoft", "httpapi": "microsoft",
+    "microsoft sql server": "microsoft", "mssql": "microsoft",
+    "sql server": "microsoft", "microsoft windows rpc": "microsoft",
+    "lighttpd": "lighttpd",
     "bind": "isc", "dnsmasq": "thekelleys", "postfix": "postfix",
     "dovecot": "dovecot", "exim": "exim", "sendmail": "sendmail",
     "redis": "redis", "mongodb": "mongodb", "elasticsearch": "elastic",
@@ -19429,7 +19646,14 @@ _CPE_PRODUCT_MAP = {
     "apache": "http_server", "apache httpd": "http_server",
     "apache http server": "http_server", "openssh": "openssh",
     "mysql": "mysql", "mariadb": "mariadb", "tomcat": "tomcat",
-    "iis": "internet_information_services", "node.js": "node.js",
+    "iis": "internet_information_services",
+    "microsoft iis": "internet_information_services",
+    "microsoft-iis": "internet_information_services",
+    "microsoft httpapi": "http_api", "microsoft-httpapi": "http_api",
+    "httpapi": "http_api",
+    "microsoft sql server": "sql_server", "mssql": "sql_server",
+    "sql server": "sql_server",
+    "microsoft windows rpc": "windows", "node.js": "node.js",
     "nodejs": "node.js", "vue.js": "vue.js", "pure-ftpd": "pure-ftpd",
     "bind": "bind", "cups": "cups", "f5 big-ip": "big-ip",
 }
@@ -19616,7 +19840,7 @@ def correlate_software_cves(
         vulns = _query_osv_cves(name, version)
         source = "osv"
 
-        if not vulns and _nvd_calls < 20:
+        if not vulns and _nvd_calls < 40:
             nvd_results = _query_nvd_cves(name, version)
             _nvd_calls += 1
             if _nvd_calls % 5 == 0:
@@ -24687,17 +24911,13 @@ def run_shcheck(
     shcheck is a Python script (/opt/shcheck/shcheck.py) or binary that checks
     HTTP response headers.  All missing headers are logged as LOW findings.
     """
-    url = _clean_url(scheme, ip, port)
+    _target_host = hostname or ip
+    url = _clean_url(scheme, _target_host, port)
     out_dir = output_mgr.web_path(ip, port)
     safe_ip   = ip.replace(".", "_")
     out_file  = out_dir / f"{safe_ip}_{port}_shcheck.txt"
     json_file = out_dir / f"{safe_ip}_{port}_shcheck.json"
 
-    # shcheck is sometimes a raw Python script — detect and prefix with python3.
-    # -k             skip TLS certificate verification (required for self-signed certs
-    #                common in internal pentests; without it shcheck aborts on HTTPS).
-    # --colors=none  suppress ANSI colour codes in output for clean text parsing.
-    # -j             JSON output (supported in current shcheck versions).
     _shcheck_flags = ["-k", "--colors=none", "-j"]
     if shcheck_path.endswith(".py"):
         cmd = [sys.executable, shcheck_path] + _shcheck_flags + [url]
@@ -24969,7 +25189,8 @@ def run_gobuster(
         )
         return
 
-    url = _clean_url(scheme, ip, port)
+    _target_host = hostname or ip
+    url = _clean_url(scheme, _target_host, port)
     out_dir = output_mgr.web_path(ip, port)
     safe_ip  = ip.replace(".", "_")
     out_file = out_dir / f"{safe_ip}_{port}_gobuster.txt"
@@ -25172,7 +25393,8 @@ def run_webanalyze(
     software inventory.  Returns True if WordPress was detected (so the caller
     can trigger WPScan), False otherwise.
     """
-    url = _clean_url(scheme, ip, port)
+    _target_host = hostname or ip
+    url = _clean_url(scheme, _target_host, port)
     out_dir = output_mgr.web_path(ip, port)
     safe_ip  = ip.replace(".", "_")
     out_file = out_dir / f"{safe_ip}_{port}_webanalyze.txt"
@@ -25323,7 +25545,8 @@ def run_wpscan(
     - Plugin vulnerabilities         → HIGH
     - User enumeration results       → MEDIUM
     """
-    url = _clean_url(scheme, ip, port)
+    _target_host = hostname or ip
+    url = _clean_url(scheme, _target_host, port)
     out_dir = output_mgr.web_path(ip, port)
     safe_ip  = ip.replace(".", "_")
     out_file = out_dir / f"{safe_ip}_{port}_wpscan.json"
@@ -34964,6 +35187,7 @@ def scan_scope(
     target_count:    int = 0,
     exclude_ips:     "set | None" = None,
     exclude_nets:    "list | None" = None,
+    fqdn_map:        "dict[str, list[str]] | None" = None,
 ) -> dict:
     """
     Run a complete discovery + port + web + banner + SSL scan pass for one
@@ -35016,6 +35240,7 @@ def scan_scope(
     _sod = getattr(args, "scope_output_dirs", {})
     _scope_dir = _sod.get(scope, "")
     output_mgr = OutputManager(args.project, scope, scope_output_dir=_scope_dir)
+    output_mgr.fqdn_map = fqdn_map or {}
     output_mgr.print_summary()
     eng = getattr(args, "engagement", {}) or {}
     _write_project_meta(
@@ -35215,6 +35440,7 @@ def scan_scope(
                             "printer", "redis",
                         ],
                     )
+                _fm = fqdn_map or {}
                 for ip in _ca:
                     port_futures[pool.submit(
                         _port_scan_worker,
@@ -35244,6 +35470,7 @@ def scan_scope(
                         nmblookup_path,
                         avahi_resolve_path,
                         hostnames,
+                        _fm.get(ip),
                     )] = ip
 
                 # Update checkpoint
@@ -35341,6 +35568,7 @@ def scan_scope(
                                 ipmitool_path, rustscan_path,
                                 True, nmblookup_path,
                                 avahi_resolve_path, hostnames,
+                                _fm.get(ip),
                             )] = ip
                     if _rca:
                         _tprint(
@@ -35824,6 +36052,7 @@ def scan_scope(
                 _nuclei_batch_ips: list = []
 
                 # ── Submit one port-scan worker per alive host ────────────
+                _fm = fqdn_map or {}
                 for ip in alive_ips:
                     port_futures[pool.submit(
                         _port_scan_worker,
@@ -35849,6 +36078,8 @@ def scan_scope(
                         showmount_path,
                         ipmitool_path,
                         rustscan_path,
+                        False, None, None, None,
+                        _fm.get(ip),
                     )] = ip
 
                 # ── Phase 1c: Background rustscan rescue ──────────────────
@@ -35932,7 +36163,8 @@ def scan_scope(
                                 adenum_path, scope, cred_store, gobuster_path,
                                 wpscan_path, webanalyze_path, shcheck_path,
                                 wpscan_token, showmount_path, ipmitool_path,
-                                rustscan_path)
+                                rustscan_path, False, None, None, None,
+                                _fm.get(_r_ip))
                             with _rescue_lock:
                                 _rescue_pending.append((_f, _r_ip))
                     if not _rescued:
@@ -37541,8 +37773,10 @@ def main():
         else:
             resolved.append(t)
 
-    # Resolve any URL/FQDN targets to IPs (substitutes in-place)
-    resolved = _resolve_url_fqdn_targets(resolved)
+    # Resolve any URL/FQDN targets to IPs; capture FQDN→IP map for
+    # hostname-aware scanning (SNI, Host headers, per-FQDN web tools).
+    _non_fqdn_specs = [s for s in resolved if _extract_hostname_from_spec(s) is None]
+    resolved, _fqdn_map = _resolve_url_fqdn_targets(resolved, cidr_specs=_non_fqdn_specs)
 
     # ── Count and conditionally expand targets ──────────────────────────
     _target_count = count_targets(resolved)
@@ -38073,7 +38307,8 @@ def main():
                              zap_path=zap_path,
                              target_count=_int_count,
                              exclude_ips=_local_in_scope,
-                             exclude_nets=_project_exclude_nets)
+                             exclude_nets=_project_exclude_nets,
+                             fqdn_map=_fqdn_map)
         combined_results["int"] = results
         _pm.set_phase_status("scope_int", "complete", label="Scan: Internal")
         _vc.status("scope_int", label="Scan: Internal", status="complete")
@@ -38124,7 +38359,8 @@ def main():
                              o365spray_path=o365spray_path,
                              target_count=_ext_count,
                              exclude_ips=_local_in_scope,
-                             exclude_nets=_project_exclude_nets)
+                             exclude_nets=_project_exclude_nets,
+                             fqdn_map=_fqdn_map)
         combined_results["ext"] = results
         _pm.set_phase_status("scope_ext", "complete", label="Scan: External")
         _vc.status("scope_ext", label="Scan: External", status="complete")
