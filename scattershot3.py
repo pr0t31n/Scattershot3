@@ -15670,6 +15670,7 @@ _ARGPARSE_DEFAULTS: dict = {
     "sslscan_timeout":    60,
     "testssl_timeout":    300,
     "nuclei_timeout":     600,
+    "hydra_timeout":      300,
     "wpscan_token":       None,
     "discovery_min_rate":        None,
     "discovery_min_parallelism": None,
@@ -15717,6 +15718,7 @@ _SETTINGS_TEMPLATE: dict = {
         "testssl_timeout":   300,
         "nuclei_timeout":    600,
         "brutespray_timeout": 600,
+        "hydra_timeout":     300,
         "wpscan_token":      "",
         "discovery_min_rate":        0,
         "discovery_min_parallelism": 20,
@@ -15814,7 +15816,8 @@ def load_settings(path: "str | Path") -> dict:
     # ── Validate scan fields ──────────────────────────────────────────────────
     bool_scan_keys  = ["fast", "no_ssl", "no_banner", "no_web", "no_nuclei", "no_brute", "no_cve_correlation"]
     int_scan_keys   = ["port_scan_workers", "web_timeout",
-                       "sslscan_timeout", "testssl_timeout", "nuclei_timeout"]
+                       "sslscan_timeout", "testssl_timeout", "nuclei_timeout",
+                       "hydra_timeout"]
     float_scan_keys = ["banner_timeout"]
 
     errors: list[str] = []
@@ -15935,7 +15938,8 @@ def apply_settings(args: argparse.Namespace, settings: dict) -> None:
 
     # ── Numeric options ───────────────────────────────────────────────────────
     for key in ("port_scan_workers", "web_timeout",
-                "sslscan_timeout", "testssl_timeout", "nuclei_timeout"):
+                "sslscan_timeout", "testssl_timeout", "nuclei_timeout",
+                "hydra_timeout"):
         if key in scan and getattr(args, key, None) == _ARGPARSE_DEFAULTS[key]:
             setattr(args, key, int(scan[key]))
 
@@ -16288,6 +16292,11 @@ Examples:
         "--brutespray-timeout", metavar="SECS", dest="brutespray_timeout",
         type=int, default=600,
         help="Timeout for BruteSpray credential spray (default: 600s).",
+    )
+    parser.add_argument(
+        "--hydra-timeout", metavar="SECS", dest="hydra_timeout",
+        type=int, default=300,
+        help="Per-service timeout for Hydra brute force (default: 300s).",
     )
     parser.add_argument(
         "--no-shcheck", action="store_true", dest="no_shcheck",
@@ -33346,16 +33355,15 @@ _HYDRA_SERVICES: "dict[int, str]" = {
 }
 
 _HYDRA_PASSWORD_LISTS = [
-    "/usr/share/seclists/Passwords/Common-Credentials/10k-most-common.txt",
-    "/usr/share/seclists/Passwords/Common-Credentials/1000-most-common-passwords.txt",
     "/usr/share/seclists/Passwords/darkweb2017-top100.txt",
     "/usr/share/wordlists/fasttrack.txt",
+    "/usr/share/seclists/Passwords/Common-Credentials/1000-most-common-passwords.txt",
+    "/usr/share/seclists/Passwords/Common-Credentials/10k-most-common.txt",
     "/usr/share/wordlists/rockyou.txt",
 ]
 
 _HYDRA_USER_LISTS = [
     "/usr/share/seclists/Usernames/top-usernames-shortlist.txt",
-    "/usr/share/seclists/Usernames/Names/names.txt",
     "/usr/share/wordlists/metasploit/unix_users.txt",
 ]
 
@@ -34194,12 +34202,30 @@ def _is_redirect_out_of_scope(ip: str, port: int, scheme: str,
             f"(Location: {location[:80]})")
 
 
+def _check_brute_settings(settings_file: "str | Path | None") -> "dict":
+    result = {"no_brute": False, "hydra_timeout": 300}
+    if not settings_file:
+        return result
+    try:
+        raw = json.loads(Path(settings_file).read_text(encoding="utf-8"))
+        scan = raw.get("scan", {})
+        if scan.get("no_brute"):
+            result["no_brute"] = True
+        ht = scan.get("hydra_timeout")
+        if ht is not None:
+            result["hydra_timeout"] = int(ht)
+    except Exception:
+        pass
+    return result
+
+
 def run_hydra_brute(
     ip: str, open_ports: "dict[int, dict]", output_mgr: "OutputManager",
     hydra_path: str, hostname: "str | None" = None,
     cred_store: "CredentialStore | None" = None,
     extra_users: "list[str] | None" = None, timeout: int = 300,
     scope_ips: "set[str] | None" = None,
+    settings_file: "str | Path | None" = None,
 ) -> None:
     """Hydra credential brute force against detected services."""
     passlist = _find_wordlist_ss3(_HYDRA_PASSWORD_LISTS)
@@ -34224,6 +34250,11 @@ def run_hydra_brute(
         svc = _HYDRA_SERVICES.get(port)
         if not svc:
             continue
+        _brute_cfg = _check_brute_settings(settings_file)
+        if _brute_cfg["no_brute"]:
+            _tprint(f"  {Fore.YELLOW}[~] Hydra: brute force disabled via settings — stopping{Style.RESET_ALL}")
+            return
+        timeout = _brute_cfg["hydra_timeout"]
         out_file = hydra_dir / f"{ip.replace('.','_')}_{port}_{svc}.txt"
         # Hydra's own -o file (machine-parseable credentials-only) lives
         # alongside the human-readable scan log. Use a sidecar filename so
@@ -34857,6 +34888,39 @@ def run_o365_enum(
     return valid_accounts
 
 
+def _save_scan_state(scope, alive_ips, all_results, hostnames=None):
+    if _pm is None:
+        return
+    _state = _pm.load_runtime_state()
+    _state[f"{scope}_alive_ips"] = list(alive_ips)
+    _state[f"{scope}_hostnames"] = dict(hostnames) if hostnames else {}
+    _ar = {}
+    for ip, data in all_results.items():
+        _ar[ip] = {
+            "alive": data.get("alive", True),
+            "hostname": data.get("hostname"),
+            "open_ports": data.get("open_ports", {}),
+            "scope": data.get("scope", scope),
+            "web_services": data.get("web_services", []),
+            "ssl_results": data.get("ssl_results", {}),
+            "source_ip": data.get("source_ip"),
+            "source_iface": data.get("source_iface"),
+            "source_host": data.get("source_host"),
+        }
+    _state[f"{scope}_all_results"] = _ar
+    _pm.save_runtime_state(_state)
+
+
+def _restore_scan_state(scope):
+    if _pm is None:
+        return [], {}, {}
+    _state = _pm.load_runtime_state()
+    alive_ips = _state.get(f"{scope}_alive_ips", [])
+    hostnames = _state.get(f"{scope}_hostnames", {})
+    all_results = _state.get(f"{scope}_all_results", {})
+    return alive_ips, hostnames, all_results
+
+
 def scan_scope(
     scope: str,
     targets: list,
@@ -34987,6 +35051,26 @@ def scan_scope(
     # For smaller target sets, the original monolithic pipeline is used.
     _use_chunked = bool(raw_specs) and _n_targets > 4096
 
+    # ── Per-phase checkpoint: check if Phases 1+2 already completed ──────
+    _p12_key = f"{scope}_p1p2"
+    _p12_resumed = False
+    if _pm is not None and _pm.is_phase_complete(_p12_key):
+        _tprint(f"  {Fore.GREEN}[✓] {scope_label} Phases 1+2 already complete "
+                f"— restoring from checkpoint{Style.RESET_ALL}")
+        alive_ips, hostnames, all_results = _restore_scan_state(scope)
+        alive_count = len(alive_ips)
+        alive_map = {ip: True for ip in alive_ips}
+        _p12_resumed = True
+        run_nuclei_flag = bool(
+            nuclei_path and not getattr(args, "no_nuclei", False) and alive_ips
+        )
+        _vc.status(f"{scope}_p1_discovery", label="Phase 1: Host Discovery",
+                   status="complete", step=f"{alive_count} alive (resumed)")
+        _vc.status(f"{scope}_p2_portscan",
+                   label="Phase 2: Port Scan & Service Analysis",
+                   status="complete", step="(resumed)")
+        OutputManager._resume_mode = True
+
     _1b_timeout  = "30s" if scope == "ext" else "15s"
     _1b_retries  = "2"
     _1b_min_par = getattr(args, "discovery_min_parallelism", None) or 20
@@ -35007,7 +35091,9 @@ def scan_scope(
         f"--host-timeout {_1b_timeout}"
     )
 
-    if _use_chunked:
+    if _p12_resumed:
+        pass  # Phases 1+2 restored from checkpoint — skip to Phase 3+
+    elif _use_chunked:
         # ══════════════════════════════════════════════════════════════════════
         # CHUNKED DISCOVERY PIPELINE — /20 chunks, pipelined with port scans
         # ══════════════════════════════════════════════════════════════════════
@@ -35499,6 +35585,10 @@ def scan_scope(
             label="Phase 2: Port Scan & Service Analysis",
             status="complete" if alive_ips else "skipped",
         )
+        if _pm is not None and alive_ips:
+            _save_scan_state(scope, alive_ips, all_results, hostnames)
+            _pm.set_phase_status(_p12_key, "complete",
+                                 label="Phases 1+2: Discovery + Port Scan")
 
     else:
         # ══════════════════════════════════════════════════════════════════════
@@ -35973,6 +36063,10 @@ def scan_scope(
 
         _vc.status(f"{scope}_p2_portscan", label="Phase 2: Port Scan & Service Analysis",
                    status="complete" if alive_ips else "skipped")
+        if _pm is not None and alive_ips:
+            _save_scan_state(scope, alive_ips, all_results, hostnames)
+            _pm.set_phase_status(_p12_key, "complete",
+                                 label="Phases 1+2: Discovery + Port Scan")
 
     # Recompute after rescue — rescued hosts are now in alive_map
     if _lazy:
@@ -36086,16 +36180,14 @@ def scan_scope(
         pass
 
     # ── Phase 3: Nuclei web-URL top-up pass ─────────────────────────────────
-    # Now that port scans are complete we know which URLs are live.  Run a
-    # second, focused Nuclei pass against confirmed HTTP/HTTPS endpoints so
-    # web-specific templates (sql-injection, xss, misconfig, etc.) fire with
-    # real scheme+port URLs.  Bare IPs already covered by the concurrent pass
-    # are excluded to avoid redundant work.
-    # NOTE: results.json, correlated.json and the findings summary are written
-    # AFTER this pass completes so they capture all Nuclei findings.
-    if not nuclei_path or getattr(args, "no_nuclei", False):
+    _p3_key = f"{scope}_p3_nuclei"
+    if _pm is not None and _pm.is_phase_complete(_p3_key):
+        _tprint(f"  {Fore.GREEN}[✓] {scope_label} Phase 3 already complete — skipping{Style.RESET_ALL}")
+        _vc.status(f"{scope}_p3_nuclei", label="Phase 3: Nuclei Web Scan",
+                   status="complete", step="(resumed)")
+    elif not nuclei_path or getattr(args, "no_nuclei", False):
         _vc.status(f"{scope}_p3_nuclei", label="Phase 3: Nuclei Web Scan", status="skipped")
-    if run_nuclei_flag and alive_ips:
+    elif run_nuclei_flag and alive_ips:
         web_url_targets: list[str] = []
         # Collect confirmed web URLs from port-scan results
         for ip, r in all_results.items():
@@ -36121,6 +36213,8 @@ def scan_scope(
             )
             _vc.status(f"{scope}_p3_nuclei", label="Phase 3: Nuclei Web Scan",
                        status="complete")
+            if _pm is not None:
+                _pm.set_phase_status(_p3_key, "complete", label="Phase 3: Nuclei Web Scan")
         else:
             print(
                 f"{Fore.YELLOW}[~] No confirmed web endpoints — "
@@ -36128,15 +36222,21 @@ def scan_scope(
             )
             _vc.status(f"{scope}_p3_nuclei", label="Phase 3: Nuclei Web Scan",
                        status="skipped", step="no web endpoints")
+            if _pm is not None:
+                _pm.set_phase_status(_p3_key, "complete", label="Phase 3: Nuclei Web Scan (skipped)")
     elif nuclei_path and getattr(args, "no_nuclei", False):
-        pass   # user disabled nuclei — already noted at startup
+        if _pm is not None:
+            _pm.set_phase_status(_p3_key, "complete", label="Phase 3: Nuclei Web Scan (disabled)")
     elif not nuclei_path and not getattr(args, "no_nuclei", False):
         print(f"{Fore.YELLOW}[~] Nuclei not available — web-URL pass skipped.{Style.RESET_ALL}")
+        if _pm is not None:
+            _pm.set_phase_status(_p3_key, "complete", label="Phase 3: Nuclei Web Scan (unavailable)")
 
     # ── Phase 4: searchsploit — exploit-DB lookup against nmap XML files ────
-    # Run after all port scans and Nuclei passes so that all nmap XML files
-    # are fully written before searchsploit reads them.
-    if searchsploit_path and not getattr(args, "no_searchsploit", False) and alive_ips:
+    _p4_key = f"{scope}_p4_exploit"
+    if _pm is not None and _pm.is_phase_complete(_p4_key):
+        _tprint(f"  {Fore.GREEN}[✓] {scope_label} Phase 4 already complete — skipping{Style.RESET_ALL}")
+    elif searchsploit_path and not getattr(args, "no_searchsploit", False) and alive_ips:
         print(
             f"\n{Fore.CYAN}[*] {scope_label} Phase 4: searchsploit "
             f"(nmap XML exploit lookup)...{Style.RESET_ALL}"
@@ -36151,6 +36251,8 @@ def scan_scope(
             )
             _vc.status(f"{scope}_p4_exploit", label="Phase 4: Searchsploit",
                        status="complete")
+            if _pm is not None:
+                _pm.set_phase_status(_p4_key, "complete", label="Phase 4: Searchsploit")
         except Exception as exc:
             print(f"{Fore.RED}[!] searchsploit error: {exc}{Style.RESET_ALL}")
             _vc.status(f"{scope}_p4_exploit", label="Phase 4: Searchsploit",
@@ -36173,14 +36275,22 @@ def scan_scope(
                         _all_cves.append(_cv)
     except Exception:
         pass
-    if _all_cves and not getattr(args, "no_sploitus", False):
+    _p4b_key = f"{scope}_p4b_sploitus"
+    if _pm is not None and _pm.is_phase_complete(_p4b_key):
+        _tprint(f"  {Fore.GREEN}[✓] {scope_label} Phase 4b already complete — skipping{Style.RESET_ALL}")
+    elif _all_cves and not getattr(args, "no_sploitus", False):
         print(f"\n{Fore.CYAN}[*] {scope_label} Phase 4b: Sploitus ({len(_all_cves)} CVE(s))...{Style.RESET_ALL}")
         _vc.status(f"{scope}_p4b_sploitus", label="Phase 4b: Sploitus", status="running")
         run_sploitus(_all_cves, output_mgr, scope)
         _vc.status(f"{scope}_p4b_sploitus", label="Phase 4b: Sploitus", status="complete")
+        if _pm is not None:
+            _pm.set_phase_status(_p4b_key, "complete", label="Phase 4b: Sploitus")
 
     # ── Phase 4c: Metasploit module search ───────────────────────────────────
-    if _all_cves and not getattr(args, "no_metasploit", False):
+    _p4c_key = f"{scope}_p4c_metasploit"
+    if _pm is not None and _pm.is_phase_complete(_p4c_key):
+        _tprint(f"  {Fore.GREEN}[✓] {scope_label} Phase 4c already complete — skipping{Style.RESET_ALL}")
+    elif _all_cves and not getattr(args, "no_metasploit", False):
         print(f"\n{Fore.CYAN}[*] {scope_label} Phase 4c: Metasploit module search "
               f"({len(_all_cves)} CVE(s))...{Style.RESET_ALL}")
         _vc.status(f"{scope}_p4c_metasploit",
@@ -36193,13 +36303,18 @@ def scan_scope(
             )
             _vc.status(f"{scope}_p4c_metasploit",
                        label="Phase 4c: Metasploit Search", status="complete")
+            if _pm is not None:
+                _pm.set_phase_status(_p4c_key, "complete", label="Phase 4c: Metasploit Search")
         except Exception as _msf_exc:
             print(f"{Fore.RED}[!] Metasploit search error: {_msf_exc}{Style.RESET_ALL}")
             _vc.status(f"{scope}_p4c_metasploit",
                        label="Phase 4c: Metasploit Search", status="error")
 
     # ── Phase 4d: CVE Correlation — OSV + NVD + CPE matching ────────────────
-    if alive_ips and not getattr(args, "no_cve_correlation", False):
+    _p4d_key = f"{scope}_p4d_cve"
+    if _pm is not None and _pm.is_phase_complete(_p4d_key):
+        _tprint(f"  {Fore.GREEN}[✓] {scope_label} Phase 4d already complete — skipping{Style.RESET_ALL}")
+    elif alive_ips and not getattr(args, "no_cve_correlation", False):
         print(
             f"\n{Fore.CYAN}[*] {scope_label} Phase 4d: CVE Correlation "
             f"(software inventory → OSV/NVD)...{Style.RESET_ALL}"
@@ -36225,9 +36340,17 @@ def scan_scope(
             print(f"{Fore.RED}[!] CVE correlation error: {exc}{Style.RESET_ALL}")
             _vc.status(f"{scope}_p4d_cve", label="Phase 4d: CVE Correlation",
                        status="error", step=str(exc)[:80])
+        if _pm is not None:
+            _pm.set_phase_status(_p4d_key, "complete", label="Phase 4d: CVE Correlation")
 
     # ── Phase 5: Database Attack Suite ───────────────────────────────────────
-    _any_db_tool = odat_path or msdat_path or enumdb_path
+    _p5_key = f"{scope}_p5_db"
+    if _pm is not None and _pm.is_phase_complete(_p5_key):
+        _tprint(f"  {Fore.GREEN}[✓] {scope_label} Phase 5 already complete — skipping{Style.RESET_ALL}")
+        _any_db_tool = False
+        _db_ports_present = False
+    else:
+        _any_db_tool = odat_path or msdat_path or enumdb_path
     _db_ports_present = any(
         p in (_ORACLE_PORTS | _MSSQL_PORTS | _MYSQL_PORTS)
         for _d in all_results.values() for p in _d.get("open_ports", {})
@@ -36242,9 +36365,14 @@ def scan_scope(
                                odat_path=odat_path, msdat_path=msdat_path,
                                enumdb_path=enumdb_path, cred_store=cred_store)
         _vc.status(f"{scope}_p5_db", label="Phase 5: Database Attacks", status="complete")
+        if _pm is not None:
+            _pm.set_phase_status(_p5_key, "complete", label="Phase 5: Database Attacks")
 
     # ── Phase 6: Hydra Credential Brute Force ────────────────────────────────
-    if hydra_path and alive_ips and not getattr(args, "no_brute", False):
+    _p6_key = f"{scope}_p6_brute"
+    if _pm is not None and _pm.is_phase_complete(_p6_key):
+        _tprint(f"  {Fore.GREEN}[✓] {scope_label} Phase 6 already complete — skipping{Style.RESET_ALL}")
+    elif hydra_path and alive_ips and not getattr(args, "no_brute", False):
         print(f"\n{Fore.CYAN}[*] {scope_label} Phase 6: Hydra credential brute force...{Style.RESET_ALL}")
         _vc.status(f"{scope}_p6_brute", label="Phase 6: Hydra Brute Force", status="running")
         _known_users: list[str] = []
@@ -36252,17 +36380,29 @@ def scan_scope(
             for _c in cred_store.get_all():
                 if _c.get("username"):
                     _known_users.append(_c["username"])
+        _hyd_sf = getattr(args, "settings_file", None)
         for _hyd_ip, _hyd_data in all_results.items():
+            _brute_cfg = _check_brute_settings(_hyd_sf)
+            if _brute_cfg["no_brute"]:
+                _tprint(f"  {Fore.YELLOW}[~] Hydra: brute force disabled via settings — stopping{Style.RESET_ALL}")
+                break
             _hyd_op = _hyd_data.get("open_ports", {})
             if any(p in _HYDRA_SERVICES for p in _hyd_op):
                 run_hydra_brute(_hyd_ip, _hyd_op, output_mgr, hydra_path=hydra_path,
                                 hostname=_hyd_data.get("hostname"), cred_store=cred_store,
                                 extra_users=_known_users or None,
-                                scope_ips=set(targets))
+                                timeout=_brute_cfg["hydra_timeout"],
+                                scope_ips=set(targets),
+                                settings_file=_hyd_sf)
         _vc.status(f"{scope}_p6_brute", label="Phase 6: Hydra Brute Force", status="complete")
+        if _pm is not None:
+            _pm.set_phase_status(_p6_key, "complete", label="Phase 6: Hydra Brute Force")
 
     # ── Phase 6b: BruteSpray — default credential spray against nmap XML ─────
-    if alive_ips and not getattr(args, "no_brute", False):
+    _p6b_key = f"{scope}_p6b_brutespray"
+    if _pm is not None and _pm.is_phase_complete(_p6b_key):
+        _tprint(f"  {Fore.GREEN}[✓] {scope_label} Phase 6b already complete — skipping{Style.RESET_ALL}")
+    elif alive_ips and not getattr(args, "no_brute", False) and not _check_brute_settings(getattr(args, "settings_file", None))["no_brute"]:
         _nmap_xmls = sorted(
             output_mgr.root.rglob("portscan_*.xml"),
             key=lambda p: p.stat().st_mtime, reverse=True,
@@ -36279,9 +36419,16 @@ def scan_scope(
         else:
             _vc.status(f"{scope}_p6b_brutespray", label="Phase 6b: BruteSpray",
                        status="skipped", step="no nmap XML found")
+        if _pm is not None:
+            _pm.set_phase_status(_p6b_key, "complete", label="Phase 6b: BruteSpray")
 
     # ── Phase 12: Active Directory Assessment ────────────────────────────────
-    _dcs = _detect_domain_controllers(all_results)
+    _p12_ad_key = f"{scope}_p12_ad"
+    if _pm is not None and _pm.is_phase_complete(_p12_ad_key):
+        _tprint(f"  {Fore.GREEN}[✓] {scope_label} Phase 12 already complete — skipping{Style.RESET_ALL}")
+        _dcs = []
+    else:
+        _dcs = _detect_domain_controllers(all_results)
     for _dc_ip_feed, _dc_hn_feed in _dcs:
         _dc_domain_feed = _dc_hn_feed.split(".", 1)[-1] if _dc_hn_feed and "." in _dc_hn_feed else ""
         if _dc_domain_feed:
@@ -36332,12 +36479,20 @@ def scan_scope(
         except Exception as _kerb_exc:
             _tprint(f"  {Fore.RED}[!] Kerberoasting error: {_kerb_exc}{Style.RESET_ALL}")
         _vc.status(f"{scope}_p12_ad", label="Phase 12: AD Assessment", status="complete")
+        if _pm is not None:
+            _pm.set_phase_status(_p12_ad_key, "complete", label="Phase 12: AD Assessment")
     elif scope == "int":
         print(f"{Fore.YELLOW}[~] Phase 12: No DC detected — AD assessment skipped{Style.RESET_ALL}")
         _vc.status(f"{scope}_p12_ad", label="Phase 12: AD Assessment",
                    status="skipped", step="no DC detected")
+        if _pm is not None:
+            _pm.set_phase_status(_p12_ad_key, "complete", label="Phase 12: AD Assessment (skipped)")
 
     # ── Phase 13: Web Application Deep Attack ────────────────────────────────
+    _p13_key = f"{scope}_p13_webapp"
+    _p13_skip = _pm is not None and _pm.is_phase_complete(_p13_key)
+    if _p13_skip:
+        _tprint(f"  {Fore.GREEN}[✓] {scope_label} Phase 13 already complete — skipping{Style.RESET_ALL}")
     _web_svc_urls: list[str] = []
     for _ws_ip, _ws_data in all_results.items():
         if _ws_ip not in alive_ips:
@@ -36350,7 +36505,7 @@ def scan_scope(
             # reverse-DNS or SSL SANs) may belong to out-of-scope domains.
             _web_svc_urls.append(f"{_ws_scheme}://{_ws_ip}:{_ws_port}/")
     _run_p13 = (zap_path or sqlmap_path or xsstrike_path) and alive_ips
-    if _run_p13 and not getattr(args, "no_dast", False):
+    if _run_p13 and not getattr(args, "no_dast", False) and not _p13_skip:
         print(f"\n{Fore.CYAN}[*] {scope_label} Phase 13: Web App Deep Attack "
               f"(ZAP/sqlmap/XSStrike)...{Style.RESET_ALL}")
         _vc.status(f"{scope}_p13_webapp", label="Phase 13: Web App Attack", status="running")
@@ -36365,12 +36520,20 @@ def scan_scope(
             print(f"{Fore.CYAN}  [13c] XSStrike XSS testing{Style.RESET_ALL}")
             run_xsstrike(_web_svc_urls, output_mgr, xsstrike_path)
         _vc.status(f"{scope}_p13_webapp", label="Phase 13: Web App Attack", status="complete")
-    elif not _run_p13:
+        if _pm is not None:
+            _pm.set_phase_status(_p13_key, "complete", label="Phase 13: Web App Attack")
+    elif not _run_p13 and not _p13_skip:
         _vc.status(f"{scope}_p13_webapp", label="Phase 13: Web App Attack",
                    status="skipped", step="no tools available")
+        if _pm is not None:
+            _pm.set_phase_status(_p13_key, "complete", label="Phase 13: Web App Attack (skipped)")
 
     # ── Phase 14: O365 Account Enumeration (external scope only) ─────────
-    if scope == "ext" and alive_ips:
+    _p14_key = f"{scope}_p14_o365"
+    _p14_skip = _pm is not None and _pm.is_phase_complete(_p14_key)
+    if _p14_skip:
+        _tprint(f"  {Fore.GREEN}[✓] {scope_label} Phase 14 already complete — skipping{Style.RESET_ALL}")
+    elif scope == "ext" and alive_ips:
         _ext_domains = _derive_ext_domains(hostnames, all_results)
         _o365_domains: list = []
         for _ed in sorted(_ext_domains):
@@ -36516,9 +36679,13 @@ def scan_scope(
 
             _vc.status(f"{scope}_p14_o365", label="Phase 14: O365 Enumeration",
                        status="complete")
+            if _pm is not None:
+                _pm.set_phase_status(_p14_key, "complete", label="Phase 14: O365 Enumeration")
         else:
             _vc.status(f"{scope}_p14_o365", label="Phase 14: O365 Enumeration",
                        status="skipped", step="no O365 domains detected")
+            if _pm is not None:
+                _pm.set_phase_status(_p14_key, "complete", label="Phase 14: O365 Enumeration (skipped)")
 
     # ── Write final output files (AFTER all Nuclei passes are complete) ──────
     # results.json, correlated.json, and the findings summary are written here
