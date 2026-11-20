@@ -35152,28 +35152,10 @@ def scan_scope(
             nuclei_path and not getattr(args, "no_nuclei", False)
         )
 
-        print(
-            f"\n{Fore.CYAN}[*] {scope_label} Phase 2: port scanning "
-            f"(pipelined with discovery, {n_workers} workers)..."
-            f"{Style.RESET_ALL}"
-        )
-        _vc.status(
-            f"{scope}_p2_portscan",
-            label="Phase 2: Port Scan & Service Analysis",
-            status="running",
-            step=f"pipelined · {n_workers} workers",
-            active_tools=[
-                "nmap", "banners", "web", "sslscan", "testssl",
-                "gobuster", "wpscan", "webanalyze", "shcheck",
-                "snmp", "smb", "enum4linux", "adenum", "rdp",
-                "ipmi", "nfs", "smtp", "mysql", "sip",
-                "printer", "redis",
-            ],
-        )
-
         port_futures: dict = {}
         _nuclei_batch_ips: list = []
         _timed_out_chunks: list[tuple[str, int]] = []
+        _p2_banner_printed = False
 
         _start_concurrency_monitor(_SCAN_SEM)
         _start_oom_watchdog()
@@ -35213,6 +35195,26 @@ def scan_scope(
                         scope_iface_name = _ri.split()[0] if _ri else None
 
                 # Submit port-scan workers for this chunk's alive hosts
+                if _ca and not _p2_banner_printed:
+                    _p2_banner_printed = True
+                    print(
+                        f"\n{Fore.CYAN}[*] {scope_label} Phase 2: port scanning "
+                        f"(pipelined with discovery, {n_workers} workers)..."
+                        f"{Style.RESET_ALL}"
+                    )
+                    _vc.status(
+                        f"{scope}_p2_portscan",
+                        label="Phase 2: Port Scan & Service Analysis",
+                        status="running",
+                        step=f"pipelined · {n_workers} workers",
+                        active_tools=[
+                            "nmap", "banners", "web", "sslscan", "testssl",
+                            "gobuster", "wpscan", "webanalyze", "shcheck",
+                            "snmp", "smb", "enum4linux", "adenum", "rdp",
+                            "ipmi", "nfs", "smtp", "mysql", "sip",
+                            "printer", "redis",
+                        ],
+                    )
                 for ip in _ca:
                     port_futures[pool.submit(
                         _port_scan_worker,
